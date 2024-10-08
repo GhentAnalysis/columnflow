@@ -517,6 +517,7 @@ cf_setup_software_stack() {
     local setup_is_default="false"
     [ "${setup_name}" = "default" ] && setup_is_default="true"
     local pyv="3.9"
+    local conda_arch="${CF_CONDA_ARCH:-linux-64}"
 
     # zsh options
     if ${shell_is_zsh}; then
@@ -579,11 +580,15 @@ cf_setup_software_stack() {
                 cf_color magenta "installing conda with micromamba interface at ${CF_CONDA_BASE}"
 
                 mkdir -p "${CF_CONDA_BASE}/etc/profile.d"
-                curl -Ls https://micro.mamba.pm/api/micromamba/linux-64/latest | tar -xvj -C "${CF_CONDA_BASE}" "bin/micromamba" > /dev/null
-                2>&1 "${CF_CONDA_BASE}/bin/micromamba" shell hook -y --prefix="$PWD" &> micromamba.sh || return "$?"
+                curl -Ls "https://micro.mamba.pm/api/micromamba/${conda_arch}/latest" | tar -xvj -C "${CF_CONDA_BASE}" "bin/micromamba" > /dev/null
+                2>&1 "${CF_CONDA_BASE}/bin/micromamba" shell hook -y --root-prefix "$PWD" &> micromamba.sh
+                ret="$?"
+                if [ "${ret}" != "0" ]; then
+                    [ -f "micromamba.sh" ] && >&2 cat micromamba.sh
+                    return "${ret}"
+                fi
                 # make the setup file relocatable
                 sed -i -r "s|${CF_CONDA_BASE}|\$\{MAMBA_ROOT_PREFIX\}|" "micromamba.sh" || return "$?"
-                sed -i -r "6 s|/ada_mnt/ada||" "micromamba.sh" || return "$?"
                 mv "micromamba.sh" "${CF_CONDA_BASE}/etc/profile.d/micromamba.sh"
                 cat << EOF > "${CF_CONDA_BASE}/.mambarc"
 changeps1: false

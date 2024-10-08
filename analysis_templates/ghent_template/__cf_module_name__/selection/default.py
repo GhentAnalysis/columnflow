@@ -96,7 +96,7 @@ def lepton_selection(
     # required for pt cuts and Z-cuts on masks
     fill_with = {
         "pt": -999, "eta": -999, "phi": -999, "charge": -999,
-        "pdgId": -999, "mass": -999,  "sip3d": -999, 'tight': False,
+        "pdgId": -999, "mass": -999, "sip3d": -999, 'tight': False,
     }
     lepton = ak.fill_none(ak.pad_none(lepton, 2, axis=-1), fill_with)
 
@@ -240,8 +240,7 @@ def default(
     results.event = (results.event &
                      results.steps.Trigger &
                      results.steps.Lepton &
-                     results.steps.Jet &
-                     results.steps.Bjet)
+                     results.steps.Jet)
 
     # add cutflow features, passing per-object masks
     events, results = self[post_selection](events, results, stats, **kwargs)
