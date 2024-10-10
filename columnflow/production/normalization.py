@@ -114,5 +114,6 @@ def normalization_weights_setup(
     # create a cross section lookup table with all known processes
     xs_table = sp.sparse.lil_matrix((1, max_id + 1), dtype=np.float32)
     for process_inst in process_insts:
-        xs_table[0, process_inst.id] = process_inst.get_xsec(self.config_inst.campaign.ecm).nominal
+        if self.config_inst.campaign.ecm in process_inst.xsecs:
+            xs_table[0, process_inst.id] = process_inst.get_xsec(self.config_inst.campaign.ecm).nominal
     self.xs_table = xs_table

@@ -260,7 +260,11 @@ class CreateCutflowHistograms(
 
                 # fill the raw point
                 fill_data = get_point()
-                fill_hist(histograms[var_key], fill_data, fill_kwargs={"step": self.initial_step})
+                fill_hist(
+                    histograms[var_key],
+                    fill_data,
+                    fill_kwargs={"step": self.initial_step}
+                )
 
                 # fill all other steps
                 mask = True
