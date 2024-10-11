@@ -37,7 +37,7 @@ This example will show how to make gen-level plots using the columnflow framewor
 
 The columnflow framework uses the cutflow features to plot gen-level distributions without having to go trough the complete columnflow pipeline. Instead the the pipeline is reduced to the following:
 
-1. Run the `CalibrateEvents` -> `SelectEvents` pipeline for two files of the dataset using the default calibrators and default selector (enter the command below and 'tab-tab' to see all arguments or add `--help` for help). Features that are not straightforward must first be produced in [production/cutflow_features.py]() which is ran during the selection task [here]() before being able to plot them. This example will use the gen-level top-quark $p_T$ as a feature which is unique to Monte Carlo and will thus be only produced for Monte Carlo datasets as specified in the [initialization](). To run the `CalibrateEvents` -> `SelectEvents` pipeline execute the following command:
+1. Run the `CalibrateEvents` -> `SelectEvents` pipeline for two files of the dataset using the default calibrators and default selector (enter the command below and 'tab-tab' to see all arguments or add `--help` for help). Features that are not straightforward must first be produced in [production/cutflow_features.py](https://github.com/GhentAnalysis/columnflow/blob/master/analysis_templates/ghent_template/__cf_module_name__/production/cutflow_features.py#L31) which is ran during the selection task [here](https://github.com/GhentAnalysis/columnflow/blob/master/analysis_templates/ghent_template/__cf_module_name__/selection/default.py#L175) before being able to plot them. This example will use the gen-level top-quark $p_T$ as a feature which is unique to Monte Carlo and will thus be only produced for Monte Carlo datasets as specified in the [initialization](https://github.com/GhentAnalysis/columnflow/blob/master/analysis_templates/ghent_template/__cf_module_name__/production/cutflow_features.py#L61). To run the `CalibrateEvents` -> `SelectEvents` pipeline execute the following command:
 
     ```
     law run cf.SelectEvents --version dev1 --config l18
@@ -46,7 +46,7 @@ The columnflow framework uses the cutflow features to plot gen-level distributio
     ```
     law run cf.SelectEvents --version dev1 --config l18 --print-status -1
     ```
-2. Create the gen-level top-quark $p_T$ distribution plot for the $t\overline{t}$ dilepton dataset The top-quark $p_T$ variable is defined in [config/variables.py](https://gitlab.cern.ch/ghentanalysis/columnflowanalysis/ttz/-/blob/master/ttz/config/variables.py?ref_type=heads#L328).
+2. Create the gen-level top-quark $p_T$ distribution plot for the $t\overline{t}$ dilepton dataset The top-quark $p_T$ variable is defined in [config/variables.py](https://github.com/GhentAnalysis/columnflow/blob/master/analysis_templates/ghent_template/__cf_module_name__/config/variables.py#L44).
     ```
     law run cf.PlotCutflowVariables1D --version dev1 --config l18 --datasets "tt_dl_powheg" --processes "tt" --variables "genTop_pt" --skip-ratio --categories "incl"
     ```

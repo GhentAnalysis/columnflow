@@ -78,7 +78,7 @@ Setup successfull! The next steps are:
    > voms-proxy-init -rfc -valid 196:00
 
 4. Checkout the 'Getting started' guide to run your first tasks.
-   https://columnflow.readthedocs.io/en/stable/start.html
+   https://github.com/GhentAnalysis/columnflow/blob/master/docs/user_guide/getting-started.md
 
    Suggestions for tasks to run:
 
