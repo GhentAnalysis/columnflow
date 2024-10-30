@@ -131,6 +131,4 @@ def zboson_production(
     zbosons = ak.unflatten(flat_zbosons[ak.argsort(flat_zbosons.idx)], nZ)
     events = set_ak_column(events, "Zboson", zbosons[zbosons.isTrue])
 
-    breakpoint()
-
     return events
