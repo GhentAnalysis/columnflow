@@ -1,5 +1,6 @@
-# version 8
+# version 10
 
 -r columnar.txt
 
-tensorflow~=2.11.0
+tensorflow~=2.16.1
+scikit-learn~=1.5

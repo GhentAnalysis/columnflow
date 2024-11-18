@@ -27,6 +27,15 @@ def _geometric_matching(particles1: ak.Array, particles2: ak.Array) -> (ak.Array
     return closest_match, ak.fill_none(drmin < 0.2, False)
 
 
+def unique(ak_array: ak.Array, axis=-1) -> ak.Array:
+
+    ak_array1, ak_array2 = ak.unzip(ak.combinations(ak_array, 2, axis=1))
+
+    mask = ak.all(ak_array1 != ak_array2, axis=-1)
+    breakpoint()
+    return mask
+
+
 # map of the status flag name to the corresponding bit in statusFlags
 _statusmap = ({
     "isPrompt": 0,
@@ -57,11 +66,11 @@ _prompt_status = ["isPrompt", "isDirectPromptTauDecayProduct", "isHardProcess",
         ("pdgId", "genPartIdx")) |
     four_vec(
         ("GenPart"),
-        ("pdgId", "status", "statusFlags"),
+        ("pdgId", "status", "genPartIdxMother", "statusFlags"),
     ),
     produces=four_vec(
         {"Electron", "Muon"},
-        {"isPrompt", "matchPdgId", "isChargeFlip"},
+        {"isPrompt", "matchPdgId", "isChargeFlip", "isPhotonConversion"},
     ),
     mc_only=True,
     exposed=False,
@@ -106,12 +115,29 @@ def lepton_gen_features(
         for status in _prompt_status:
             match_isPrompt = match_isPrompt | (match.statusFlags & (1 << _statusmap[status]) != 0)
 
+        matchMother = genpart[match.genPartIdxMother]
+        count = 0
+        while ak.any(matchMother.statusFlags & (1 << _statusmap["isLastCopy"]) == 0) & (count < 10):
+
+            matchMother = ak.where(
+                (matchMother.statusFlags & (1 << _statusmap["isLastCopy"]) == 0),
+                genpart[matchMother.genPartIdxMother],
+                matchMother
+            )
+            count += 1
+
         valid_match = is_nanoAOD_matched | lepton_within_cone | photon_within_cone
-        match_pdgId = (match.pdgId == lepton.pdgId) & valid_match
         is_chargeflip = (match.pdgId == -lepton.pdgId) & valid_match
+        is_photonconversion = (
+            (match.pdgId == -matchMother.pdgId) |
+            (match.pdgId == 22) |
+            ak.all(matchMother.pdgId == 23, axis=-1)
+            # this line should be to check for (1) two match lepton have same genlevel lepton or (2) 2 leptons match to the same GenPart
+        ) & valid_match
 
         events = set_ak_column(events, f"{name}.isPrompt", ak.fill_none(match_isPrompt, False, axis=-1))
-        events = set_ak_column(events, f"{name}.matchPdgId", ak.fill_none(match_pdgId, False, axis=-1))
+        events = set_ak_column(events, f"{name}.matchPdgId", ak.fill_none(match.pdgId, -999, axis=-1))
         events = set_ak_column(events, f"{name}.isChargeFlip", ak.fill_none(is_chargeflip, False, axis=-1))
+        events = set_ak_column(events, f"{name}.isPhotonConversion", ak.fill_none(is_photonconversion, False, axis=-1))
 
     return events

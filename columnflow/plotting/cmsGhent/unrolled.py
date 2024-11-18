@@ -381,8 +381,10 @@ def plot_unrolled(
     if aux_labels := y_variable_inst.x_labels:
         if len(aux_labels) == len(axes):
             for i, aux_label in enumerate(aux_labels):
-                region = f"Ancillary region {i + 1}:"
-                label = region + "\n " + aux_label
+                if aux_label:
+                    label = aux_label
+                else:
+                    label = f"Ancillary region {i + 1}"
                 this_annotation = annotate_kwargs.copy()
                 this_annotation["text"] = label
                 this_annotation["xy"] = (

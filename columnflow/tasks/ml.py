@@ -149,7 +149,7 @@ class PrepareMLEvents(
         return outputs
 
     @law.decorator.log
-    @law.decorator.localize
+    @law.decorator.localize(input=False)
     @law.decorator.safe_output
     def run(self):
         from columnflow.columnar_util import (
@@ -1027,14 +1027,8 @@ class PlotMLResultsBase(
         all_events = OrderedDict()
         for dataset, inp in self.input().items():
             dataset_inst = self.config_inst.get_dataset(dataset)
-            if len(dataset_inst.processes) != 1:
-                raise NotImplementedError(
-                    f"dataset {dataset_inst.name} has {len(dataset_inst.processes)} assigned, "
-                    "which is not implemented yet.",
-                )
 
             events = ak.from_parquet(inp["mlcolumns"].path)
-
             # masking with leaf categories
             category_mask = False
             for leaf in leaf_category_insts:
@@ -1100,7 +1094,7 @@ class PlotMLResults(PlotMLResultsBase):
 
     # override the plot_function parameter to be able to only choose between CM and ROC
     plot_function = luigi.ChoiceParameter(
-        default="plot_cm",
+        default="cm",
         choices=["cm", "roc"],
         description="The name of the plot function to use. Can be either 'cm' or 'roc'.",
     )
