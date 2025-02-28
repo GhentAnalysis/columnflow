@@ -46,8 +46,7 @@ def _load_nano_root(fname: str):
 
 
 def _load_h5(fname: str):
-    with h5py.File("data.h5", "r") as fobj:
-        return fobj
+    return h5py.File(fname, "r")
 
 
 def load(fname: str):
