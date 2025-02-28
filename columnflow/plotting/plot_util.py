@@ -405,13 +405,14 @@ def prepare_style_config(
         tx = np.array(variable_inst.bin_edges)
         tx = (tx[1:] + tx[:-1]) / 2
         slices = getattr(variable_inst, "slice", None) or variable_inst.x("slice", None)
+        step_size = len(tx) // 10 + 1
         if (
             slices and isinstance(slices, Iterable) and len(slices) >= 2 and
             try_complex(slices[0]) and try_complex(slices[1])
         ):
-            sl = slice(*slices[:2], len(tx) // 10)
+            sl = slice(*slices[:2], step_size)
         else:
-            sl = slice(None, None, len(tx) // 10)
+            sl = slice(None, None, step_size)
         style_config["ax_cfg"]["xticks"] = tx[sl]
         style_config["ax_cfg"]["minorxticks"] = []
 
