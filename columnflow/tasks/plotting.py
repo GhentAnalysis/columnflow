@@ -71,6 +71,7 @@ class PlotVariablesBase(
     def get_plot_shifts(self):
         return
 
+    @law.decorator.notify
     @law.decorator.log
     @view_output_plots
     def run(self):
@@ -213,11 +214,6 @@ class PlotVariablesBaseSingleShift(
 
     def workflow_requires(self):
         reqs = super().workflow_requires()
-
-        # no need to require merged histograms since each branch already requires them as a workflow
-        # if self.workflow == "local":
-        #     reqs.pop("merged_hists", None)
-
         return reqs
 
     def requires(self):
@@ -321,16 +317,8 @@ class PlotVariablesBaseMultiShifts(
             for source in sorted(self.shift_sources)
         ]
 
-    def workflow_requires(self):
-        reqs = super().workflow_requires()
-
-        # no need to require merged histograms since each branch already requires them as a workflow
-        # if self.workflow == "local":
-        #     reqs.pop("merged_hists", None)
-
-        return reqs
-
     def requires(self):
+        # TODO: for data, request MergeHistograms
         return {
             d: self.reqs.MergeShiftedHistograms.req(
                 self,
