@@ -4,6 +4,8 @@
 Exemplary event weight producer.
 """
 
+import law
+
 from columnflow.weight import WeightProducer, weight_producer
 from columnflow.util import maybe_import
 from columnflow.columnar_util import has_ak_column, Route

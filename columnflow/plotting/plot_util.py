@@ -25,6 +25,8 @@ hist = maybe_import("hist")
 np = maybe_import("numpy")
 plt = maybe_import("matplotlib.pyplot")
 mplhep = maybe_import("mplhep")
+mpl = maybe_import("matplotlib")
+mticker = maybe_import("matplotlib.ticker")
 
 
 logger = law.logger.get_logger(__name__)
