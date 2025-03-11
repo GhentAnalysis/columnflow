@@ -10,7 +10,7 @@ from columnflow.columnar_util import has_ak_column, Route
 
 np = maybe_import("numpy")
 ak = maybe_import("awkward")
-
+logger = law.logger.get_logger(__name__)
 
 @weight_producer(
     # only run on mc
@@ -45,12 +45,12 @@ def all_weights(self: WeightProducer, events: ak.Array, **kwargs) -> ak.Array:
     if self.dataset_inst.is_mc and len(events):
         # multiply weights from global config `event_weights` aux entry
         for column in self.config_inst.x.event_weights:
-            print(column)
+            logger.info_once(column)
             weight = weight * Route(column).apply(events)
 
         # multiply weights from dataset-specific `event_weights` aux entry
         for column in self.dataset_inst.x("event_weights", []):
-            print(column)
+            logger.info_once(column)
             if has_ak_column(events, column):
                 weight = weight * Route(column).apply(events)
             else:
