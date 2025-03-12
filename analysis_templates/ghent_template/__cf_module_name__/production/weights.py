@@ -5,18 +5,15 @@ Column production methods related to generic event weights.
 """
 
 from columnflow.util import maybe_import
-from columnflow.columnar_util import set_ak_column, has_ak_column, Route
 from columnflow.selection import SelectionResult
 from columnflow.production import Producer, producer
 from columnflow.production.cms.pileup import pu_weight
 from columnflow.production.normalization import normalization_weights
 from columnflow.production.cms.electron import electron_weights
 from columnflow.production.cms.muon import muon_weights
-from columnflow.production.cms.btag import btag_weights
 from columnflow.production.cms.scale import murmuf_weights, murmuf_envelope_weights
 from columnflow.production.cms.pdf import pdf_weights
 from __cf_short_name_lc__.production.normalized_weights import normalized_weight_factory
-from __cf_short_name_lc__.production.normalized_btag import normalized_btag_weights
 
 np = maybe_import("numpy")
 ak = maybe_import("awkward")
@@ -28,8 +25,7 @@ ak = maybe_import("awkward")
         murmuf_envelope_weights,
         murmuf_weights,
         pdf_weights
-        },
-    # don't save btag_weights to save storage space, since we can reproduce them in ProduceColumns
+    },
     produces={pu_weight},
     mc_only=True,
 )
@@ -85,6 +81,7 @@ normalized_scale_weights = normalized_weight_factory(
 normalized_pdf_weights = normalized_weight_factory(
     producer_name="normalized_pdf_weights",
     weight_producers={pdf_weights},
+    add_uses={"pdf_weight{,_up,_down}"},
 )
 
 normalized_pu_weights = normalized_weight_factory(
@@ -95,13 +92,11 @@ normalized_pu_weights = normalized_weight_factory(
 
 @producer(
     uses={
-        normalization_weights, electron_weights, muon_weights, btag_weights,
-        normalized_btag_weights,
+        normalization_weights, electron_weights, muon_weights,
         normalized_pu_weights,
     },
     produces={
         normalization_weights, electron_weights, muon_weights,
-        normalized_btag_weights,
         normalized_pu_weights,
     },
     mc_only=True,
@@ -114,14 +109,11 @@ def event_weights(self: Producer, events: ak.Array, **kwargs) -> ak.Array:
 
     events = self[normalization_weights](events, **kwargs)
 
-    # compute btag SF weights
-    events = self[btag_weights](events, **kwargs)
     # compute electron and muon SF weights
     events = self[electron_weights](events, **kwargs)
     events = self[muon_weights](events, **kwargs)
 
     # normalize event weights using stats
-    events = self[normalized_btag_weights](events, **kwargs)
     events = self[normalized_pu_weights](events, **kwargs)
 
     if not self.dataset_inst.has_tag("skip_scale"):

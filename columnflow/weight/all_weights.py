@@ -4,13 +4,15 @@
 Exemplary event weight producer.
 """
 
+import law
+
 from columnflow.weight import WeightProducer, weight_producer
 from columnflow.util import maybe_import
 from columnflow.columnar_util import has_ak_column, Route
 
 np = maybe_import("numpy")
 ak = maybe_import("awkward")
-
+logger = law.logger.get_logger(__name__)
 
 @weight_producer(
     # only run on mc
@@ -22,7 +24,7 @@ def all_weights(self: WeightProducer, events: ak.Array, **kwargs) -> ak.Array:
     the config or the dataset. The weights are multiplied together to form the full event weight.
 
     The expected structure of the *event_weights* aux entry is a dictionary with the weight column
-    name as key and a list of shift sources as value. The shift sources are used to declare the
+    name as key and a list of shift sources as values. The shift sources are used to declare the
     shifts that the produced event weight depends on. Example:
 
     .. code-block:: python
@@ -32,25 +34,25 @@ def all_weights(self: WeightProducer, events: ak.Array, **kwargs) -> ak.Array:
         cfg.x.event_weights = {
             "normalization_weight": [],
             "muon_weight": get_shifts_from_sources(config, "mu_sf"),
-            "btag_weight": get_shifts_from_sources(config, f"btag_hf", "btag_lf"),
+            "btag_weight": get_shifts_from_sources(config, "btag_hf", "btag_lf"),
         }
         for dataset_inst in cfg.datasets:
             # add dataset-specific weights and their corresponding shifts
             dataset.x.event_weights = {}
             if not dataset_inst.has_tag("skip_pdf"):
-                dataset_inst.event_weights["pdf_weight"] = get_shifts_from_sources(config, "pdf")
+                dataset_inst.x.event_weights["pdf_weight"] = get_shifts_from_sources(config, "pdf")
     """
     # build the full event weight
     weight = ak.Array(np.ones(len(events)))
     if self.dataset_inst.is_mc and len(events):
         # multiply weights from global config `event_weights` aux entry
         for column in self.config_inst.x.event_weights:
-            print(column)
+            logger.info_once(column)
             weight = weight * Route(column).apply(events)
 
         # multiply weights from dataset-specific `event_weights` aux entry
         for column in self.dataset_inst.x("event_weights", []):
-            print(column)
+            logger.info_once(column)
             if has_ak_column(events, column):
                 weight = weight * Route(column).apply(events)
             else:
