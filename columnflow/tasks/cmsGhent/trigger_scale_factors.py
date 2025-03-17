@@ -459,6 +459,7 @@ class PlotTriggerEfficiencies1D(
         default="columnflow.plotting.cmsGhent.plot_functions_1d.plot_1d_line",
         add_default_to_description=True,
     )
+
     def full_output(self):
         out = {}
         for vrs in self.loop_variables():
