@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import re
 import law
 from collections.abc import Iterator
 import order as od
@@ -70,7 +69,7 @@ class TriggerConfigMixin(ConfigTask):
         for var in tcfg.variable_names:
             # 1d efficiencies and sf
             if include_1d:
-                yield var,
+                yield var,  # noqa
 
             # fully binned efficiency in  main variables with additional variables
             if var in tcfg.main_variables[1:] or len(tcfg.main_variables) == len(tcfg.variables) == 1:
@@ -434,8 +433,6 @@ class PlotTriggerScaleFactors1D(
             hs = [hs[{"systematic": sys}].values() for sys in ["central", f"{syst}down", f"{syst}up"]]
             # convert down and up variations to up and down errors
             hists[k] = [hs[0]] + [np.abs(h - hs[0]) for h in hs[1:]]
-
-        
         kwargs = self.get_plot_parameters()
         if not kwargs.setdefault("skip_ratio"):
             kwargs["skip_ratio"] = len(hists) == 1
@@ -462,7 +459,6 @@ class PlotTriggerEfficiencies1D(
         default="columnflow.plotting.cmsGhent.plot_functions_1d.plot_1d_line",
         add_default_to_description=True,
     )
-
 
     def full_output(self):
         out = {}

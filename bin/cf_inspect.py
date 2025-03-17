@@ -11,7 +11,6 @@ __all__ = ["load"]
 import os
 import json
 import pickle
-import h5py
 
 import awkward as ak
 import coffea.nanoevents
@@ -49,6 +48,7 @@ def _load_nano_root(fname: str) -> ak.Array:
 
 
 def _load_h5(fname: str):
+    import h5py
     return h5py.File(fname, "r")
 
 
