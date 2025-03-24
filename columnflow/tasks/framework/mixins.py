@@ -25,6 +25,7 @@ from columnflow.ml import MLModel
 from columnflow.inference import InferenceModel
 from columnflow.columnar_util import Route, ColumnCollection, ChunkedIOHandler
 from columnflow.util import maybe_import, DotDict
+from columnflow.timing import Timer
 
 ak = maybe_import("awkward")
 
@@ -2586,3 +2587,43 @@ class MergeHistogramMixin(
         # optionally remove inputs
         if self.remove_previous:
             inputs.remove()
+
+
+class ParamsCacheMixin:
+
+    cache_param_sep = []
+    cache_param_values = dict()
+
+    time_get_params = luigi.BoolParameter(
+        default=False,
+        description="Whether to report the time taken to load get the parameters",
+    )
+
+    @classmethod
+    def cache_tag(cls, kwargs):
+        tag = cls.__name__
+        for p in ["config"] + list(cls.cache_param_sep):
+            if kwargs.get(p, None):
+                tag += f"__{p}_{kwargs[p]}"
+        return tag
+
+    @classmethod
+    def get_param_values(cls, params, args, kwargs):
+        tag = cls.cache_tag(kwargs)
+        cache = cls.cache_param_values.setdefault(tag, [])
+        if cache:
+            dct_update = dict(branch=int(kwargs.get("branch", -1)))
+            if "dataset" in kwargs:
+                dct_update["dataset"] = kwargs["dataset"]
+            out = cache[0] | dct_update | {
+                k: kwargs.get(k, ()) for k in
+                ["print_output", "branches", "print_status", "remove_output", "fetch_output"]
+            }
+            return list(out.items())
+        if kwargs.get("print_timing", False):
+            tmr = Timer(f"{tag} get_param_values")
+        cache.append(dict(out := super().get_param_values(params, args, kwargs)))
+        cls.cache_param_values[cls.cache_tag(dict(out))] = cache
+        if kwargs.get("print_timing", False):
+            tmr("end")
+        return out
