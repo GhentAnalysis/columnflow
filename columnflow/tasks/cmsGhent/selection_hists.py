@@ -23,11 +23,16 @@ hist = maybe_import("hist")
 class CustomDefaultVariablesMixin(
     VariablesMixin,
 ):
+    tag_name = ""
+    exclude_index = True
+
     @classmethod
     def get_default_variables(cls, params):
         if not (config_inst := params.get("config_inst")):
             return params
-        return config_inst.x("default_variables", tuple())
+        tag = ("_" if cls.tag_name else "") + cls.tag_name
+
+        return config_inst.x(f"default_{tag}_variables", tuple())
 
     @classmethod
     def resolve_param_values(
@@ -68,10 +73,7 @@ class CustomDefaultVariablesMixin(
 
 class SelectionEfficiencyHistMixin(
     DatasetsMixin,
-    CustomDefaultVariablesMixin,
 ):
-
-    tag_name = "tag"
     exclude_index = True
 
     # upstream requirements
@@ -82,21 +84,13 @@ class SelectionEfficiencyHistMixin(
 
     sandbox = dev_sandbox("bash::$CF_BASE/sandboxes/venv_selection_eff.sh")
 
-    @classmethod
-    def get_default_variables(cls, params):
-        if not (config_inst := params.get("config_inst")):
-            return params
-        return config_inst.x(f"default_{cls.tag_name}_variables", tuple())
-
     def workflow_requires(self):
         reqs = super().workflow_requires()
         for d in self.datasets:
             reqs[d] = self.reqs.MergeSelectionStats.req(
                 self,
-                tree_index=0,
                 branch=-1,
                 dataset=d,
-                _exclude=MergeSelectionStats.exclude_params_forest_merge,
             )
         return reqs
 
@@ -104,10 +98,8 @@ class SelectionEfficiencyHistMixin(
         return {
             d: self.reqs.MergeSelectionStats.req(
                 self,
-                tree_index=0,
                 branch=-1,
                 dataset=d,
-                _exclude=MergeSelectionStats.exclude_params_forest_merge,
             )
             for d in self.datasets
         }
@@ -134,7 +126,7 @@ class SelectionEfficiencyHistMixin(
         xsec = 1 if process_inst.is_data else process_inst.get_xsec(config_inst.campaign.ecm).nominal
         return process_inst, xsec
 
-    def read_hist(self, variable_insts=tuple(), name=None) -> dict[od.Process, hist.Hist]:
+    def read_hist(self, variable_insts=tuple(), name=None) -> dict[od.Dataset, hist.Hist]:
         """
         read the histograms calculated in MergeSelectionStats task, properly normalize,
         and apply flow and merged bin settings from the given variables.
@@ -217,6 +209,7 @@ class SelectionEfficiencyHistMixin(
 
 class SelectionHistPlot(
     SelectionEfficiencyHistMixin,
+    CustomDefaultVariablesMixin,
     VariablePlotSettingMixin,
     ProcessPlotSettingMixin,
     PlotBase1D,
