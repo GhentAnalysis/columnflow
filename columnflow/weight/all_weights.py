@@ -14,6 +14,7 @@ np = maybe_import("numpy")
 ak = maybe_import("awkward")
 logger = law.logger.get_logger(__name__)
 
+
 @weight_producer(
     # only run on mc
     mc_only=True,

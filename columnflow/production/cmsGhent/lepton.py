@@ -28,13 +28,14 @@ class LeptonWeightConfig:
         @param correction_set: name of the corrections in the json
         @param get_sf_file: function mapping external files to the scale factor json
         @param input_pars: dictionary passed to the corrector inputs
-
+        @syst_key: systematic variable key of the correction set
+        @param systematics: tuple of tuples (or dict) of systematic variable input of the correction set and the postfix linked to the systematic 
         @param aux: dictionary with other useful information
         @param uses: columns used for the weight calculation
         @param input_func: function that calculates a dictionary with input arrays for the weight calculation
         @param mask_func: function that calculates a mask to apply before calculating the weights
 
-    """
+    """  # noqa
     year: str | int
     weight_name: str
     correction_set: Sequence[str] | str
@@ -72,6 +73,8 @@ class LeptonWeightConfig:
                 s: ("_" if ss else "") + ss.lstrip("_")
                 for s, ss in self.systematics.items()
             }
+
+        self.produced_weights = {f"{self.weight_name}{postfix}" for postfix in self.systematics.values()}
 
     def copy(self, /, **changes):
         return dataclasses.replace(self, **changes)
@@ -193,7 +196,7 @@ def lepton_weights_init(self: Producer) -> None:
         if not hasattr(self, key):
             setattr(self, key, value)
     self.uses |= self.lepton_config.uses
-    self.produces |= {f"{self.weight_name}{postfix}" for postfix in self.systematics.values()}
+    self.produces |= self.lepton_config.produced_weights
 
 
 @lepton_weights.requires
@@ -281,8 +284,8 @@ MuonBaseWeightConfig = LeptonWeightConfig(
 )
 
 
-@MuonBaseWeightConfig.input(uses={"Muon.{pt,eta}"})
-def muon_mva_input(events):
+@MuonBaseWeightConfig.input(uses={"Muon.{pt,eta,phi}"})
+def muon_input(events):
     return {
         "pt": events.Muon.pt,
         "eta": events.Muon.eta,
@@ -293,6 +296,7 @@ def muon_mva_input(events):
 #
 # bundle of all lepton weight producers
 #
+
 
 @producer(
     # only run on mc
@@ -322,5 +326,4 @@ def bundle_lepton_weights_init(self: Producer) -> None:
             self.config_naming(config),
             cls_dict=dict(lepton_config=config),
         ))
-
-    self.produces |= self.uses
+        self.produces.update(config.produced_weights)
