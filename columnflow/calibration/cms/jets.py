@@ -863,9 +863,9 @@ def jer(self: Calibrator, events: ak.Array, **kwargs) -> ak.Array:
 
     # store pt and phi of the full jet system
     if self.propagate_met:
-        jetsum_before = events[jet_name].sum(axis=1)
-        jetsum_pt_before = jetsum_before.pt
-        jetsum_phi_before = jetsum_before.phi
+        jetsum = events[jet_name].sum(axis=1)
+        jetsum_pt_before = jetsum.pt
+        jetsum_phi_before = jetsum.phi
 
     # apply the smearing factors to the pt and mass
     # (note: apply variations first since they refer to the original pt)
