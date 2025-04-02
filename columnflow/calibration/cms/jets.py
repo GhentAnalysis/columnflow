@@ -878,19 +878,19 @@ def jer(self: Calibrator, events: ak.Array, **kwargs) -> ak.Array:
 
     jetsum_before_jec_uncertainty = {}
     for name in self.jec_uncertainty_sources:
-        for shift in ("up", "down"):
+        for junc_dir in ("up", "down"):
             # store pt and phi of the full jet system for each jec uncertainty to propagate met
             if self.propagate_met:
                 jets = events[jet_name]
-                jets = set_ak_column_f32(jets, "pt", jets[f"pt_jec_{name}_{shift}"])
-                jets = set_ak_column_f32(jets, "mass", jets[f"mass_jec_{name}_{shift}"])
-                jetsum_before_jec_uncertainty[f"jec_{name}_{shift}"] = jets.sum(axis=1)
+                jets = set_ak_column_f32(jets, "pt", jets[f"pt_jec_{name}_{junc_dir}"])
+                jets = set_ak_column_f32(jets, "mass", jets[f"mass_jec_{name}_{junc_dir}"])
+                jetsum_before_jec_uncertainty[f"jec_{name}_{junc_dir}"] = jets.sum(axis=1)
 
             # apply the smearing factors to the pt and mass for each jec uncertainty
-            events = set_ak_column_f32(events, f"{jet_name}.pt_jec_{name}_{shift}", getattr(
-                events[jet_name], f"pt_jec_{name}_{shift}") * smear_factors[:, :, 0])
-            events = set_ak_column_f32(events, f"{jet_name}.mass_jec_{name}_{shift}", getattr(
-                events[jet_name], f"mass_jec_{name}_{shift}") * smear_factors[:, :, 0])
+            events = set_ak_column_f32(events, f"{jet_name}.pt_jec_{name}_{junc_dir}", getattr(
+                events[jet_name], f"pt_jec_{name}_{junc_dir}") * smear_factors[:, :, 0])
+            events = set_ak_column_f32(events, f"{jet_name}.mass_jec_{name}_{junc_dir}", getattr(
+                events[jet_name], f"mass_jec_{name}_{junc_dir}") * smear_factors[:, :, 0])
 
     # recover coffea behavior
     events = self[attach_coffea_behavior](events, collections=[jet_name], **kwargs)
@@ -942,28 +942,28 @@ def jer(self: Calibrator, events: ak.Array, **kwargs) -> ak.Array:
         events = set_ak_column_f32(events, f"{self.met_name}.phi_jer_down", met_phi_down)
 
         for name in self.jec_uncertainty_sources:
-            for shift in ("up", "down"):
+            for junc_dir in ("up", "down"):
 
                 jets = events[jet_name]
-                jets = set_ak_column_f32(jets, "pt", jets[f"pt_jec_{name}_{shift}"])
-                jets = set_ak_column_f32(jets, "mass", jets[f"mass_jec_{name}_{shift}"])
+                jets = set_ak_column_f32(jets, "pt", jets[f"pt_jec_{name}_{junc_dir}"])
+                jets = set_ak_column_f32(jets, "mass", jets[f"mass_jec_{name}_{junc_dir}"])
                 jetsum = jets.sum(axis=1)
 
                 mets = events[self.met_name]
-                mets = set_ak_column_f32(mets, "pt", mets[f"pt_jec_{name}_{shift}"])
-                mets = set_ak_column_f32(mets, "phi", mets[f"phi_jec_{name}_{shift}"])
+                mets = set_ak_column_f32(mets, "pt", mets[f"pt_jec_{name}_{junc_dir}"])
+                mets = set_ak_column_f32(mets, "phi", mets[f"phi_jec_{name}_{junc_dir}"])
 
                 met_pt, met_phi = propagate_met(
-                    jetsum_before_jec_uncertainty[f"jec_{name}_{shift}"].pt,
-                    jetsum_before_jec_uncertainty[f"jec_{name}_{shift}"].phi,
+                    jetsum_before_jec_uncertainty[f"jec_{name}_{junc_dir}"].pt,
+                    jetsum_before_jec_uncertainty[f"jec_{name}_{junc_dir}"].phi,
                     jetsum.pt,
                     jetsum.phi,
                     mets.pt,
                     mets.phi,
                 )
 
-                events = set_ak_column_f32(events, f"{self.met_name}.pt_jec_{name}_{shift}", met_pt)
-                events = set_ak_column_f32(events, f"{self.met_name}.phi_jec_{name}_{shift}", met_phi)
+                events = set_ak_column_f32(events, f"{self.met_name}.pt_jec_{name}_{junc_dir}", met_pt)
+                events = set_ak_column_f32(events, f"{self.met_name}.phi_jec_{name}_{junc_dir}", met_phi)
 
     return events
 
@@ -1004,6 +1004,17 @@ def jer_init(self: Calibrator) -> None:
         for junc_name in sources
         for junc_dir in ("up", "down")
     }
+
+    # add MET variables
+    if self.propagate_met:
+
+        # add shifted MET variables
+        self.produces |= {
+            f"{self.met_name}.{shifted_var}_jec_{junc_name}_{junc_dir}"
+            for shifted_var in ("pt", "phi")
+            for junc_name in sources
+            for junc_dir in ("up", "down")
+        }
 
 
 @jer.requires
