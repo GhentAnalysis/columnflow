@@ -481,7 +481,7 @@ def jec_init(self: Calibrator) -> None:
 
     sources = self.uncertainty_sources
     if sources is None:
-        sources = jec_cfg.uncertainty_sources
+        sources = jec_cfg.uncertainty_sources or []
 
     # register used jet columns
     self.uses.add(f"{self.jet_name}.{{pt,eta,phi,mass,area,rawFactor}}")
@@ -903,7 +903,6 @@ def jer(self: Calibrator, events: ak.Array, **kwargs) -> ak.Array:
 
     # met propagation
     if self.propagate_met:
-
         # save unsmeared quantities
         events = set_ak_column_f32(events, f"{self.met_name}.pt_unsmeared", events[self.met_name].pt)
         events = set_ak_column_f32(events, f"{self.met_name}.phi_unsmeared", events[self.met_name].phi)
@@ -949,7 +948,6 @@ def jer(self: Calibrator, events: ak.Array, **kwargs) -> ak.Array:
 
         for name in self.jec_uncertainty_sources:
             for junc_dir in ("up", "down"):
-
                 jets = ak.copy(events[jet_name])
                 jets = set_ak_column_f32(jets, "pt", jets[f"pt_jec_{name}_{junc_dir}"])
                 jets = set_ak_column_f32(jets, "mass", jets[f"mass_jec_{name}_{junc_dir}"])
@@ -976,65 +974,41 @@ def jer(self: Calibrator, events: ak.Array, **kwargs) -> ak.Array:
 
 @jer.init
 def jer_init(self: Calibrator) -> None:
+    # add jec_cfg for applying nominal smearing to jec variations
+    jec_cfg = self.get_jec_config()
+    jec_sources = self.jec_uncertainty_sources
+    if jec_sources is None:
+        jec_sources = jec_cfg.uncertainty_sources or []
+        self.jec_uncertainty_sources = jec_sources
+        jet_jec_columns = {f"{self.jet_name}.{{pt,mass}}_jec_{jec_source}_{{up,down}}" for jec_source in jec_sources}
+        met_jec_columns = {f"{self.met_name}.{{pt,phi}}_jec_{jec_source}_{{up,down}}" for jec_source in jec_sources}
+
     # determine gen-level jet index column
     lower_first = lambda s: s[0].lower() + s[1:] if s else s
     self.gen_jet_idx_column = lower_first(self.gen_jet_name) + "Idx"
 
     # register used jet columns
     self.uses.add(f"{self.jet_name}.{{pt,eta,phi,mass,{self.gen_jet_idx_column}}}")
-
-    # register used gen jet columns
     self.uses.add(f"{self.gen_jet_name}.{{pt,eta,phi}}")
+    if jec_sources:
+        self.uses |= jet_jec_columns
 
     # register produced jet columns
     self.produces.add(f"{self.jet_name}.{{pt,mass}}{{,_unsmeared,_jer_up,_jer_down}}")
+    if jec_sources:
+        self.produces |= jet_jec_columns
 
-    # register produced MET columns
+    # additional columns when propagating MET
     if self.propagate_met:
         # register used MET columns
         self.uses.add(f"{self.met_name}.{{pt,phi}}")
+        if jec_sources:
+            self.uses |= met_jec_columns
 
         # register produced MET columns
         self.produces.add(f"{self.met_name}.{{pt,phi}}{{,_jer_up,_jer_down,_unsmeared}}")
-
-    # add jec_cfg for applying smearing to jec variations
-    jec_cfg = self.get_jec_config()
-    sources = self.jec_uncertainty_sources
-    if sources is None:
-        sources = jec_cfg.uncertainty_sources
-        self.jec_uncertainty_sources = sources
-
-    self.uses |= {
-        f"{self.jet_name}.{shifted_var}_jec_{junc_name}_{junc_dir}"
-        for shifted_var in ("pt", "mass")
-        for junc_name in sources
-        for junc_dir in ("up", "down")
-    }
-
-    self.produces |= {
-        f"{self.jet_name}.{shifted_var}_jec_{junc_name}_{junc_dir}"
-        for shifted_var in ("pt", "mass")
-        for junc_name in sources
-        for junc_dir in ("up", "down")
-    }
-
-    # add MET variables
-    if self.propagate_met:
-
-        # add shifted MET variables
-        self.uses |= {
-            f"{self.met_name}.{shifted_var}_jec_{junc_name}_{junc_dir}"
-            for shifted_var in ("pt", "phi")
-            for junc_name in sources
-            for junc_dir in ("up", "down")
-        }
-
-        self.produces |= {
-            f"{self.met_name}.{shifted_var}_jec_{junc_name}_{junc_dir}"
-            for shifted_var in ("pt", "phi")
-            for junc_name in sources
-            for junc_dir in ("up", "down")
-        }
+        if jec_sources:
+            self.produces |= met_jec_columns
 
 
 @jer.requires
