@@ -482,6 +482,7 @@ def jec_init(self: Calibrator) -> None:
     sources = self.uncertainty_sources
     if sources is None:
         sources = jec_cfg.uncertainty_sources or []
+        self.uncertainty_sources = sources
 
     # register used jet columns
     self.uses.add(f"{self.jet_name}.{{pt,eta,phi,mass,area,rawFactor}}")
@@ -597,21 +598,15 @@ def jec_setup(self: Calibrator, reqs: dict, inputs: dict, reader_targets: Insert
             for name in names
         ]
 
-    # take sources from constructor or config
-    sources = self.uncertainty_sources
-    if sources is None:
-        sources = jec_cfg.uncertainty_sources
-        self.uncertainty_sources = sources
-
     jec_keys = make_jme_keys(jec_cfg.levels)
     jec_keys_subset_type1_met = make_jme_keys(jec_cfg.levels_for_type1_met)
-    junc_keys = make_jme_keys(sources, is_data=False)  # uncertainties only stored as MC keys
+    junc_keys = make_jme_keys(self.uncertainty_sources, is_data=False)  # uncertainties only stored as MC keys
 
     # store the evaluators
     self.evaluators = {
         "jec": get_evaluators(correction_set, jec_keys),
         "jec_subset_type1_met": get_evaluators(correction_set, jec_keys_subset_type1_met),
-        "junc": dict(zip(sources, get_evaluators(correction_set, junc_keys))),
+        "junc": dict(zip(self.uncertainty_sources, get_evaluators(correction_set, junc_keys))),
     }
 
 
