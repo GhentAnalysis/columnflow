@@ -36,7 +36,7 @@ fill_at_f32 = functools.partial(fill_at, value_type=np.float32)
 def pdf_weights(
     self: Producer,
     events: ak.Array,
-    invalid_weights_action: str = "raise",
+    invalid_weights_action: str = "ignore",
     outlier_threshold: float = 0.5,
     outlier_action: str = "ignore",
     outlier_log_mode: str = "warning",
@@ -107,6 +107,11 @@ def pdf_weights(
             events = set_ak_column_f32(events, "pdf_weight", ones)
             events = set_ak_column_f32(events, "pdf_weight_up", ones)
             events = set_ak_column_f32(events, "pdf_weight_down", ones)
+
+        events = set_ak_column_f32(events, "alphas_weight", ones)
+        events = set_ak_column_f32(events, "alphas_weight_up", ones)
+        events = set_ak_column_f32(events, "alphas_weight_down", ones)
+
         return events
 
     # complain when the number of weights is unexpected
@@ -137,6 +142,7 @@ def pdf_weights(
     pdf_weights = pdf_weights / pdf_weight_nominal
 
     # if all events have alpha_s variations included in LHEPdfWeight else add ones as weights
+
     if ak.all(n_weights == 103):
         alphas_weight = ak.where(invalid_mask, empty, ak.without_parameters(events.LHEPdfWeight[:, 101:]))
         alphas_weight = alphas_weight / pdf_weight_nominal
@@ -146,12 +152,12 @@ def pdf_weights(
         events = set_ak_column_f32(events, "alphas_weight_up", alphas_weight[:, 0])
         events = set_ak_column_f32(events, "alphas_weight_down", alphas_weight[:, 1])
     else:
-        logger.debug(
-            "the LHEPdfWeights do not include alpha_s variations and alphas_weight_up(down) are set to 1",
-        )
         events = set_ak_column_f32(events, "alphas_weight", ones)
         events = set_ak_column_f32(events, "alphas_weight_up", ones)
         events = set_ak_column_f32(events, "alphas_weight_down", ones)
+        logger.warning(
+            "the LHEPdfWeights do not include alpha_s variations and alphas_weight_up(down) are set to 1",
+        )
 
     # store the nominal weight which is always 1 after normalization
     events = set_ak_column_f32(events, "pdf_weight", ones)
@@ -212,6 +218,10 @@ def pdf_weights(
         events = fill_at_f32(events, invalid_pdf_weight, "pdf_weight", 0)
         events = fill_at_f32(events, invalid_pdf_weight, "pdf_weight_up", 0)
         events = fill_at_f32(events, invalid_pdf_weight, "pdf_weight_down", 0)
+
+        events = fill_at_f32(events, invalid_pdf_weight, "alphas_weight", 0)
+        events = fill_at_f32(events, invalid_pdf_weight, "alphas_weight_up", 0)
+        events = fill_at_f32(events, invalid_pdf_weight, "alphas_weight_down", 0)
 
     return events
 
