@@ -684,7 +684,7 @@ class SelectorStepsMixin(SelectorMixin):
     selector_steps = law.CSVParameter(
         default=selector_steps_all,
         description=f"a subset of steps of the selector to apply; "
-                    f"Set to {selector_steps_all[0]} to apply all (default).",
+        f"Set to {selector_steps_all[0]} to apply all (default).",
         brace_expand=True,
         parse_empty=True,
     )
@@ -1975,6 +1975,16 @@ class VariablesMixin(ConfigTask):
 
             # resolve them
             if params["variables"]:
+                # first try to resolve variable groups
+                groups = config_inst.x("variable_groups", {})
+                new_variables = []
+                for variable in params["variables"]:
+                    if variable in groups:
+                        new_variables.extend(groups[variable])
+                    else:
+                        new_variables.append(variable)
+                params["variables"] = tuple(new_variables)
+
                 # first, split into single- and multi-dimensional variables
                 single_vars = []
                 multi_var_parts = []
@@ -2652,7 +2662,7 @@ class MergeHistogramMixin(
 class ParamsCacheMixin:
 
     # the get_param_values is called again for every value of this parameter (config by default included)
-    cache_param_sep = []
+    cache_param_sep = ["shift", "shift_sources"]
 
     # dict to store cached params for different tasks
     cache_param_values = dict()
