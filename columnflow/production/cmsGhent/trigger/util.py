@@ -153,7 +153,8 @@ def init_uses_variables(self: Producer | HistProducer):
         inp
         for variable_inst in self.variables
         for inp in (
-            [variable_inst.expression] if isinstance(variable_inst.expression, str) else variable_inst.x("inputs",
-                                                                                                         [])
+            [variable_inst.expression]
+            if isinstance(variable_inst.expression, str)
+            else variable_inst.x("inputs", [])
         )
     })
