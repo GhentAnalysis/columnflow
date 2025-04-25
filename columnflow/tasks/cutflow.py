@@ -29,7 +29,6 @@ from columnflow.tasks.framework.parameters import last_edge_inclusive_inst
 from columnflow.tasks.external import GetDatasetLFNs
 from columnflow.tasks.selection import SelectEvents
 from columnflow.tasks.calibration import CalibrateEvents
-from columnflow.production import Producer
 from columnflow.util import DotDict, dev_sandbox, maybe_import
 from columnflow.hist_util import create_columnflow_hist, translate_hist_intcat_to_strcat
 

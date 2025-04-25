@@ -15,7 +15,7 @@ from columnflow.types import Any
 from columnflow.tasks.framework.base import Requirements, AnalysisTask, wrapper_factory
 from columnflow.tasks.framework.mixins import (
     CalibratorsMixin, SelectorMixin, ChunkedIOMixin, ProducerMixin,
-    ParamsCacheMixin,
+    # ParamsCacheMixin,
 )
 from columnflow.tasks.framework.remote import RemoteWorkflow
 from columnflow.tasks.framework.decorators import on_failure
@@ -23,6 +23,7 @@ from columnflow.tasks.external import GetDatasetLFNs
 from columnflow.tasks.calibration import CalibrateEvents
 from columnflow.util import maybe_import, ensure_proxy, dev_sandbox, safe_div, DotDict
 from columnflow.tasks.framework.parameters import DerivableInstParameter
+from columnflow.production import Producer
 
 
 np = maybe_import("numpy")
