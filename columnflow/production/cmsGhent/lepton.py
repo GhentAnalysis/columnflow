@@ -7,7 +7,7 @@ import dataclasses
 from columnflow.production import Producer, producer
 from columnflow.calibration.cms.jets import ak_evaluate
 
-from columnflow.util import maybe_import, InsertableDict, DotDict
+from columnflow.util import maybe_import, DotDict
 from columnflow.columnar_util import set_ak_column
 
 ak = maybe_import("awkward")
@@ -213,7 +213,7 @@ def lepton_weights_setup(
     self: Producer,
     reqs: dict,
     inputs: dict,
-    reader_targets: InsertableDict,
+    reader_targets: law.util.InsertableDict,
 ) -> None:
     if self.lepton_config is None:
         return

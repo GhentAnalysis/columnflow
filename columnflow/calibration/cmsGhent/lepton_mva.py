@@ -2,12 +2,12 @@
 Code to add lepton MVA to NanoAOD
 """
 
-# from collections import OrderedDict
+import law
 
 from columnflow.calibration import Calibrator, calibrator
 from columnflow.production import producer
 from columnflow.util import maybe_import
-from columnflow.columnar_util import set_ak_column, InsertableDict
+from columnflow.columnar_util import set_ak_column
 # from columnflow.columnar_util_Ghent import TetraVec
 from columnflow.tasks.external import BundleExternalFiles
 
@@ -147,7 +147,7 @@ def lepton_mva_producer_setup(
         self: Calibrator,
         reqs: dict,
         inputs: dict,
-        reader_targets: InsertableDict,
+        reader_targets: law.util.InsertableDict,
 ) -> None:
     bundle = reqs["external_files"]
 
