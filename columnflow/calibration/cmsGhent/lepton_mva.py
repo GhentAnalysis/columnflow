@@ -6,7 +6,7 @@ import law
 
 from columnflow.calibration import Calibrator, calibrator
 from columnflow.production import producer
-from columnflow.util import maybe_import
+from columnflow.util import maybe_import, four_vec
 from columnflow.columnar_util import set_ak_column
 # from columnflow.columnar_util_Ghent import TetraVec
 from columnflow.tasks.external import BundleExternalFiles
@@ -18,12 +18,25 @@ maybe_import("coffea.nanoevents.methods.nanoaod")
 
 
 @producer(
-    uses={
-        f"{lep}.{p}"
-        for lep in ["Muon", "Electron"]
-        for p in ["pt", "eta", "miniPFRelIso_all", "miniPFRelIso_chg", "jetRelIso", "dxy", "dz", "jetIdx",
-                  "jetNDauCharged", "jetPtRelv2", "pfRelIso03_all", "sip3d"]
-    } | {"Jet.btagDeepFlavB", "Electron.mvaFall17V2noIso", "Muon.segmentComp"},
+    uses=four_vec(
+        ["Muon", "Electron"],
+        [
+            "miniPFRelIso_all",
+            "miniPFRelIso_chg",
+            "jetRelIso",
+            "dxy",
+            "dz",
+            "jetIdx",
+            "jetNDauCharged",
+            "jetPtRelv2",
+            "pfRelIso03_all",
+            "sip3d",
+        ],
+    ) | {
+        "Jet.btagDeepFlavB",
+        "Electron.mvaFall17V2noIso",
+        "Muon.segmentComp",
+    },
     produces={
         f"{lep}.{p}"
         for lep in ["Muon", "Electron"]

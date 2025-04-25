@@ -15,7 +15,7 @@ import law
 import order as od
 
 from columnflow.types import Any, Iterable, Sequence
-from columnflow.tasks.framework.base import ConfigTask, DatasetTask, TaskShifts, RESOLVE_DEFAULT
+from columnflow.tasks.framework.base import AnalysisTask, ConfigTask, DatasetTask, TaskShifts, RESOLVE_DEFAULT
 from columnflow.tasks.framework.parameters import SettingsParameter, DerivableInstParameter, DerivableInstsParameter
 from columnflow.calibration import Calibrator
 from columnflow.selection import Selector
@@ -881,7 +881,6 @@ class ProducerClassMixin(ArrayFunctionClassMixin):
             keys["producer"] = f"prod_{producer}"
 
         return keys
-
 
 
 class ProducerMixin(ArrayFunctionInstanceMixin, ProducerClassMixin):
