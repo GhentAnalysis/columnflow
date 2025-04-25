@@ -7,7 +7,7 @@ import law.util
 import order as od
 
 from columnflow.production import Producer
-from columnflow.weight import WeightProducer
+from columnflow.histograming import HistProducer
 from columnflow.util import maybe_import
 
 hist = maybe_import("hist")
@@ -139,7 +139,7 @@ def correlation_efficiency_bias(passfailhist):
     return mult_bias - 1, var
 
 
-def init_trigger_config(self: Producer | WeightProducer):
+def init_trigger_config(self: Producer | HistProducer):
     if callable(self.trigger_config):
         self.trigger_config = self.trigger_config()
 
@@ -148,7 +148,7 @@ def init_trigger_config(self: Producer | WeightProducer):
             setattr(self, key, value)
 
 
-def init_uses_variables(self: Producer | WeightProducer):
+def init_uses_variables(self: Producer | HistProducer):
     self.uses.update({
         inp
         for variable_inst in self.variables
