@@ -149,18 +149,19 @@ def lepton_mva_producer(self: Calibrator, events: ak.Array, **kwargs) -> ak.Arra
 
 
 @lepton_mva_producer.requires
-def lepton_mva_producer_requires(self: Calibrator, reqs: dict) -> None:
+def lepton_mva_producer_requires(self: Calibrator, task: law.Task, reqs: dict) -> None:
     if "external_files" in reqs:
         return
-    reqs["external_files"] = BundleExternalFiles.req(self.task)
+    reqs["external_files"] = BundleExternalFiles.req(task)
 
 
 @lepton_mva_producer.setup
 def lepton_mva_producer_setup(
-        self: Calibrator,
-        reqs: dict,
-        inputs: dict,
-        reader_targets: law.util.InsertableDict,
+    self: Calibrator,
+    task: law.Task, 
+    reqs: dict,
+    inputs: dict,
+    reader_targets: law.util.InsertableDict,
 ) -> None:
     bundle = reqs["external_files"]
 

@@ -63,7 +63,7 @@ def init_btag(self: Producer | HistProducer, add_eff_vars=True):
         })
 
 
-def setup_btag(self: Producer | HistProducer, reqs: dict):
+def setup_btag(self: Producer | HistProducer, task: law.Task, reqs: dict):
     bundle = reqs["external_files"]
     correction_set_btag_wp_corr = correctionlib.CorrectionSet.from_string(
         self.get_btag_sf(bundle.files).load(formatter="gzip").decode("utf-8"),
@@ -74,9 +74,9 @@ def setup_btag(self: Producer | HistProducer, reqs: dict):
     return correction_set_btag_wp_corr
 
 
-def req_btag(self: Producer | HistProducer, reqs: dict):
+def req_btag(self: Producer | HistProducer, task: law.Task, reqs: dict):
     from columnflow.tasks.external import BundleExternalFiles
-    reqs["external_files"] = BundleExternalFiles.req(self.task)
+    reqs["external_files"] = BundleExternalFiles.req(task)
 
 
 @producer(
@@ -107,13 +107,13 @@ def jet_btag_init(self: Producer):
 
 
 @jet_btag.setup
-def jet_btag_setup(self: Producer, reqs: dict, *args, **kwargs) -> None:
-    setup_btag(self, reqs)
+def jet_btag_setup(self: Producer, task: law.Task, reqs: dict, *args, **kwargs) -> None:
+    setup_btag(self, task, reqs)
 
 
 @jet_btag.requires
-def jet_btag_requires(self: Producer, reqs: dict) -> None:
-    req_btag(self, reqs)
+def jet_btag_requires(self: Producer, task: law.Task, reqs: dict) -> None:
+    req_btag(self, task, reqs)
 
 
 @hist_producer(
@@ -315,11 +315,12 @@ def fixed_wp_btag_weights_init(
 @fixed_wp_btag_weights.setup
 def fixed_wp_btag_weights_setup(
     self: Producer,
+    task: law.Task, 
     reqs: dict,
     inputs: dict,
     reader_targets: law.util.InsertableDict,
 ) -> None:
-    correction_set_btag_wp_corr = setup_btag(self, reqs)
+    correction_set_btag_wp_corr = setup_btag(self, task, reqs)
 
     # fix for change in nomenclature of deepJet scale factors for light hadronFlavour jets
     if self.config_inst.x.year <= 2018:
@@ -349,13 +350,13 @@ def fixed_wp_btag_weights_setup(
 
 
 @fixed_wp_btag_weights.requires
-def fixed_wp_btag_weights_requires(self: Producer, reqs: dict) -> None:
-    req_btag(self, reqs)
+def fixed_wp_btag_weights_requires(self: Producer, task: law.Task, reqs: dict) -> None:
+    req_btag(self, task, reqs)
 
     if not self.has_external_efficiencies:
         from columnflow.tasks.cmsGhent.btagefficiency import BTagEfficiency
         reqs["btag_efficiency"] = BTagEfficiency.req(
-            self.task,
+            task,
             datasets=self.datasets,
             variables=self.variables,
         )
@@ -363,7 +364,7 @@ def fixed_wp_btag_weights_requires(self: Producer, reqs: dict) -> None:
         if self.produce_plots:
             from columnflow.tasks.cmsGhent.btagefficiency import BTagEfficiencyPlot
             reqs["btag_efficiency_plots"] = BTagEfficiencyPlot.req(
-                self.task,
+                task,
                 branch=-1,
                 _exclude={"branches"},
                 datasets=self.datasets,
@@ -444,11 +445,12 @@ def btag_efficiency_hists_init(self: Producer) -> None:
 @btag_efficiency_hists.setup
 def btag_efficiency_hists_setup(
     self: Producer,
+    task: law.Task, 
     reqs: dict,
     inputs: dict,
     reader_targets: law.util.InsertableDict,
 ) -> None:
-    setup_btag(self, reqs)
+    setup_btag(self, task, reqs)
     self.variable_insts.append(od.Variable(
         name="btag_wp",
         expression=f"Jet.{self.btag_config.discriminator}",
@@ -458,5 +460,5 @@ def btag_efficiency_hists_setup(
 
 
 @btag_efficiency_hists.requires
-def btag_efficiency_hists_requires(self: Producer, reqs: dict) -> None:
-    req_btag(self, reqs)
+def btag_efficiency_hists_requires(self: Producer, task: law.Task, reqs: dict) -> None:
+    req_btag(self, task, reqs)

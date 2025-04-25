@@ -200,17 +200,18 @@ def lepton_weights_init(self: Producer) -> None:
 
 
 @lepton_weights.requires
-def lepton_weights_requires(self: Producer, reqs: dict) -> None:
+def lepton_weights_requires(self: Producer, task: law.Task, reqs: dict) -> None:
     if "external_files" in reqs or self.lepton_config is None:
         return
 
     from columnflow.tasks.external import BundleExternalFiles
-    reqs["external_files"] = BundleExternalFiles.req(self.task)
+    reqs["external_files"] = BundleExternalFiles.req(task)
 
 
 @lepton_weights.setup
 def lepton_weights_setup(
     self: Producer,
+    task: law.Task, 
     reqs: dict,
     inputs: dict,
     reader_targets: law.util.InsertableDict,

@@ -142,17 +142,18 @@ def electron_weights(
 
 
 @electron_weights.requires
-def electron_weights_requires(self: Producer, reqs: dict) -> None:
+def electron_weights_requires(self: Producer, task: law.Task, reqs: dict) -> None:
     if "external_files" in reqs:
         return
 
     from columnflow.tasks.external import BundleExternalFiles
-    reqs["external_files"] = BundleExternalFiles.req(self.task)
+    reqs["external_files"] = BundleExternalFiles.req(task)
 
 
 @electron_weights.setup
 def electron_weights_setup(
     self: Producer,
+    task: law.Task,
     reqs: dict,
     inputs: dict,
     reader_targets: law.util.InsertableDict,
