@@ -79,7 +79,7 @@ def normalized_btag_weights_setup(
     self: Producer,
     reqs: dict,
     inputs: dict,
-    reader_targets: law.util.InsertableDict
+    reader_targets: law.util.InsertableDict,
 ) -> None:
     # load the selection stats
     stats = inputs["selection_stats"]["collection"][0]["stats"].load(formatter="json")
