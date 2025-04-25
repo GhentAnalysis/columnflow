@@ -11,7 +11,7 @@ from collections import OrderedDict
 
 
 from columnflow.production import Producer, producer
-from columnflow.weight import WeightProducer, weight_producer
+from columnflow.histograming import HistProducer, hist_producer
 from columnflow.selection import SelectionResult
 
 from columnflow.util import maybe_import, DotDict
@@ -26,7 +26,7 @@ correctionlib = maybe_import("correctionlib")
 logger = law.logger.get_logger(__name__)
 
 
-def init_btag(self: Producer | WeightProducer, add_eff_vars=True):
+def init_btag(self: Producer | HistProducer, add_eff_vars=True):
     if not hasattr(self, "get_btag_config"):
         self.btag_config = self.config_inst.x(
             "btag_sf",
@@ -63,7 +63,7 @@ def init_btag(self: Producer | WeightProducer, add_eff_vars=True):
         })
 
 
-def setup_btag(self: Producer | WeightProducer, reqs: dict):
+def setup_btag(self: Producer | HistProducer, reqs: dict):
     bundle = reqs["external_files"]
     correction_set_btag_wp_corr = correctionlib.CorrectionSet.from_string(
         self.get_btag_sf(bundle.files).load(formatter="gzip").decode("utf-8"),
@@ -74,7 +74,7 @@ def setup_btag(self: Producer | WeightProducer, reqs: dict):
     return correction_set_btag_wp_corr
 
 
-def req_btag(self: Producer | WeightProducer, reqs: dict):
+def req_btag(self: Producer | HistProducer, reqs: dict):
     from columnflow.tasks.external import BundleExternalFiles
     reqs["external_files"] = BundleExternalFiles.req(self.task)
 
@@ -116,7 +116,7 @@ def jet_btag_requires(self: Producer, reqs: dict) -> None:
     req_btag(self, reqs)
 
 
-@weight_producer(
+@hist_producer(
     uses={"Jet.{pt,eta,hadronFlavour}", jet_btag},
     get_btag_config=(lambda self: BTagSFConfig.new(self.config_inst.x.btag_sf)),
     get_btag_sf=lambda self, external_files: external_files.btag_sf_corr,
