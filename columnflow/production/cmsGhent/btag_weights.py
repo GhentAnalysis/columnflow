@@ -14,7 +14,7 @@ from columnflow.production import Producer, producer
 from columnflow.weight import WeightProducer, weight_producer
 from columnflow.selection import SelectionResult
 
-from columnflow.util import maybe_import, InsertableDict, DotDict
+from columnflow.util import maybe_import, DotDict
 from columnflow.columnar_util import set_ak_column, layout_ak_array, Route, has_ak_column, optional_column
 from columnflow.production.cms.btag import BTagSFConfig
 
@@ -317,7 +317,7 @@ def fixed_wp_btag_weights_setup(
     self: Producer,
     reqs: dict,
     inputs: dict,
-    reader_targets: InsertableDict,
+    reader_targets: law.util.InsertableDict,
 ) -> None:
     correction_set_btag_wp_corr = setup_btag(self, reqs)
 
@@ -446,7 +446,7 @@ def btag_efficiency_hists_setup(
     self: Producer,
     reqs: dict,
     inputs: dict,
-    reader_targets: InsertableDict,
+    reader_targets: law.util.InsertableDict,
 ) -> None:
     setup_btag(self, reqs)
     self.variable_insts.append(od.Variable(

@@ -6,9 +6,11 @@ Muon related event weights.
 
 from __future__ import annotations
 
+import law
+
 from columnflow.production import Producer, producer
 from columnflow.calibration.cms.jets import ak_evaluate
-from columnflow.util import maybe_import, InsertableDict
+from columnflow.util import maybe_import
 from columnflow.columnar_util import set_ak_column, flat_np_view, layout_ak_array
 
 np = maybe_import("numpy")
@@ -147,7 +149,7 @@ def muon_weights_setup(
     self: Producer,
     reqs: dict,
     inputs: dict,
-    reader_targets: InsertableDict,
+    reader_targets: law.util.InsertableDict,
 ) -> None:
     bundle = reqs["external_files"]
 

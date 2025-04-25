@@ -1,7 +1,7 @@
-# from collections import defaultdict
+import law
 
 from columnflow.production import Producer, producer
-from columnflow.util import maybe_import, InsertableDict
+from columnflow.util import maybe_import
 from columnflow.columnar_util import set_ak_column
 from law import LocalFileTarget
 
@@ -64,10 +64,10 @@ def veto_events(
 
 @veto_events.setup
 def veto_events_setup(
-        self: Producer,
-        reqs: dict,
-        inputs: dict,
-        reader_targets: InsertableDict,
+    self: Producer,
+    reqs: dict,
+    inputs: dict,
+    reader_targets: law.util.InsertableDict,
 ) -> None:
     """
     Loads the event veto file from the external files bundle and saves them in the
