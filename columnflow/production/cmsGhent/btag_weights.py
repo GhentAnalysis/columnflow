@@ -14,7 +14,7 @@ from columnflow.production import Producer, producer
 from columnflow.histograming import HistProducer, hist_producer
 from columnflow.selection import SelectionResult
 
-from columnflow.util import maybe_import, DotDict
+from columnflow.util import maybe_import, DotDict, four_vec
 from columnflow.columnar_util import set_ak_column, layout_ak_array, Route, has_ak_column, optional_column
 from columnflow.production.cms.btag import BTagSFConfig
 
@@ -117,7 +117,7 @@ def jet_btag_requires(self: Producer, reqs: dict) -> None:
 
 
 @hist_producer(
-    uses={"Jet.{pt,eta,hadronFlavour}", jet_btag},
+    uses=four_vec("Jet", "hadronFlavour") | {jet_btag},
     get_btag_config=(lambda self: BTagSFConfig.new(self.config_inst.x.btag_sf)),
     get_btag_sf=lambda self, external_files: external_files.btag_sf_corr,
     get_btag_eff=lambda self, external_files: external_files.get("btag_sf_eff", {}),
