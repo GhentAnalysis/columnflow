@@ -74,9 +74,7 @@ class SelectEvents(_SelectEvents):
         super().__init__(*args, **kwargs)
 
         # store the normalization weight producer for MC
-        self.veto_producer: Producer = Producer.get_cls("veto_events")(
-            inst_dict=self.get_producer_kwargs(self),
-        )
+        self.veto_producer: Producer = Producer.get_cls("veto_events")()
 
     def workflow_requires(self):
         reqs = super().workflow_requires()
@@ -103,9 +101,6 @@ class SelectEvents(_SelectEvents):
             self.selector_inst.run_requires(task=self),
         ))
 
-        # add veto selector dependent requirements
-        reqs["veto"] = self.veto_producer.run_requires()
-
         return reqs
 
     def requires(self):
@@ -126,9 +121,6 @@ class SelectEvents(_SelectEvents):
         reqs["selector"] = law.util.make_unique(law.util.flatten(
             self.selector_inst.run_requires(task=self),
         ))
-
-        # add veto selector dependent requirements
-        reqs["veto"] = self.veto_producer.run_requires()
 
         return reqs
 
@@ -179,6 +171,9 @@ class SelectEvents(_SelectEvents):
             inputs=luigi.task.getpaths(selector_reqs),
         )
         n_ext = len(reader_targets)
+        
+        # veto post init
+        self.veto_producer.run_post_init(task=self)
 
         # show an early warning in case the selector does not produce some mandatory columns
         produced_columns = self.selector_inst.produced_columns
@@ -196,8 +191,6 @@ class SelectEvents(_SelectEvents):
         # get shift dependent aliases
         aliases = self.local_shift_inst.x("column_aliases", {})
 
-        # setup the veto producer
-        self.veto_producer.run_setup(self.requires()["veto"], self.input()["veto"])
 
         # define columns that need to be read
         read_columns = set(map(Route, mandatory_coffea_columns))
@@ -208,7 +201,6 @@ class SelectEvents(_SelectEvents):
         # define columns that will be written
         write_columns = set(map(Route, mandatory_coffea_columns))
         write_columns |= self.selector_inst.produced_columns
-        write_columns |= self.veto_producer.produced_columns
         route_filter = RouteFilter(keep=write_columns)
 
         # let the lfn_task prepare the nano file (basically determine a good pfn)
