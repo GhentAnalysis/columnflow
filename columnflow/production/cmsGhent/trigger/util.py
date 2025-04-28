@@ -7,7 +7,7 @@ import law.util
 import order as od
 
 from columnflow.production import Producer
-from columnflow.histograming import HistProducer
+from columnflow.histogramming import HistProducer
 from columnflow.util import maybe_import
 
 hist = maybe_import("hist")

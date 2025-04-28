@@ -1,9 +1,9 @@
-``columnflow.histograming``
+``columnflow.histogramming``
 ===========================
 
-.. currentmodule:: columnflow.histograming
+.. currentmodule:: columnflow.histogramming
 
-.. automodule:: columnflow.histograming
+.. automodule:: columnflow.histogramming
     :autosummary:
     :members:
     :undoc-members:

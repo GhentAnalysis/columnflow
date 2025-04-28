@@ -1,9 +1,9 @@
 ``default``
 ===========
 
-.. currentmodule:: columnflow.histograming.default
+.. currentmodule:: columnflow.histogramming.default
 
-.. automodule:: columnflow.histograming.default
+.. automodule:: columnflow.histogramming.default
     :autosummary:
     :members:
     :undoc-members:

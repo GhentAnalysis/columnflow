@@ -11,7 +11,7 @@ from collections import OrderedDict
 
 
 from columnflow.production import Producer, producer
-from columnflow.histograming import HistProducer, hist_producer
+from columnflow.histogramming import HistProducer, hist_producer
 from columnflow.selection import SelectionResult
 
 from columnflow.util import maybe_import, DotDict, four_vec
