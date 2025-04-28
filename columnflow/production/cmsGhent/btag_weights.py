@@ -229,14 +229,13 @@ def fixed_wp_btag_weights(
         events = add_weight(flavour_group, "central")
 
         # only calculate up and down variations for nominal shift
-        if self.local_shift_inst.is_nominal:
-            for direction in ["up", "down"]:
-                for corr in self.btag_config.sources:
-                    events = add_weight(
-                        flavour_group=flavour_group,
-                        systematic=corr,
-                        variation=direction,
-                    )
+        for direction in ["up", "down"]:
+            for corr in self.btag_config.sources:
+                events = add_weight(
+                    flavour_group=flavour_group,
+                    systematic=corr,
+                    variation=direction,
+                )
 
     # nominal weights:
     nominal = np.prod([events[f"{self.weight_name}_{fg}"] for fg in self.flavour_groups], axis=0)
@@ -245,28 +244,8 @@ def fixed_wp_btag_weights(
 
 
 @fixed_wp_btag_weights.init
-def fixed_wp_btag_weights_init(
-    self: Producer,
-) -> None:
+def fixed_wp_btag_weights_init(self: Producer) -> None:
     init_btag(self)
-
-    # depending on the requested shift_inst, there are three cases to handle:
-    #   1. when a JEC uncertainty is requested whose propagation to btag weights is known, the
-    #      producer should only produce that specific weight column
-    #   2. when the nominal shift is requested, the central weight and all variations related to the
-    #      method-intrinsic shifts are produced
-    #   3. when any other shift is requested, only create the central weight column
-
-    shift_inst = getattr(self, "local_shift_inst", None)
-    if not shift_inst:
-        return
-
-    if not getattr(self, "dataset_inst", None):
-        return
-
-    # to handle this efficiently in one spot, store jec information
-    self.jec_source = shift_inst.x.jec_source if shift_inst.has_tag("jec") else None
-    btag_sf_jec_source = "" if self.jec_source == "Total" else self.jec_source  # noqa
 
     # save names of method-intrinsic uncertainties
     self.flavour_groups = {
@@ -279,12 +258,11 @@ def fixed_wp_btag_weights_init(
     for name in self.flavour_groups:
         # nominal columns
         self.produces.add(f"{self.weight_name}_{name}")
-        if shift_inst.is_nominal:
-            self.produces.update({
-                f"{self.weight_name}_{name}_" + (direction if not corr else f"{corr}_{direction}")
-                for direction in ["up", "down"]
-                for corr in self.btag_config.sources
-            })
+        self.produces.update({
+            f"{self.weight_name}_{name}_" + (direction if not corr else f"{corr}_{direction}")
+            for direction in ["up", "down"]
+            for corr in self.btag_config.sources
+        })
 
     # determine to which btag_dataset_group the dataset belongs.
     # btag efficiency will be calculated for the btag_dataset_group
@@ -310,7 +288,6 @@ def fixed_wp_btag_weights_init(
         )
 
     self.has_external_efficiencies = self.dataset_group in self.get_btag_eff(self.config_inst.x.external_files)
-
 
 @fixed_wp_btag_weights.setup
 def fixed_wp_btag_weights_setup(
