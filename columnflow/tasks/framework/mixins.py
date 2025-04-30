@@ -2778,6 +2778,9 @@ class ParamsCacheMixin:
         elif check_cached_params:
             for key, value in dct_out.items():
                 cached_val = cached_out.get(key, None)
+                if isinstance(value, (tuple, list)) and isinstance(cached_val, (tuple, list)):
+                    value = tuple(value)
+                    cached_val = tuple(cached_val)
                 if cached_val != value:
                     logger.warning(
                         "normal call to get_param_values yielded output that differs from cached output\n"
