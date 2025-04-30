@@ -804,17 +804,17 @@ def jer(self: Calibrator, events: ak.Array, **kwargs) -> ak.Array:
 
     # extract nominal pt resolution
     inputs = [variable_map[inp.name] for inp in self.evaluators["jer"].inputs]
-    jer = {jer_nom: ak_evaluate(self.evaluators["jer"], *inputs)}
+    jerpt = {jer_nom: ak_evaluate(self.evaluators["jer"], *inputs)}
 
     # for simplifications below, use the same values for jer variations
-    jer[jer_up] = jer[jer_nom]
-    jer[jer_down] = jer[jer_nom]
+    jerpt[jer_up] = jerpt[jer_nom]
+    jerpt[jer_down] = jerpt[jer_nom]
 
     # extract pt resolutions evaluted for jec uncertainties
     for jec_var in self.jec_variations:
         _variable_map = variable_map | {"JetPt": events[jet_name][f"pt_{jec_var}"]}
         inputs = [_variable_map[inp.name] for inp in self.evaluators["jer"].inputs]
-        jer[jec_var] = ak_evaluate(self.evaluators["jer"], *inputs)
+        jerpt[jec_var] = ak_evaluate(self.evaluators["jer"], *inputs)
 
     # extract scale factors
     jersf = {}
@@ -831,8 +831,8 @@ def jer(self: Calibrator, events: ak.Array, **kwargs) -> ak.Array:
 
     # array with all JER scale factor variations as an additional axis
     # (note: axis needs to be regular for broadcasting to work correctly)
-    jer = ak.concatenate(
-        [jer[v][..., None] for v in self.jer_variations + self.jec_variations],
+    jerpt = ak.concatenate(
+        [jerpt[v][..., None] for v in self.jer_variations + self.jec_variations],
         axis=-1,
     )
     jersf = ak.concatenate(
@@ -847,7 +847,7 @@ def jer(self: Calibrator, events: ak.Array, **kwargs) -> ak.Array:
     add_smear = np.sqrt(ak.where(jersf2_m1 < 0, 0, jersf2_m1))
 
     # compute smearing factors (stochastic method)
-    smear_factors_stochastic = 1.0 + random_normal * jer * add_smear
+    smear_factors_stochastic = 1.0 + random_normal * jerpt * add_smear
 
     # -- scaling method (using gen match)
 
@@ -877,7 +877,7 @@ def jer(self: Calibrator, events: ak.Array, **kwargs) -> ak.Array:
 
     # test if matched gen jets are within 3 * resolution
     # (no check for Delta-R matching criterion; we assume this was done during nanoAOD production to get the genJetIdx)
-    is_matched_pt = np.abs(pt_relative_diff) < 3 * jer
+    is_matched_pt = np.abs(pt_relative_diff) < 3 * jerpt
     is_matched_pt = ak.fill_none(is_matched_pt, False)  # masked values = no gen match
 
     # compute smearing factors (scaling method)
