@@ -9,7 +9,7 @@ import luigi
 from columnflow.types import Any
 from columnflow.tasks.framework.base import Requirements, ConfigTask
 from columnflow.tasks.framework.mixins import (
-    CalibratorsMixin, SelectorMixin, DatasetsMixin,
+    CalibratorClassesMixin, SelectorClassMixin, DatasetsMixin,
 )
 from columnflow.tasks.framework.plotting import (
     PlotBase, PlotBase2D, PlotBase1D,
@@ -130,8 +130,8 @@ class TriggerDatasetsMixin(
 class TriggerScaleFactors(
     TriggerDatasetsMixin,
     SelectionEfficiencyHistMixin,
-    SelectorMixin,
-    CalibratorsMixin,
+    SelectorClassMixin,
+    CalibratorClassesMixin,
     law.LocalWorkflow,
     RemoteWorkflow,
 ):
@@ -265,8 +265,8 @@ class OutputBranchWorkflow(
 class PlotTriggerScaleFactorsBase(
     TrigPlotLabelMixin,
     TriggerDatasetsMixin,
-    SelectorMixin,
-    CalibratorsMixin,
+    SelectorClassMixin,
+    CalibratorClassesMixin,
     OutputBranchWorkflow,
 ):
     reqs = Requirements(
@@ -504,8 +504,8 @@ class PlotTriggerScaleFactorsHist(
     TrigPlotLabelMixin,
     TriggerDatasetsMixin,
     SelectionEfficiencyHistMixin,
-    SelectorMixin,
-    CalibratorsMixin,
+    SelectorClassMixin,
+    CalibratorClassesMixin,
     law.LocalWorkflow,
     RemoteWorkflow,
     PlotBase1D,

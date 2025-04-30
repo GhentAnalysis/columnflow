@@ -226,7 +226,7 @@ def pdf_weights(
 
 
 @pdf_weights.init
-def pdf_weight_init(self: Producer) -> None:
+def pdf_weight_init(self: Producer, **kwargs) -> None:
     # add produced columns: nominal+all, or nominal+up+down
     self.produces.add("pdf_weight{,s}" if self.store_all_weights else "pdf_weight{,_up,_down}")
     self.produces.add("alphas_weight{,_up,_down}")
