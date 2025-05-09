@@ -1,5 +1,5 @@
 ``columnflow.histogramming``
-===========================
+============================
 
 .. currentmodule:: columnflow.histogramming
 
