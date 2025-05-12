@@ -8,7 +8,7 @@ from columnflow.util import maybe_import
 from columnflow.plotting.plot_util import (
     remove_residual_axis,
     apply_variable_settings,
-    apply_density_to_hists,
+    apply_density,
     prepare_style_config,
 )
 from columnflow.plotting.plot_all import plot_all
@@ -24,16 +24,16 @@ hist = maybe_import("hist")
 
 
 def plot_multi_variables(
-        hists: OrderedDict,
-        config_inst: od.Config,
-        category_inst: od.Category,
-        style_config: dict | None = None,
-        density: bool | None = False,
-        shape_norm: bool = False,
-        yscale: str | None = None,
-        hide_errors: bool | None = None,
-        variable_settings: dict | None = None,
-        **kwargs,
+    hists: OrderedDict,
+    config_inst: od.Config,
+    category_inst: od.Category,
+    style_config: dict | None = None,
+    density: bool | None = False,
+    shape_norm: bool = False,
+    yscale: str | None = None,
+    hide_errors: bool | None = None,
+    variable_settings: dict | None = None,
+    **kwargs,
 ) -> plt.Figure:
     """
     Plot multiple variables as histograms with optional density, normalization, and custom styling.
@@ -78,8 +78,8 @@ def plot_multi_variables(
     variable_insts = list(hists)
 
     for variable_inst in variable_insts:
-        hists |= apply_variable_settings({variable_inst: hists[variable_inst]}, [variable_inst], variable_settings)
-    hists = apply_density_to_hists(hists, density)
+        hists |= apply_variable_settings({variable_inst: hists[variable_inst]}, [variable_inst], variable_settings)[0]
+    hists = apply_density(hists, density)
 
     initial = variable_insts[0]
     plot_config = OrderedDict()
