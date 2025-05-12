@@ -160,28 +160,31 @@ def unroll_3d_hists(hists, split_processes, gen_variable, density):
 
 
 def plot_unrolled(
-        hists: OrderedDict,
-        config_inst: od.Config,
-        category_inst: od.Category,
-        variable_insts: list[od.Variable],
-        style_config: dict | None = None,
-        density: bool | None = False,
-        shape_norm: bool | None = False,
-        yscale: str | None = "",
-        hide_errors: bool | None = None,
-        process_settings: dict | None = None,
-        variable_settings: dict | None = None,
-        **kwargs,
+    hists: OrderedDict,
+    config_inst: od.Config,
+    category_inst: od.Category,
+    variable_insts: list[od.Variable],
+    shift_insts: list[od.Shift] | None,
+    style_config: dict | None = None,
+    density: bool | None = False,
+    shape_norm: bool | None = False,
+    yscale: str | None = "",
+    hide_errors: bool | None = None,
+    process_settings: dict | None = None,
+    variable_settings: dict | None = None,
+    **kwargs,
 ) -> plt.Figure:
 
     # remove shift axis from histograms
-    remove_residual_axis(hists, "shift")
+    if len(shift_insts) == 1:
+        # when there is exactly one shift bin, we can remove the shift axis
+        remove_residual_axis(hists, "shift")
 
     x_variable_inst = variable_insts[0]
     y_variable_inst = variable_insts[1]
 
-    hists = apply_variable_settings(hists, variable_insts, variable_settings)
-    hists = apply_process_settings(hists, process_settings)
+    hists, variable_style_config = apply_variable_settings(hists, variable_insts, variable_settings)
+    hists, process_style_config = apply_process_settings(hists, process_settings)
     if len(variable_insts) == 3:
         # get the processes to be split along the third dimension
         split_processes = kwargs.get("split_processes", "").split("+")
@@ -234,7 +237,7 @@ def plot_unrolled(
     for i, hist in enumerate(hists):
         ax = axes[i]
 
-        plot_config = prepare_stack_plot_config(hist, shape_norm=shape_norm, **kwargs)
+        plot_config = prepare_stack_plot_config(hist, shift_insts=shift_insts, shape_norm=shape_norm, **kwargs)
 
         if shape_norm:
             style_config["ax_cfg"]["ylabel"] = r"$\Delta N/N$"
