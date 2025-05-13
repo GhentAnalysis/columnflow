@@ -9,7 +9,7 @@ import luigi
 from columnflow.types import Any
 from columnflow.tasks.framework.base import Requirements, ConfigTask
 from columnflow.tasks.framework.mixins import (
-    CalibratorsMixin, SelectorMixin, DatasetsMixin,
+    CalibratorClassesMixin, SelectorClassMixin, DatasetsMixin,
 )
 from columnflow.tasks.framework.plotting import (
     PlotBase, PlotBase2D, PlotBase1D,
@@ -29,6 +29,7 @@ logger = law.logger.get_logger(__name__)
 
 class TriggerConfigMixin(ConfigTask):
     exclude_index = True
+    single_config = True
 
     trigger_config = luigi.Parameter(description="Trigger config to use to measure", default=None)
 
@@ -130,8 +131,8 @@ class TriggerDatasetsMixin(
 class TriggerScaleFactors(
     TriggerDatasetsMixin,
     SelectionEfficiencyHistMixin,
-    SelectorMixin,
-    CalibratorsMixin,
+    SelectorClassMixin,
+    CalibratorClassesMixin,
     law.LocalWorkflow,
     RemoteWorkflow,
 ):
@@ -265,10 +266,12 @@ class OutputBranchWorkflow(
 class PlotTriggerScaleFactorsBase(
     TrigPlotLabelMixin,
     TriggerDatasetsMixin,
-    SelectorMixin,
-    CalibratorsMixin,
+    SelectorClassMixin,
+    CalibratorClassesMixin,
     OutputBranchWorkflow,
 ):
+    resolution_task_cls = TriggerScaleFactors
+
     reqs = Requirements(
         RemoteWorkflow.reqs,
         TriggerScaleFactors=TriggerScaleFactors,
@@ -504,8 +507,8 @@ class PlotTriggerScaleFactorsHist(
     TrigPlotLabelMixin,
     TriggerDatasetsMixin,
     SelectionEfficiencyHistMixin,
-    SelectorMixin,
-    CalibratorsMixin,
+    SelectorClassMixin,
+    CalibratorClassesMixin,
     law.LocalWorkflow,
     RemoteWorkflow,
     PlotBase1D,

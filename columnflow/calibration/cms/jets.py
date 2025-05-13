@@ -12,7 +12,7 @@ from columnflow.types import Any
 from columnflow.calibration import Calibrator, calibrator
 from columnflow.calibration.util import ak_random, propagate_met, sum_transverse
 from columnflow.production.util import attach_coffea_behavior
-from columnflow.util import maybe_import, InsertableDict, DotDict
+from columnflow.util import maybe_import, DotDict, load_correction_set
 from columnflow.columnar_util import set_ak_column, layout_ak_array, optional_column as optional
 
 np = maybe_import("numpy")
@@ -476,7 +476,7 @@ def jec(
 
 
 @jec.init
-def jec_init(self: Calibrator) -> None:
+def jec_init(self: Calibrator, **kwargs) -> None:
     jec_cfg = self.get_jec_config()
 
     sources = self.uncertainty_sources
@@ -513,16 +513,28 @@ def jec_init(self: Calibrator) -> None:
 
 
 @jec.requires
-def jec_requires(self: Calibrator, reqs: dict) -> None:
+def jec_requires(
+    self: Calibrator,
+    task: law.Task,
+    reqs: dict[str, DotDict[str, Any]],
+    **kwargs,
+) -> None:
     if "external_files" in reqs:
         return
 
     from columnflow.tasks.external import BundleExternalFiles
-    reqs["external_files"] = BundleExternalFiles.req(self.task)
+    reqs["external_files"] = BundleExternalFiles.req(task)
 
 
 @jec.setup
-def jec_setup(self: Calibrator, reqs: dict, inputs: dict, reader_targets: InsertableDict) -> None:
+def jec_setup(
+    self: Calibrator,
+    task: law.Task,
+    reqs: dict[str, DotDict[str, Any]],
+    inputs: dict[str, Any],
+    reader_targets: law.util.InsertableDict,
+    **kwargs,
+) -> None:
     """
     Load the correct jec files using the :py:func:`from_string` method of the
     :external+correctionlib:py:class:`correctionlib.highlevel.CorrectionSet`
@@ -573,13 +585,9 @@ def jec_setup(self: Calibrator, reqs: dict, inputs: dict, reader_targets: Insert
     :param inputs: Additional inputs, currently not used
     :param reader_targets: TODO: add documentation
     """
-    bundle = reqs["external_files"]
-
     # import the correction sets from the external file
-    import correctionlib
-    correction_set = correctionlib.CorrectionSet.from_string(
-        self.get_jec_file(bundle.files).load(formatter="gzip").decode("utf-8"),
-    )
+    jec_file = self.get_jec_file(reqs["external_files"].files)
+    correction_set = load_correction_set(jec_file)
 
     # compute JEC keys from config information
     jec_cfg = self.get_jec_config()
@@ -947,7 +955,7 @@ def jer(self: Calibrator, events: ak.Array, **kwargs) -> ak.Array:
 
 
 @jer.init
-def jer_init(self: Calibrator) -> None:
+def jer_init(self: Calibrator, **kwargs) -> None:
     # add jec_cfg for applying nominal smearing to jec variations
     jec_cfg = self.get_jec_config()
     jec_sources = self.jec_uncertainty_sources
@@ -994,16 +1002,28 @@ def jer_init(self: Calibrator) -> None:
 
 
 @jer.requires
-def jer_requires(self: Calibrator, reqs: dict) -> None:
+def jer_requires(
+    self: Calibrator,
+    task: law.Task,
+    reqs: dict[str, DotDict[str, Any]],
+    **kwargs,
+) -> None:
     if "external_files" in reqs:
         return
 
     from columnflow.tasks.external import BundleExternalFiles
-    reqs["external_files"] = BundleExternalFiles.req(self.task)
+    reqs["external_files"] = BundleExternalFiles.req(task)
 
 
 @jer.setup
-def jer_setup(self: Calibrator, reqs: dict, inputs: dict, reader_targets: InsertableDict) -> None:
+def jer_setup(
+    self: Calibrator,
+    task: law.Task,
+    reqs: dict[str, DotDict[str, Any]],
+    inputs: dict[str, Any],
+    reader_targets: law.util.InsertableDict,
+    **kwargs,
+) -> None:
     """
     Load the correct jer files using the :py:func:`from_string` method of the
     :external+correctionlib:py:class:`correctionlib.highlevel.CorrectionSet` function and apply the
@@ -1036,13 +1056,9 @@ def jer_setup(self: Calibrator, reqs: dict, inputs: dict, reader_targets: Insert
     :param inputs: Additional inputs, currently not used.
     :param reader_targets: TODO: add documentation.
     """
-    bundle = reqs["external_files"]
-
     # import the correction sets from the external file
-    import correctionlib
-    correction_set = correctionlib.CorrectionSet.from_string(
-        self.get_jer_file(bundle.files).load(formatter="gzip").decode("utf-8"),
-    )
+    jer_file = self.get_jer_file(reqs["external_files"].files)
+    correction_set = load_correction_set(jer_file)
 
     # compute JER keys from config information
     jer_cfg = self.get_jer_config()
@@ -1061,6 +1077,7 @@ def jer_setup(self: Calibrator, reqs: dict, inputs: dict, reader_targets: Insert
     if self.deterministic_seed_index >= 0:
         idx = self.deterministic_seed_index
         bit_generator = np.random.SFC64
+
         def deterministic_normal(loc, scale, seed):
             return np.asarray([
                 np.random.Generator(bit_generator(_seed)).normal(_loc, _scale, size=idx + 1)[-1]
@@ -1110,8 +1127,8 @@ def jets(self: Calibrator, events: ak.Array, **kwargs) -> ak.Array:
     return events
 
 
-@jets.init
-def jets_init(self: Calibrator) -> None:
+@jets.pre_init
+def jets_pre_init(self: Calibrator, **kwargs) -> None:
     # forward argument to the producers
     self.deps_kwargs[jec]["jet_name"] = self.jet_name
     self.deps_kwargs[jer]["jet_name"] = self.jet_name

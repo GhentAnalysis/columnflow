@@ -74,7 +74,10 @@ class CustomDefaultVariablesMixin(
 class SelectionEfficiencyHistMixin(
     DatasetsMixin,
 ):
+    single_config = True
     exclude_index = True
+
+    resolution_task_cls = MergeSelectionStats
 
     # upstream requirements
     reqs = Requirements(

@@ -108,7 +108,7 @@ def plot_migration_matrices(
     axes[0, 0].sharey(axes[0, 1])
 
     remove_residual_axis(hists, "shift")
-    hists = apply_variable_settings(hists, variable_insts, variable_settings)
+    hists, variable_style_config = apply_variable_settings(hists, variable_insts, variable_settings)
     initial_hist = hists.pop(initial)
     [(category, hist_2d)] = hists.items()
 
