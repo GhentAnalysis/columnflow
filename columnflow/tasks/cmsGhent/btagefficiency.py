@@ -27,6 +27,8 @@ class BTagEfficiencyBase:
     flavours = {0: "light", 4: "charm", 5: "bottom"}
     wps = ["L", "M", "T"]
 
+    single_config = True
+
 
 class BTagEfficiency(
     BTagEfficiencyBase,
@@ -96,6 +98,8 @@ class BTagEfficiencyPlot(
     law.LocalWorkflow,
     PlotBase2D,
 ):
+    resolution_task_cls = BTagEfficiency
+
     reqs = Requirements(BTagEfficiency=BTagEfficiency)
 
     plot_function = PlotBase.plot_function.copy(

@@ -29,6 +29,7 @@ logger = law.logger.get_logger(__name__)
 
 class TriggerConfigMixin(ConfigTask):
     exclude_index = True
+    single_config = True
 
     trigger_config = luigi.Parameter(description="Trigger config to use to measure", default=None)
 
@@ -269,6 +270,8 @@ class PlotTriggerScaleFactorsBase(
     CalibratorClassesMixin,
     OutputBranchWorkflow,
 ):
+    resolution_task_cls = TriggerScaleFactors
+
     reqs = Requirements(
         RemoteWorkflow.reqs,
         TriggerScaleFactors=TriggerScaleFactors,

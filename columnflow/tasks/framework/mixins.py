@@ -2063,10 +2063,18 @@ class DatasetsMixin(ConfigTask):
 
     datasets = law.CSVParameter(
         default=(),
-        description="comma-separated dataset names or patters to select; can also be the key of a "
-        "mapping defined in the 'dataset_groups' auxiliary data of the config; when empty, uses "
-        "all datasets registered in the config; empty "
-        "default",
+        description="comma-separated dataset names or patterns to select; can also be the key of a mapping defined in "
+        "the 'dataset_groups' auxiliary data of the config; when empty, uses all datasets registered in the config "
+        "that contain any of the selected --processes; empty default",
+        brace_expand=True,
+        parse_empty=True,
+    )
+    datasets_multi = law.MultiCSVParameter(
+        default=(),
+        description="multiple comma-separated dataset names or patters to select per config object, each separated by "
+        "a colon; when only one sequence is passed, it is applied to all configs; values can also be the key of a "
+        "mapping defined in " "the 'dataset_groups' auxiliary data of the specific config; when empty, uses all "
+        "datasets registered in the config that contain any of the selected --processes; empty default",
         brace_expand=True,
         parse_empty=True,
     )
@@ -2074,49 +2082,111 @@ class DatasetsMixin(ConfigTask):
     allow_empty_datasets = False
 
     @classmethod
-    def resolve_param_values(cls, params):
-        params = super().resolve_param_values(params)
+    def modify_task_attributes(cls) -> None:
+        super().modify_task_attributes()
+        # single/multi config adjustments in case the switch has been specified
+        if isinstance(cls.single_config, bool) and getattr(cls, "datasets_multi", None) is not None:
+            if not cls.has_single_config():
+                cls.datasets = cls.datasets_multi
+                cls.processes = cls.processes_multi
+            cls.datasets_multi = None
 
-        if "config_inst" not in params:
-            return params
-        config_inst = params["config_inst"]
+    @classmethod
+    def resolve_param_values_pre_init(cls, params: dict[str, Any]) -> dict[str, Any]:
+        params = super().resolve_param_values_pre_init(params)
 
-        # resolve datasets
-        if "datasets" in params:
-            if params["datasets"]:
-                datasets = cls.find_config_objects(
-                    params["datasets"],
-                    config_inst,
-                    od.Dataset,
-                    config_inst.x("dataset_groups", {}),
-                )
+        # helper to resolve processes and datasets for one config
+        def resolve(config_inst: od.Config, datasets: Any) -> tuple[list[str], list[str]]:
+            if datasets != law.no_value:
+                datasets_orig = datasets
+                if datasets:
+                    datasets = cls.find_config_objects(
+                        names=datasets,
+                        container=config_inst,
+                        object_cls=od.Dataset,
+                        groups_str="dataset_groups",
+                    )
+                if not datasets and not cls.allow_empty_datasets:
+                    raise ValueError(f"no datasets found matching {datasets_orig}")
 
-            # complain when no datasets were found
-            if not datasets and not cls.allow_empty_datasets:
-                raise ValueError(f"no datasets found matching {params['datasets']}")
+            return datasets
 
-            params["datasets"] = tuple(datasets)
-            params["dataset_insts"] = [config_inst.get_dataset(d) for d in params["datasets"]]
+        # get processes and datasets
+        single_config = cls.has_single_config()
+        datasets = (params.get("datasets", law.no_value),) if single_config else params.get("datasets", ())
+
+        # "broadcast" to match number of configs
+        config_insts = params.get("config_insts")
+        datasets = cls.broadcast_to_configs(datasets, "datasets", len(config_insts))
+
+        # perform resolution per config
+        multi_datasets = []
+        for config_inst, _datasets in zip(config_insts, datasets):
+            _datasets = resolve(config_inst, _datasets)
+            multi_datasets.append(tuple(_datasets) if _datasets != law.no_value else None)
+
+        params["datasets"] = multi_datasets[0] if single_config else tuple(multi_datasets)
+
+        # store instances
+        params["dataset_insts"] = {
+            config_inst: list(map(config_inst.get_dataset, datasets))
+            for config_inst, datasets in zip(config_insts, multi_datasets)
+        }
+        return params
+
+    @classmethod
+    def resolve_instances(cls, params: dict[str, Any], shifts: TaskShifts) -> dict[str, Any]:
+        if not cls.resolution_task_cls:
+            raise ValueError(f"resolution_task_cls must be set for multi-config task {cls.task_family}")
+
+        cls.get_known_shifts(params, shifts)
+
+        # we loop over all configs/datasets, but return initial params
+        for i, config_inst in enumerate(params["config_insts"]):
+            if cls.has_single_config():
+                datasets = params["datasets"]
+            else:
+                datasets = params["datasets"][i]
+
+            for dataset in datasets:
+                # NOTE: we need to copy here, because otherwise taf inits will only be triggered once
+                _params = {
+                    **params,
+                    "config_inst": config_inst,
+                    "config": config_inst.name,
+                    "dataset": dataset,
+                }
+                logger_dev.debug(f"building taf insts for {config_inst.name}, {dataset}")
+                cls.resolution_task_cls.resolve_instances(_params, shifts)
+                cls.resolution_task_cls.get_known_shifts(_params, shifts)
+
+        params["known_shifts"] = shifts
 
         return params
 
     @classmethod
-    def get_known_shifts(cls, config_inst, params):
-        shifts, upstream_shifts = super().get_known_shifts(config_inst, params)
+    def get_known_shifts(
+            cls,
+            params: dict[str, Any],
+            shifts: TaskShifts,
+    ) -> None:
+        """
+        Updates the set of known *shifts* implemented by *this* and upstream tasks.
 
+        :param params: Dictionary of task parameters.
+        :param shifts: TaskShifts object to adjust.
+        """
         # add shifts of all datasets to upstream ones
-        for dataset_inst in params.get("dataset_insts") or []:
-            if dataset_inst.is_mc:
-                upstream_shifts |= set(dataset_inst.info.keys())
+        for config_inst, dataset_insts in params["dataset_insts"].items():
+            for dataset_inst in dataset_insts:
+                if dataset_inst.is_mc:
+                    shifts.upstream |= set(dataset_inst.info.keys())
 
-        return shifts, upstream_shifts
+        super().get_known_shifts(params, shifts)
 
     @property
-    def datasets_repr(self):
-        if len(self.datasets) == 1:
-            return self.datasets[0]
-
-        return f"{len(self.datasets)}_{law.util.create_hash(sorted(self.datasets))}"
+    def datasets_repr(self) -> str:
+        return self._multi_sequence_repr(self.datasets, sort=True)
 
 
 class DatasetsProcessesMixin(ConfigTask):
