@@ -8,7 +8,7 @@ from collections import OrderedDict
 
 from columnflow.tasks.framework.base import Requirements
 from columnflow.tasks.framework.mixins import (
-    CalibratorsMixin, VariablesMixin, SelectorMixin, DatasetsMixin,
+    CalibratorClassesMixin, VariablesMixin, SelectorClassMixin, DatasetsMixin,
 )
 from columnflow.tasks.framework.plotting import (
     PlotBase, PlotBase2D,
@@ -35,8 +35,8 @@ class BTagEfficiency(
     SelectionEfficiencyHistMixin,
     CustomDefaultVariablesMixin,
     VariablesMixin,
-    SelectorMixin,
-    CalibratorsMixin,
+    SelectorClassMixin,
+    CalibratorClassesMixin,
     law.LocalWorkflow,
     RemoteWorkflow,
 ):
@@ -93,8 +93,8 @@ class BTagEfficiencyPlot(
     DatasetsMixin,
     CustomDefaultVariablesMixin,
     VariablesMixin,
-    SelectorMixin,
-    CalibratorsMixin,
+    SelectorClassMixin,
+    CalibratorClassesMixin,
     law.LocalWorkflow,
     PlotBase2D,
 ):
@@ -156,10 +156,11 @@ class BTagEfficiencyPlot(
         import hist
         import numpy as np
 
-        variable_insts = list(map(self.config_inst.get_variable, self.variables))
-
         # plot efficiency for each hadronFlavour and wp
         efficiency_hist = self.input()["collection"][0]["hist"].load(formatter="pickle")
+
+        variable_insts = list(map(self.config_inst.get_variable, self.variables))
+        variable_insts = sorted(variable_insts, key=efficiency_hist.axes.name.index)
 
         for i, sys in enumerate(["central", "down", "up"]):
             # create a dummy histogram dict for plotting with the first process
