@@ -197,6 +197,7 @@ class BTagEfficiencyPlot(
                 config_inst=self.config_inst,
                 category_inst=cat.copy_shallow(),
                 variable_insts=[var_inst.copy_shallow() for var_inst in variable_insts],
+                shift_insts=[self.config_inst.get_shift("nominal")],
                 style_config=style_config,
                 **self.get_plot_parameters(),
             )
