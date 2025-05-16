@@ -3,19 +3,28 @@
 """
 Producers that determine the generator-level particles related to a top quark decay.
 """
+from typing import Tuple
 
 from columnflow.production import Producer, producer
-from columnflow.util import maybe_import
+from columnflow.selection import Selector, SelectionResult, selector
+from columnflow.util import maybe_import, four_vec
 from columnflow.columnar_util import set_ak_column
 
 ak = maybe_import("awkward")
+np = maybe_import("numpy")
+
+def _get_indexed_hard_children(gen_particle, start_index):
+    children = gen_particle.distinctChildrenDeep
+    children = set_ak_column(children, "index", gen_particle.distinctChildrenDeepIdxG - start_index)
+    return children[children.hasFlags("isHardProcess")]
 
 
-@producer(
-    uses={"GenPart.genPartIdxMother", "GenPart.pdgId", "GenPart.statusFlags"},
-    produces={"gen_top_decay"},
+
+@selector(
+    uses=four_vec("GenPart", ("pdgId", "genPartIdxMother", "statusFlags")),
+    exposed=False,
 )
-def gen_top_decay_products(self: Producer, events: ak.Array, **kwargs) -> ak.Array:
+def gen_top_decay_products(self: Selector, events: ak.Array, **kwargs) -> Tuple[ak.Array, SelectionResult]:
     """
     Creates a new ragged column "gen_top_decay" with one element per hard top quark. Each element is
     a GenParticleArray with five or more objects in a distinct order: top quark, bottom quark,
@@ -37,47 +46,60 @@ def gen_top_decay_products(self: Producer, events: ak.Array, **kwargs) -> ak.Arr
             ...
         ]
     """
+
+    genPart = events.GenPart
+    start_index = np.cumsum(np.concatenate([0, ak.num(genPart)[:-1]]))
+    genPart = set_ak_column(genPart, "index", ak.local_index(genPart.pdgId))
+    print("genpartindex", genPart.index)
+
     # find hard top quarks
-    abs_id = abs(events.GenPart.pdgId)
-    t = events.GenPart[abs_id == 6]
-    t = t[t.hasFlags("isHardProcess")]
-    t = t[~ak.is_none(t, axis=1)]
+    top = genPart[abs(genPart.pdgId) == 6]
+    top = top[top.hasFlags("isHardProcess")]
+    top = top[~ak.is_none(top, axis=1)]
+    print(top)
+    top1 = top[:, 0]
+    top2 = top[:, 1]
+    
+    top1_children = _get_indexed_hard_children(top1, start_index)
+    top2_children = _get_indexed_hard_children(top2, start_index)
 
-    # distinct top quark children (b's and W's)
-    t_children = t.distinctChildrenDeep[t.distinctChildrenDeep.hasFlags("isHardProcess")]
+    b1 = top1_children[abs(top1_children.pdgId) == 5][:, 0]
+    b2 = top2_children[abs(top2_children.pdgId) == 5][:, 0]
 
-    # get b's
-    b = t_children[abs(t_children.pdgId) == 5][:, :, 0]
+    w1 = top1_children[abs(top1_children.pdgId) == 24][:, 0]
+    w2 = top2_children[abs(top2_children.pdgId) == 24][:, 0]
 
-    # get W's
-    w = t_children[abs(t_children.pdgId) == 24][:, :, 0]
+    w1_children = _get_indexed_hard_children(w1, start_index)
+    w2_children = _get_indexed_hard_children(w2, start_index)
 
-    # distinct W children
-    w_children = w.distinctChildrenDeep[w.distinctChildrenDeep.hasFlags("isHardProcess")]
+    w1up = w1_children[abs(w1_children.pdgId) % 2 == 1][:, 0]
+    w2up = w2_children[abs(w2_children.pdgId) % 2 == 1][:, 0]
 
-    # reorder the first two W children (leptons or quarks) so that the charged lepton / down-type
-    # quark is listed first (they have an odd pdgId)
-    w_children_firsttwo = w_children[:, :, :2]
-    w_children_firsttwo = w_children_firsttwo[(w_children_firsttwo.pdgId % 2 == 0) * 1]
-    w_children_rest = w_children[:, :, 2:]
+    w1dn = w1_children[abs(w1_children.pdgId) % 2 == 0][:, 0]
+    w2dn = w2_children[abs(w2_children.pdgId) % 2 == 0][:, 0]
+    
+    indices = {
+        "GenTop1": top1.index,
+        "GenTop2": top2.index,
+        "GenB1": b1.index,
+        "GenB2": b2.index,
+        "GenW1": w1.index,
+        "GenW2": w2.index,
+        "GenW1dec1": w1up.index,
+        "GenW1dec2": w1dn.index,
+        "GenW2dec1": w2up.index,
+        "GenW2dec2": w2dn.index,
+    }
 
-    # concatenate to create the structure to return
-    groups = ak.concatenate(
-        [
-            t[:, :, None],
-            b[:, :, None],
-            w[:, :, None],
-            w_children_firsttwo,
-            w_children_rest,
-        ],
-        axis=2,
+    return events, SelectionResult(
+        steps={},
+        objects={
+            "GenPart": {
+                o: ak.fill_none(ak.from_regular(indices[o], axis=-1), 0) 
+                for o in indices
+            }
+        },
     )
-
-    # save the column
-    events = set_ak_column(events, "gen_top_decay", groups)
-
-    return events
-
 
 @gen_top_decay_products.skip
 def gen_top_decay_products_skip(self: Producer) -> bool:

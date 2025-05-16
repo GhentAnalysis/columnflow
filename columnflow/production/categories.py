@@ -45,7 +45,8 @@ def category_ids(
             cat_mask = cat_mask & mask
 
         # covert to nullable array with the category ids or none, then apply ak.singletons
-        ids = ak.where(cat_mask, np.float64(cat_inst.id), np.float64(np.nan))
+        ids = ak.where(cat_mask, np.float64(cat_inst.id), np.float64(-1))
+        #ids = ak.where(cat_mask, np.float64(cat_inst.id), np.float64(np.nan))
         category_ids.append(ak.singletons(ak.nan_to_none(ids)))
 
     # combine
@@ -55,7 +56,6 @@ def category_ids(
     if target_events is None:
         target_events = events
     target_events = set_ak_column(target_events, "category_ids", category_ids, value_type=np.int64)
-
     return target_events
 
 

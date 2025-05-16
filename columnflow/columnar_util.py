@@ -1191,6 +1191,7 @@ def fill_hist(
         if shift_last_bin and len(ax.widths) and not ax._ax.traits_growth:
             correct_last_bin_axes.append(ax)
 
+    print(axis_names)
     # check data
     if not isinstance(data, dict):
         if len(axis_names) != 1:
@@ -1202,6 +1203,8 @@ def fill_hist(
                 raise ValueError(f"missing data for histogram axis '{name}'")
 
     # create numpy views for all data arrays
+    #for name in data:
+    #    print(name, data[name])
     data = {name: np.asarray(data[name]) for name in data}
 
     # correct last bin values
