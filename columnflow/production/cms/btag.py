@@ -6,11 +6,14 @@ Producers for btag scale factor weights.
 
 from __future__ import annotations
 
+from dataclasses import dataclass, field
+
 import law
 
 from columnflow.production import Producer, producer
 from columnflow.util import maybe_import, InsertableDict
 from columnflow.columnar_util import set_ak_column, flat_np_view, layout_ak_array
+from columnflow.types import Any
 
 np = maybe_import("numpy")
 ak = maybe_import("awkward")
@@ -18,16 +21,64 @@ ak = maybe_import("awkward")
 logger = law.logger.get_logger(__name__)
 
 
+@dataclass
+class BTagSFConfig:
+    correction_set: str
+    sources: list[str]
+    jec_sources: list[str]
+    discriminator: str = ""  # when empty, set in post init based on correction set
+    corrector_kwargs: dict[str, Any] = field(default_factory=dict)
+
+    def __post_init__(self):
+        cs = self.correction_set.lower()
+        if not self.discriminator:
+            if "deepjet" in cs:
+                self.discriminator = "btagDeepFlavB"
+            elif "particlenet" in cs:
+                self.discriminator = "btagPNetB"
+            elif "robustparticletransformer" in cs:
+                self.discriminator = "btagRobustParTAK4B"
+            else:
+                raise NotImplementedError(
+                    "cannot identify btag discriminator for correction set "
+                    f"'{self.correction_set}', please set it manually",
+                )
+
+        # warn about potentially wrong column usage
+        if (
+            ("deepjet" in cs and "pnet" in self.discriminator) or
+            ("particlenet" in cs and "deepflav" in self.discriminator)
+        ):
+            logger.warning(
+                f"using btag column '{self.discriminator}' for btag sf corrector "
+                f"'{self.correction_set}' is highly discouraged",
+            )
+
+    @classmethod
+    def new(
+        cls,
+        obj: BTagSFConfig | tuple[str, list[str]] | tuple[str, list[str], str],
+    ) -> BTagSFConfig:
+        # purely for backwards compatibility with the old tuple format
+        if isinstance(obj, cls):
+            return obj
+        if isinstance(obj, (list, tuple)) or isinstance(obj, tuple):
+            return cls(*obj)
+        if isinstance(obj, dict):
+            return cls(**obj)
+        raise ValueError(f"cannot convert {obj} to BTagSFConfig")
+
+
 @producer(
-    uses={
-        "Jet.hadronFlavour", "Jet.eta", "Jet.pt",
-    },
+    uses={"Jet.{pt,eta,hadronFlavour}"},
     # only run on mc
     mc_only=True,
+    # configurable weight name
+    weight_name="btag_weight",
     # function to determine the correction file
     get_btag_file=(lambda self, external_files: external_files.btag_sf_corr),
-    # function to determine the muon weight config
-    get_btag_config=(lambda self: self.config_inst.x.btag_sf),
+    # function to determine the btag sf config
+    get_btag_config=(lambda self: BTagSFConfig.new(self.config_inst.x.btag_sf)),
 )
 def btag_weights(
     self: Producer,
@@ -56,7 +107,12 @@ def btag_weights(
 
     .. code-block:: python
 
-        cfg.x.btag_sf = ("deepJet_shape", ["Absolute", "FlavorQCD", ...], "btagDeepFlavB")
+        cfg.x.btag_sf = BTagSFConfig(
+            correction_set="deepJet_shape",
+            jec_sources=["Absolute", "FlavorQCD", ...],
+            discriminator="btagDeepFlavB",
+            corrector_kwargs={...},
+        )
 
     *get_btag_config* can be adapted in a subclass in case it is stored differently in the config.
 
@@ -67,7 +123,8 @@ def btag_weights(
     Supported modes are:
 
         - "ignore": the *jet_mask* is extended to exclude jets with b_score < 0
-        - "remove": the btag_weight is set to 0 for jets with b_score < 0
+        - "remove": the scale factor is set to 0 for jets with b_score < 0, resulting in an overall
+            btag weight of 0 for the event
         - "raise": an exception is raised
 
     The verbosity of the handling of jets with negative b-score can be
@@ -80,8 +137,8 @@ def btag_weights(
 
     Resources:
 
-       - https://twiki.cern.ch/twiki/bin/view/CMS/BTagShapeCalibration?rev=26
-       - https://indico.cern.ch/event/1096988/contributions/4615134/attachments/2346047/4000529/Nov21_btaggingSFjsons.pdf
+        - https://twiki.cern.ch/twiki/bin/view/CMS/BTagShapeCalibration?rev=26
+        - https://indico.cern.ch/event/1096988/contributions/4615134/attachments/2346047/4000529/Nov21_btaggingSFjsons.pdf
     """
     known_actions = ("ignore", "remove", "raise")
     if negative_b_score_action not in known_actions:
@@ -101,7 +158,8 @@ def btag_weights(
     n_jets_all = ak.sum(ak.num(events.Jet, axis=1))
 
     # check that the b-tag score is not negative for all jets considered in the SF calculation
-    jets_negative_b_score = events.Jet[self.b_score_column][jet_mask] < 0
+    discr = events.Jet[self.btag_config.discriminator]
+    jets_negative_b_score = discr[jet_mask] < 0
     if ak.any(jets_negative_b_score):
         msg_func = {
             "none": lambda msg: None,
@@ -114,26 +172,26 @@ def btag_weights(
         if negative_b_score_action == "ignore":
             msg_func(
                 f"{msg} The *jet_mask* will be adjusted to exclude these jets, resulting in a "
-                "*btag_weight* of 1 for these jets.",
+                "btag weight of 1 for these jets.",
             )
         elif negative_b_score_action == "remove":
             msg_func(
-                f"{msg} The *btag_weight* will be set to 0 for these jets.",
+                f"{msg} The btag weight will be set to 0 for these jets.",
             )
         elif negative_b_score_action == "raise":
             raise Exception(msg)
 
         # set jet mask to False when b_score is negative
-        if jet_mask is Ellipsis:
-            jet_mask = (events.Jet[self.b_score_column] >= 0)
-        else:
-            jet_mask = jet_mask & (events.Jet[self.b_score_column] >= 0)
+        jet_mask = (discr >= 0) & (True if jet_mask is Ellipsis else jet_mask)
 
     # get flat inputs, evaluated at jet_mask
     flavor = flat_np_view(events.Jet.hadronFlavour[jet_mask], axis=1)
     abs_eta = flat_np_view(abs(events.Jet.eta[jet_mask]), axis=1)
     pt = flat_np_view(events.Jet.pt[jet_mask], axis=1)
-    b_discr = flat_np_view(events.Jet[self.b_score_column][jet_mask], axis=1)
+    discr_flat = flat_np_view(discr[jet_mask], axis=1)
+
+    # fix edge cases where the discriminator is non-finite
+    discr_flat[~np.isfinite(discr_flat)] = 0
 
     # helper to create and store the weight
     def add_weight(syst_name, syst_direction, column_name):
@@ -146,14 +204,21 @@ def btag_weights(
             # apply to all but c flavor
             flavor_mask = flavor != 4
 
+        # prepare arguments
+        variable_map = {
+            "systematic": syst_name if syst_name == "central" else f"{syst_direction}_{syst_name}",
+            "flavor": flavor[flavor_mask],
+            "abseta": abs_eta[flavor_mask],
+            "pt": pt[flavor_mask],
+            "discriminant": discr_flat[flavor_mask],
+            **self.btag_config.corrector_kwargs,
+        }
+
         # get the flat scale factors
-        sf_flat = self.btag_sf_corrector(
-            syst_name if syst_name == "central" else f"{syst_direction}_{syst_name}",
-            flavor[flavor_mask],
-            abs_eta[flavor_mask],
-            pt[flavor_mask],
-            b_discr[flavor_mask],
-        )
+        sf_flat = self.btag_sf_corrector(*(
+            variable_map[inp.name]
+            for inp in self.btag_sf_corrector.inputs
+        ))
 
         # insert them into an array of ones whose length corresponds to the total number of jets
         sf_flat_all = np.ones(n_jets_all, dtype=np.float32)
@@ -168,7 +233,7 @@ def btag_weights(
         # enforce the correct shape and create the product over all jets per event
         sf = layout_ak_array(sf_flat_all, events.Jet.pt)
 
-        if negative_b_score_log_mode == "remove":
+        if negative_b_score_action == "remove":
             # set the weight to 0 for jets with negative btag score
             sf = ak.where(jets_negative_b_score, 0, sf)
 
@@ -182,21 +247,21 @@ def btag_weights(
     shift_inst = self.global_shift_inst
     if shift_inst.is_nominal:
         # nominal weight and those of all method intrinsic uncertainties
-        events = add_weight("central", None, "btag_weight")
+        events = add_weight("central", None, self.weight_name)
         for syst_name, col_name in self.btag_uncs.items():
             for direction in ["up", "down"]:
                 name = col_name.format(year=self.config_inst.campaign.x.year)
                 events = add_weight(
                     syst_name,
                     direction,
-                    f"btag_weight_{name}_{direction}",
+                    f"{self.weight_name}_{name}_{direction}",
                 )
                 if syst_name in ["cferr1", "cferr2"]:
                     # for c flavor uncertainties, multiply the uncertainty with the nominal btag weight
                     events = set_ak_column(
                         events,
-                        f"btag_weight_{name}_{direction}",
-                        events.btag_weight * events[f"btag_weight_{name}_{direction}"],
+                        f"{self.weight_name}_{name}_{direction}",
+                        events[self.weight_name] * events[f"{self.weight_name}_{name}_{direction}"],
                         value_type=np.float32,
                     )
     elif self.shift_is_known_jec_source:
@@ -204,47 +269,13 @@ def btag_weights(
         events = add_weight(
             f"jes{'' if self.jec_source == 'Total' else self.jec_source}",
             shift_inst.direction,
-            f"btag_weight_jec_{self.jec_source}_{shift_inst.direction}",
+            f"{self.weight_name}_jec_{self.jec_source}_{shift_inst.direction}",
         )
     else:
         # any other shift, just produce the nominal weight
-        events = add_weight("central", None, "btag_weight")
+        events = add_weight("central", None, self.weight_name)
 
     return events
-
-
-def get_b_score_column(btag_config: tuple[str, list, str] | tuple[str, list]) -> str:
-    """
-    Helper function to resolve the btag score column from the btag configuration.
-
-    :param btag_config: Entry in auxiliary `config_inst.x.btag_sf`, see example
-    :py:meth:`~columflow.production.cms.btag.btag_weights`. If tuple has less
-    than 3 entries, the column name is derived from the name of the correction set.
-    :returns: Name of column that is required for the calculation of this set of corrections.
-    """
-    corrector_name = btag_config[0]
-    if len(btag_config) >= 3:
-        b_score_column = btag_config[2]
-    else:
-        # resolve the column name from the corrector name
-        if "deepjet" in corrector_name.lower():
-            b_score_column = "btagDeepFlavB"
-        elif "particlenet" in corrector_name.lower():
-            b_score_column = "btagPNetB"
-        else:
-            raise NotImplementedError(f"Cannot automatically determine btag column for Corrector '{corrector_name}'")
-        logger.info(f"No btag column specified; defaulting to column '{b_score_column}'")
-
-    # warn about potentially wrong column usage
-    if (
-        "deepjet" in corrector_name.lower() and "pnet" in b_score_column or
-        "particlenet" in corrector_name.lower() and "deepflav" in b_score_column
-    ):
-        logger.warning(
-            f"Using btag column '{b_score_column}' for BTag Corrector '{corrector_name}' is highly discouraged",
-        )
-
-    return b_score_column
 
 
 @btag_weights.init
@@ -255,10 +286,8 @@ def btag_weights_init(self: Producer) -> None:
     #   2. when the nominal shift is requested, the central weight and all variations related to the
     #      method-intrinsic shifts are produced
     #   3. when any other shift is requested, only create the central weight column
-    btag_config = self.get_btag_config()
-    self.b_score_column = get_b_score_column(btag_config)
-
-    self.uses.add(f"Jet.{self.b_score_column}")
+    self.btag_config: BTagSFConfig = self.get_btag_config()
+    self.uses.add(f"Jet.{self.btag_config.discriminator}")
 
     shift_inst = getattr(self, "global_shift_inst", None)
     if not shift_inst:
@@ -268,8 +297,7 @@ def btag_weights_init(self: Producer) -> None:
     self.jec_source = shift_inst.x.jec_source if shift_inst.has_tag("jec") else None
     btag_sf_jec_source = "" if self.jec_source == "Total" else self.jec_source
     self.shift_is_known_jec_source = (
-        self.jec_source and
-        btag_sf_jec_source in btag_config[1]
+        self.jec_source and btag_sf_jec_source in self.btag_config.jec_sources
     )
 
     # save names of method-intrinsic uncertainties
@@ -287,18 +315,18 @@ def btag_weights_init(self: Producer) -> None:
     # add uncertainty sources of the method itself
     if shift_inst.is_nominal:
         # nominal column
-        self.produces.add("btag_weight")
+        self.produces.add(self.weight_name)
         # all varied columns
         for col_name in self.btag_uncs.values():
             name = col_name.format(year=self.config_inst.campaign.x.year)
             for direction in ["up", "down"]:
-                self.produces.add(f"btag_weight_{name}_{direction}")
+                self.produces.add(f"{self.weight_name}_{name}_{direction}")
     elif self.shift_is_known_jec_source:
         # jec varied column
-        self.produces.add(f"btag_weight_jec_{self.jec_source}_{shift_inst.direction}")
+        self.produces.add(f"{self.weight_name}_jec_{self.jec_source}_{shift_inst.direction}")
     else:
         # only the nominal column
-        self.produces.add("btag_weight")
+        self.produces.add(self.weight_name)
 
 
 @btag_weights.requires
@@ -325,5 +353,4 @@ def btag_weights_setup(
     correction_set = correctionlib.CorrectionSet.from_string(
         self.get_btag_file(bundle.files).load(formatter="gzip").decode("utf-8"),
     )
-    corrector_name = self.get_btag_config()[0]
-    self.btag_sf_corrector = correction_set[corrector_name]
+    self.btag_sf_corrector = correction_set[self.btag_config.correction_set]

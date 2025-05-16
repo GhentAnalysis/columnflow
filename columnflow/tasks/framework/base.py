@@ -19,10 +19,12 @@ import luigi
 import law
 import order as od
 
-from columnflow.types import Sequence, Callable, Any
 from columnflow.columnar_util import mandatory_coffea_columns, Route, ColumnCollection
 from columnflow.util import is_regex, DotDict
+from columnflow.types import Sequence, Callable, Any, T
 
+
+logger = law.logger.get_logger(__name__)
 
 # default analysis and config related objects
 default_analysis = law.config.get_expanded("analysis", "default_analysis")
@@ -40,6 +42,7 @@ class Requirements(DotDict):
         instances and additional keyword arguments ``kwargs``, which are
         added.
         """
+
     def __init__(self, *others, **kwargs):
 
         super().__init__()
@@ -65,6 +68,7 @@ class OutputLocation(enum.Enum):
     config = "config"
     local = "local"
     wlcg = "wlcg"
+    wlcg_mirrored = "wlcg_mirrored"
 
 
 class AnalysisTask(BaseTask, law.SandboxTask):
@@ -76,6 +80,9 @@ class AnalysisTask(BaseTask, law.SandboxTask):
     version = luigi.Parameter(
         description="mandatory version that is encoded into output paths",
     )
+    notify_slack = law.slack.NotifySlackParameter(significant=False)
+    notify_mattermost = law.mattermost.NotifyMattermostParameter(significant=False)
+    notify_custom = law.NotifyCustomParameter(significant=False)
 
     allow_empty_sandbox = True
     sandbox = None
@@ -90,12 +97,15 @@ class AnalysisTask(BaseTask, law.SandboxTask):
     default_output_location = "config"
 
     exclude_params_index = {"user"}
-    exclude_params_req = {"user"}
-    exclude_params_repr = {"user"}
+    exclude_params_req = {"user", "notify_slack", "notify_mattermost", "notify_custom"}
+    exclude_params_repr = {"user", "notify_slack", "notify_mattermost", "notify_custom"}
+    exclude_params_branch = {"user"}
+    exclude_params_workflow = {"user", "notify_slack", "notify_mattermost", "notify_custom"}
 
     # cached and parsed sections of the law config for faster lookup
     _cfg_outputs_dict = None
     _cfg_versions_dict = None
+    _cfg_resources_dict = None
 
     @classmethod
     def modify_param_values(cls, params: dict) -> dict:
@@ -141,15 +151,21 @@ class AnalysisTask(BaseTask, law.SandboxTask):
         _prefer_cli = law.util.make_set(kwargs.get("_prefer_cli", [])) | {
             "version", "workflow", "job_workers", "poll_interval", "walltime", "max_runtime",
             "retries", "acceptance", "tolerance", "parallel_jobs", "shuffle_jobs", "htcondor_cpus",
-            "htcondor_gpus", "htcondor_memory", "htcondor_pool",
+            "htcondor_gpus", "htcondor_memory", "htcondor_disk", "htcondor_pool", "pilot",
         }
         kwargs["_prefer_cli"] = _prefer_cli
 
         # build the params
         params = super().req_params(inst, **kwargs)
 
-        # use a default version when not explicitly set in kwargs
-        if isinstance(getattr(cls, "version", None), luigi.Parameter) and "version" not in kwargs:
+        # when not explicitly set in kwargs and no global value was defined on the cli for the task
+        # family, evaluate and use the default value
+        if (
+            isinstance(getattr(cls, "version", None), luigi.Parameter) and
+            "version" not in kwargs and
+            not law.parser.global_cmdline_values().get(f"{cls.task_family}_version") and
+            cls.task_family != law.parser.root_task().task_family
+        ):
             default_version = cls.get_default_version(inst, params)
             if default_version and default_version != law.NO_STR:
                 params["version"] = default_version
@@ -160,6 +176,12 @@ class AnalysisTask(BaseTask, law.SandboxTask):
     def _structure_cfg_items(cls, items: list[tuple[str, Any]]) -> dict:
         if not items:
             return {}
+
+        # apply brace expansion to keys
+        items = sum((
+            [(_key, value) for _key in law.util.brace_expand(key)]
+            for key, value in items
+        ), [])
 
         # breakup keys at double underscores and create a nested dictionary
         items_dict = {}
@@ -211,6 +233,36 @@ class AnalysisTask(BaseTask, law.SandboxTask):
             cls._cfg_versions_dict = cls._structure_cfg_items(items)
 
         return cls._cfg_versions_dict
+
+    @classmethod
+    def _get_cfg_resources_dict(cls):
+        if cls._cfg_resources_dict is None and law.config.has_section("resources"):
+            # helper to split resource values into key-value pairs themselves
+            def parse(key: str, value: str) -> tuple[str, list[tuple[str, Any]]]:
+                params = []
+                for part in value.split(","):
+                    part = part.strip()
+                    if not part:
+                        continue
+                    if "=" not in part:
+                        logger.warning_once(
+                            f"invalid_resource_{key}",
+                            f"resource for key {key} contains invalid instruction {part}, skipping",
+                        )
+                        continue
+                    param, value = (s.strip() for s in part.split("=", 1))
+                    params.append((param, value))
+                return key, params
+
+            # collect config item pairs
+            items = [
+                parse(key, value)
+                for key, value in law.config.items("resources")
+                if value
+            ]
+            cls._cfg_resources_dict = cls._structure_cfg_items(items)
+
+        return cls._cfg_resources_dict
 
     @classmethod
     def get_default_version(cls, inst: AnalysisTask, params: dict[str, Any]) -> str | None:
@@ -388,13 +440,15 @@ class AnalysisTask(BaseTask, law.SandboxTask):
         object_groups: dict[str, list] | None = None,
         accept_patterns: bool = True,
         deep: bool = False,
+        strict: bool = False,
     ) -> list[str]:
         """
         Returns all names of objects of type *object_cls* known to a *container* (e.g.
         :py:class:`od.Analysis` or :py:class:`od.Config`) that match *names*. A name can also be a
         pattern to match if *accept_patterns* is *True*, or, when given, the key of a mapping
         *object_group* that matches group names to object names. When *deep* is *True* the lookup of
-        objects in the *container* is recursive. Example:
+        objects in the *container* is recursive. When *strict* is *True*, an error is raised if no
+        matches are found for any of the *names*. Example:
 
         .. code-block:: python
 
@@ -411,7 +465,7 @@ class AnalysisTask(BaseTask, law.SandboxTask):
                     _cache["all_object_names"] = {
                         obj.name
                         for obj, _, _ in
-                        getattr(container, "walk_{}".format(plural))()
+                        getattr(container, f"walk_{plural}")()
                     }
                 else:
                     _cache["all_object_names"] = set(getattr(container, plural).names())
@@ -423,13 +477,14 @@ class AnalysisTask(BaseTask, law.SandboxTask):
                 if object_cls in container._deep_child_classes:
                     kwargs["deep"] = deep
                 _cache["has_obj_func"] = functools.partial(
-                    getattr(container, "has_{}".format(singular)),
+                    getattr(container, f"has_{singular}"),
                     **kwargs,
                 )
             return _cache["has_obj_func"](name)
 
         object_names = []
         lookup = law.util.make_list(names)
+        missing = set()
         while lookup:
             name = lookup.pop(0)
             if has_obj(name):
@@ -440,9 +495,17 @@ class AnalysisTask(BaseTask, law.SandboxTask):
                 lookup.extend(list(object_groups[name]))
             elif accept_patterns:
                 # must eventually be a pattern, perform an object traversal
-                for _name in get_all_object_names():
+                found = []
+                for _name in sorted(get_all_object_names()):
                     if law.util.multi_match(_name, name):
-                        object_names.append(_name)
+                        found.append(_name)
+                if not found:
+                    missing.add(name)
+                object_names.extend(found)
+
+        if missing and strict:
+            missing_str = ",".join(sorted(missing))
+            raise ValueError(f"names/patterns did not yield any matches: {missing_str}")
 
         return law.util.make_unique(object_names)
 
@@ -555,7 +618,7 @@ class AnalysisTask(BaseTask, law.SandboxTask):
 
         # interpret missing parameters (e.g. NO_STR) as None
         # (special case: an empty string is usually an active decision, but counts as missing too)
-        if law.is_no_param(param) or resolve_default or param == "":
+        if law.is_no_param(param) or resolve_default or param == "" or param == ():
             param = None
 
         # actual resolution
@@ -671,8 +734,26 @@ class AnalysisTask(BaseTask, law.SandboxTask):
         # store the analysis instance
         self.analysis_inst = self.get_analysis_inst(self.analysis)
 
+        # cached values added and accessed by cached_value()
+        self._cached_values = {}
+
+    def cached_value(self, key: str, func: Callable[[], T]) -> T:
+        """
+        Upon first invocation, the function *func* is called and its return value is stored under
+        *key* in :py:attr:`_cached_values`. Subsequent calls with the same *key* return the cached
+        value.
+
+        :param key: The key under which the value is stored.
+        :param func: The function that is called to generate the value.
+        :return: The cached value.
+        """
+        if key not in self._cached_values:
+            self._cached_values[key] = func()
+        return self._cached_values[key]
+
     def store_parts(self) -> law.util.InsertableDict:
-        """Returns a :py:class:`law.util.InsertableDict` whose values are used to create a store path.
+        """
+        Returns a :py:class:`law.util.InsertableDict` whose values are used to create a store path.
         For instance, the parts ``{"keyA": "a", "keyB": "b", 2: "c"}`` lead to the path "a/b/c". The
         keys can be used by subclassing tasks to overwrite values.
 
@@ -692,8 +773,23 @@ class AnalysisTask(BaseTask, law.SandboxTask):
 
         return parts
 
-    def local_path(self, *path, **kwargs):
-        """ local_path(*path, store=None, fs=None)
+    def _get_store_parts_modifier(
+        self,
+        modifier: str | Callable[[AnalysisTask, dict], dict],
+    ) -> Callable[[AnalysisTask, dict], dict] | None:
+        if isinstance(modifier, str):
+            # interpret it as a name of an entry in the store_parts_modifiers aux entry
+            modifier = self.analysis_inst.x("store_parts_modifiers", {}).get(modifier)
+
+        return modifier if callable(modifier) else None
+
+    def local_path(
+        self,
+        *path,
+        store_parts_modifier: str | Callable[[AnalysisTask, dict], dict] | None = None,
+        **kwargs,
+    ) -> str:
+        """ local_path(*path, store=None, fs=None, store_parts_modifier=None)
         Joins path fragments from *store* (defaulting to :py:attr:`default_store`),
         :py:meth:`store_parts` and *path* and returns the joined path. In case a *fs* is defined,
         it should refer to the config section of a local file system, and consequently, *store* is
@@ -706,14 +802,25 @@ class AnalysisTask(BaseTask, law.SandboxTask):
             store = kwargs.get("store") or self.default_store
             parts += (store,)
 
+        # get and optional modify the store parts
+        store_parts = self.store_parts()
+        store_parts_modifier = self._get_store_parts_modifier(store_parts_modifier)
+        if callable(store_parts_modifier):
+            store_parts = store_parts_modifier(self, store_parts)
+
         # concatenate all parts that make up the path and join them
-        parts += tuple(self.store_parts().values()) + path
+        parts += tuple(store_parts.values()) + path
         path = os.path.join(*map(str, parts))
 
         return path
 
-    def local_target(self, *path, **kwargs):
-        """ local_target(*path, dir=False, store=None, fs=None, **kwargs)
+    def local_target(
+        self,
+        *path,
+        store_parts_modifier: str | Callable[[AnalysisTask, dict], dict] | None = None,
+        **kwargs,
+    ):
+        """ local_target(*path, dir=False, store=None, fs=None, store_parts_modifier=None, **kwargs)
         Creates either a local file or directory target, depending on *dir*, forwarding all *path*
         fragments, *store* and *fs* to :py:meth:`local_path` and all *kwargs* the respective target
         class.
@@ -726,26 +833,41 @@ class AnalysisTask(BaseTask, law.SandboxTask):
         cls = law.LocalDirectoryTarget if _dir else law.LocalFileTarget
 
         # create the local path
-        path = self.local_path(*path, store=store, fs=fs)
+        path = self.local_path(*path, store=store, fs=fs, store_parts_modifier=store_parts_modifier)
 
         # create the target instance and return it
         return cls(path, **kwargs)
 
-    def wlcg_path(self, *path):
+    def wlcg_path(
+        self,
+        *path,
+        store_parts_modifier: str | Callable[[AnalysisTask, dict], dict] | None = None,
+    ) -> str:
         """
         Joins path fragments from *store_parts()* and *path* and returns the joined path.
 
         The full URI to the target is not considered as it is usually defined in ``[wlcg_fs]``
         sections in the law config and hence subject to :py:func:`wlcg_target`.
         """
+        # get and optional modify the store parts
+        store_parts = self.store_parts()
+        store_parts_modifier = self._get_store_parts_modifier(store_parts_modifier)
+        if callable(store_parts_modifier):
+            store_parts = store_parts_modifier(self, store_parts)
+
         # concatenate all parts that make up the path and join them
-        parts = tuple(self.store_parts().values()) + path
+        parts = tuple(store_parts.values()) + path
         path = os.path.join(*map(str, parts))
 
         return path
 
-    def wlcg_target(self, *path, **kwargs):
-        """ wlcg_target(*path, dir=False, fs=default_wlcg_fs, **kwargs)
+    def wlcg_target(
+        self,
+        *path,
+        store_parts_modifier: str | Callable[[AnalysisTask, dict], dict] | None = None,
+        **kwargs,
+    ):
+        """ wlcg_target(*path, dir=False, fs=default_wlcg_fs, store_parts_modifier=None, **kwargs)
         Creates either a remote WLCG file or directory target, depending on *dir*, forwarding all
         *path* fragments to :py:meth:`wlcg_path` and all *kwargs* the respective target class. When
         *None*, *fs* defaults to the *default_wlcg_fs* class level attribute.
@@ -758,7 +880,7 @@ class AnalysisTask(BaseTask, law.SandboxTask):
         cls = law.wlcg.WLCGDirectoryTarget if _dir else law.wlcg.WLCGFileTarget
 
         # create the local path
-        path = self.wlcg_path(*path)
+        path = self.wlcg_path(*path, store_parts_modifier=store_parts_modifier)
 
         # create the target instance and return it
         return cls(path, **kwargs)
@@ -788,16 +910,48 @@ class AnalysisTask(BaseTask, law.SandboxTask):
         # forward to correct function
         if location[0] == OutputLocation.local:
             # get other options
-            (loc,) = (location[1:] + [None])[:1]
+            loc, store_parts_modifier = (location[1:] + [None, None])[:2]
             loc_key = "fs" if (loc and law.config.has_section(loc)) else "store"
             kwargs.setdefault(loc_key, loc)
+            kwargs.setdefault("store_parts_modifier", store_parts_modifier)
             return self.local_target(*path, **kwargs)
 
         if location[0] == OutputLocation.wlcg:
             # get other options
-            (fs,) = (location[1:] + [None])[:1]
+            fs, store_parts_modifier = (location[1:] + [None, None])[:2]
             kwargs.setdefault("fs", fs)
+            kwargs.setdefault("store_parts_modifier", store_parts_modifier)
             return self.wlcg_target(*path, **kwargs)
+
+        if location[0] == OutputLocation.wlcg_mirrored:
+            # get other options
+            loc, wlcg_fs, store_parts_modifier = (location[1:] + [None, None, None])[:3]
+            kwargs.setdefault("store_parts_modifier", store_parts_modifier)
+            # create the wlcg target
+            wlcg_kwargs = kwargs.copy()
+            wlcg_kwargs.setdefault("fs", wlcg_fs)
+            wlcg_target = self.wlcg_target(*path, **wlcg_kwargs)
+            # TODO: add rule for falling back to wlcg target?
+            # create the local target
+            local_kwargs = kwargs.copy()
+            loc_key = "fs" if (loc and law.config.has_section(loc)) else "store"
+            local_kwargs.setdefault(loc_key, loc)
+            local_target = self.local_target(*path, **local_kwargs)
+            # build the mirrored target from these two
+            mirrored_target_cls = (
+                law.MirroredFileTarget
+                if isinstance(local_target, law.LocalFileTarget)
+                else law.MirroredDirectoryTarget
+            )
+            # whether to wait for local synchrnoization (for debugging purposes)
+            local_sync = law.util.flag_to_bool(os.getenv("CF_MIRRORED_TARGET_LOCAL_SYNC", "true"))
+            # create and return the target
+            return mirrored_target_cls(
+                path=local_target.abspath,
+                remote_target=wlcg_target,
+                local_target=local_target,
+                local_sync=local_sync,
+            )
 
         raise Exception(f"cannot determine output location based on '{location}'")
 
@@ -822,6 +976,11 @@ class AnalysisTask(BaseTask, law.SandboxTask):
             "compression": "ZSTD",
             "compression_level": 1,
             "use_dictionary": dict_encoding,
+            # ensure that after merging, the resulting parquet structure is the same as that of the
+            # input files, e.g. do not switch from "*.list.item.*" to "*.list.element*." structures,
+            # see https://github.com/scikit-hep/awkward/issues/3331 and
+            # https://github.com/apache/arrow/issues/31731
+            "use_compliant_nested_type": False,
         }
 
 
@@ -919,6 +1078,31 @@ class ConfigTask(AnalysisTask):
             columns |= set(Route(c) for c in mandatory_coffea_columns)
 
         return columns
+
+    def _expand_keep_column(
+        self: ConfigTask,
+        column:
+            ColumnCollection | Route | str |
+            Sequence[str | int | slice | type(Ellipsis) | list | tuple],
+    ) -> set[Route]:
+        """
+        Expands a *column* into a set of :py:class:`Route` objects. *column* can be a
+        :py:class:`ColumnCollection`, a string, or any type that is accepted by :py:class:`Route`.
+        Collections are expanded through :py:meth:`find_keep_columns`.
+
+        :param column: The column to expand.
+        :return: A set of :py:class:`Route` objects.
+        """
+        # expand collections
+        if isinstance(column, ColumnCollection):
+            return self.find_keep_columns(column)
+
+        # brace expand strings
+        if isinstance(column, str):
+            return set(map(Route, law.util.brace_expand(column)))
+
+        # let Route handle it
+        return {Route(column)}
 
 
 class ShiftTask(ConfigTask):
@@ -1272,7 +1456,7 @@ class CommandTask(AnalysisTask):
         if "cwd" not in kwargs and self.run_command_in_tmp:
             tmp_dir = law.LocalDirectoryTarget(is_tmp=True)
             tmp_dir.touch()
-            kwargs["cwd"] = tmp_dir.path
+            kwargs["cwd"] = tmp_dir.abspath
         self.publish_message("cwd: {}".format(kwargs.get("cwd", os.getcwd())))
 
         # call it
@@ -1439,6 +1623,8 @@ def wrapper_factory(
     # create the class
     class Wrapper(*base_classes, law.WrapperTask):
 
+        exclude_params_repr_empty = set()
+
         if has_configs:
             configs = law.CSVParameter(
                 default=(default_config,),
@@ -1455,6 +1641,7 @@ def wrapper_factory(
                 "of the analysis; empty default",
                 brace_expand=True,
             )
+            exclude_params_repr_empty.add("skip_configs")
         if has_datasets:
             datasets = law.CSVParameter(
                 default=("*",),
@@ -1471,6 +1658,7 @@ def wrapper_factory(
                 "auxiliary data of the corresponding config; empty default",
                 brace_expand=True,
             )
+            exclude_params_repr_empty.add("skip_datasets")
         if has_shifts:
             shifts = law.CSVParameter(
                 default=("nominal",),
@@ -1487,6 +1675,7 @@ def wrapper_factory(
                 "of the corresponding config; empty default",
                 brace_expand=True,
             )
+            exclude_params_repr_empty.add("skip_shifts")
 
         def __init__(self, *args, **kwargs):
             super().__init__(*args, **kwargs)

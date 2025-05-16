@@ -31,7 +31,7 @@ class Categorizer(TaskArrayFunction):
         Decorator for creating a new :py:class:`~.Categorizer` subclass with additional, optional
         *bases* and attaching the decorated function to it as ``call_func``.
 
-        All additional *kwargs* are added as class members of the new subclasses.
+        All additional *kwargs* are added as class members of the new subclass.
 
         :param func: Function to be wrapped and integrated into new :py:class:`Categorizer` class.
         :param bases: Additional base classes for new :py:class:`Categorizer`.
@@ -40,9 +40,9 @@ class Categorizer(TaskArrayFunction):
         def decorator(func: Callable) -> DerivableMeta:
             # create the class dict
             cls_dict = {
+                **kwargs,
                 "call_func": func,
             }
-            cls_dict.update(kwargs)
 
             # get the module name
             frame = inspect.stack()[1]

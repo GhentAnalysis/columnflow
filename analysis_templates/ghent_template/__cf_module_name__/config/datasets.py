@@ -8,10 +8,6 @@ from __future__ import annotations
 
 import law
 import order as od
-import cmsdb.processes as procs
-from columnflow.tasks.external import GetDatasetLFNs
-# import cmsdb.processes as procs
-
 
 logger = law.logger.get_logger(__name__)
 
@@ -30,7 +26,7 @@ def add_datasets(config: od.Config, campaign: od.Campaign):
             # backgrounds
 
             # ewk
-            *[f"dy_lept_m50_ht-{htr}_madgraph" for htr in ['100to200', '200to400', '400to600',
+            *[f"dy_m50toinf_ht-{htr}_madgraph" for htr in ['100to200', '200to400', '400to600',
                                                            '600to800', '800to1200', '1200to2500']],
 
             # ttbar

@@ -17,9 +17,12 @@ create_analysis() {
     local this_file="$( ${shell_is_zsh} && echo "${(%):-%x}" || echo "${BASH_SOURCE[0]}" )"
     local this_dir="$( cd "$( dirname "${this_file}" )" && pwd )"
     local exec_dir="$( pwd )"
-    local fetch_cf_branch="main"
-    local fetch_cmsdb_branch="master"
+    local fetch_cf_branch="GhentAnalysis/master"
+    local fetch_cmsdb_branch="GhentAnalysis/master"
+    local fetch_normtag_branch="master"
+    local verbose="${CF_CREATE_ANALYSIS_VERBOSE:-false}"
     local debug="${CF_CREATE_ANALYSIS_DEBUG:-false}"
+    ${debug} && verbose="true"
 
     # zsh options
     if ${shell_is_zsh}; then
@@ -33,11 +36,11 @@ create_analysis() {
     #
 
     str_lc() {
-        ${shell_is_zsh} && echo "${(L)1}" || echo "${1,,}"
+        echo "$1" | tr '[:upper:]' '[:lower:]'
     }
 
     str_uc() {
-        ${shell_is_zsh} && echo "${(U)1}" || echo "${1^^}"
+        echo "$1" | tr '[:lower:]' '[:upper:]'
     }
 
     export_var() {
@@ -171,14 +174,16 @@ create_analysis() {
     export cf_short_name_lc="$( str_lc "${cf_short_name}" )"
     export cf_short_name_uc="$( str_uc "${cf_short_name}" )"
 
-    # debug output
-    if ${debug}; then
+    # verbose output
+    if ${verbose}; then
+        echo
+        echo_color cyan "received input values"
         echo "analysis name  : ${cf_analysis_name}"
         echo "module name    : ${cf_module_name}"
         echo "short name lc  : ${cf_short_name_lc}"
         echo "short name uc  : ${cf_short_name_uc}"
         echo "analysis flavor: ${cf_analysis_flavor}"
-        echo "use ssh        : ${cf_use_ssh}"
+        echo "ssh submodules : ${cf_use_ssh}"
         echo
     fi
 
@@ -255,26 +260,26 @@ create_analysis() {
 
     echo_color cyan "setup submodules"
 
-    local gh_prefix_github="https://github.com/"
-    local gh_prefix_gitlab="https://gitlab.cern.ch/"
+    local gh_prefix="https://github.com/"
+    local gl_prefix="https://gitlab.cern.ch/"
 
 
-    $( str_lc "${cf_use_ssh}" ) && gh_prefix_github="git@github.com:"
-    $( str_lc "${cf_use_ssh}" ) && gh_prefix_gitlab="ssh://git@gitlab.cern.ch:7999/"
+    $( str_lc "${cf_use_ssh}" ) && gh_prefix="git@github.com:"
+    $( str_lc "${cf_use_ssh}" ) && gl_prefix="ssh://git@gitlab.cern.ch:7999/"
 
 
     mkdir -p modules
     if ${debug}; then
         ln -s "${this_dir}" modules/columnflow
     else
-        git submodule add -b "${fetch_cf_branch}" "${gh_prefix_github}GhentAnalysis/columnflow.git" modules/columnflow
+        git submodule add -b "${fetch_cf_branch}" "${gh_prefix}GhentAnalysis/columnflow.git" modules/columnflow
     fi
     if [ "${cf_analysis_flavor}" = "cms_minimal" ]; then
-        git submodule add -b "${fetch_cmsdb_branch}" "${gh_prefix_gitlab}ghentanalysis/cmsdb.git" modules/cmsdb
+        git submodule add -b "${fetch_cmsdb_branch}" "${gh_prefix}Ghentanalysis/cmsdb.git" modules/cmsdb
     fi
     if [ "${cf_analysis_flavor}" = "ghent_template" ]; then
-        git submodule add -b "${fetch_cmsdb_branch}" "${gh_prefix_github}CMS-LUMI-POG/Normtags.git" modules/Normtags
-        git submodule add -b "${fetch_cmsdb_branch}" "${gh_prefix_gitlab}ghentanalysis/cmsdb.git" modules/cmsdb
+        git submodule add -b "${fetch_normtag_branch}" "${gl_prefix}CMS-LUMI-POG/Normtags.git" modules/Normtags
+        git submodule add -b "${fetch_cmsdb_branch}" "${gh_prefix}Ghentanalysis/cmsdb.git" modules/cmsdb
     fi
 
     git submodule update --init --recursive

@@ -8,11 +8,11 @@ import law
 import order as od
 from scinum import Number
 
-from columnflow.util import DotDict, maybe_import
-from columnflow.columnar_util import EMPTY_FLOAT, ColumnCollection
 from columnflow.config_util import (
     get_root_processes_from_campaign, add_shift_aliases, add_category, verify_config_processes,
 )
+from columnflow.columnar_util import EMPTY_FLOAT, ColumnCollection, skip_column
+from columnflow.util import DotDict, maybe_import
 
 ak = maybe_import("awkward")
 
@@ -46,6 +46,9 @@ ana.x.cmssw_sandboxes = [
 # config groups for conveniently looping over certain configs
 # (used in wrapper_factory)
 ana.x.config_groups = {}
+
+# named function hooks that can modify store_parts of task outputs if needed
+ana.x.store_parts_modifiers = {}
 
 
 #
@@ -92,7 +95,7 @@ dataset_names = [
     # backgrounds
     "tt_sl_powheg",
     # signals
-    "st_tchannel_t_powheg",
+    "st_tchannel_t_4f_powheg",
 ]
 for dataset_name in dataset_names:
     # add the dataset
@@ -115,10 +118,12 @@ cfg.x.default_inference_model = "example"
 cfg.x.default_categories = ("incl",)
 cfg.x.default_variables = ("n_jet", "jet1_pt")
 
-
 # process groups for conveniently looping over certain processs
 # (used in wrapper_factory and during plotting)
-cfg.x.process_groups = {}
+cfg.x.process_groups = {
+    "signals": [],  # list of signal parent processes e.g. h, hh etc. (needed for some features)
+    "other_groups": [],
+}
 
 # dataset groups for conveniently looping over certain datasets
 # (used in wrapper_factory and during plotting)
@@ -170,7 +175,6 @@ cfg.x.producer_groups = {}
 # (used during the machine learning tasks)
 cfg.x.ml_model_groups = {}
 
-
 # custom method and sandbox for determining dataset lfns
 cfg.x.get_dataset_lfns = None
 cfg.x.get_dataset_lfns_sandbox = None
@@ -189,7 +193,11 @@ cfg.x.luminosity = Number(41480, {
 
 # names of muon correction sets and working points
 # (used in the muon producer)
-cfg.x.muon_sf_names = ("NUM_TightRelIso_DEN_TightIDandIPCut", f"{year}_UL")
+from columnflow.production.cms.muon import MuonSFConfig
+cfg.x.muon_sf_names = MuonSFConfig(
+    correction="NUM_TightRelIso_DEN_TightIDandIPCut",
+    campaign=f"{year}_UL",
+)
 
 # register shifts
 cfg.add_shift(name="nominal", id=0)
@@ -201,8 +209,9 @@ cfg.add_shift(name="tune_down", id=2, type="shape", tags={"disjoint_from_nominal
 
 # fake jet energy correction shift, with aliases flaged as "selection_dependent", i.e. the aliases
 # affect columns that might change the output of the event selection
-cfg.add_shift(name="jec_up", id=20, type="shape")
-cfg.add_shift(name="jec_down", id=21, type="shape")
+cfg.add_shift(name="jec_up", id=20, type="shape", tags={"jec"})
+cfg.add_shift(name="jec_down", id=21, type="shape", tags={"jec"})
+# add column aliases for shift jec
 add_shift_aliases(
     cfg,
     "jec",
@@ -217,10 +226,11 @@ add_shift_aliases(
 # event weights due to muon scale factors
 cfg.add_shift(name="mu_up", id=10, type="shape")
 cfg.add_shift(name="mu_down", id=11, type="shape")
+# add column aliases for shift mu
 add_shift_aliases(cfg, "mu", {"muon_weight": "muon_weight_{direction}"})
 
 # external files
-json_mirror = "/afs/cern.ch/work/m/mrieger/public/mirrors/jsonpog-integration-9ea86c4c"
+json_mirror = "/afs/cern.ch/work/m/mrieger/public/mirrors/jsonpog-integration-377439e8"
 cfg.x.external_files = DotDict.wrap({
     # lumi files
     "lumi": {
@@ -239,14 +249,16 @@ cfg.x.reduced_file_size = 512.0
 cfg.x.keep_columns = DotDict.wrap({
     "cf.ReduceEvents": {
         # general event info, mandatory for reading files with coffea
-        ColumnCollection.MANDATORY_COFFEA,  # additional columns can be added as strings, similar to object info
+        # additional columns can be added as strings, similar to object info
+        ColumnCollection.MANDATORY_COFFEA,
         # object info
-        "Jet.pt", "Jet.eta", "Jet.phi", "Jet.mass", "Jet.btagDeepFlavB", "Jet.hadronFlavour",
-        "Muon.pt", "Muon.eta", "Muon.phi", "Muon.mass", "Muon.pfRelIso04_all",
-        "MET.pt", "MET.phi", "MET.significance", "MET.covXX", "MET.covXY", "MET.covYY",
+        "Jet.{pt,eta,phi,mass,btagDeepFlavB,hadronFlavour}",
+        "Muon.{pt,eta,phi,mass,pfRelIso04_all}",
+        "MET.{pt,phi,significance,covXX,covXY,covYY}",
         "PV.npvs",
-        # all columns added during selection using a ColumnCollection flag
+        # all columns added during selection using a ColumnCollection flag, but skip cutflow ones
         ColumnCollection.ALL_FROM_SELECTOR,
+        skip_column("cutflow.*"),
     },
     "cf.MergeSelectionMasks": {
         "cutflow.*",
@@ -263,6 +275,9 @@ cfg.x.versions = {}
 # channels
 # (just one for now)
 cfg.add_channel(name="mutau", id=1)
+
+# histogramming hooks, invoked before creating plots when --hist-hook parameter set
+cfg.x.hist_hooks = {}
 
 # add categories using the "add_category" tool which adds auto-generated ids
 # the "selection" entries refer to names of categorizers, e.g. in categorization/example.py

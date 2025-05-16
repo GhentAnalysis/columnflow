@@ -6,15 +6,19 @@ Some utils for plot functions.
 
 from __future__ import annotations
 
-from columnflow.types import Iterable, Any
+__all__ = []
 
+import re
 import operator
 import functools
 from collections import OrderedDict
 
+import law
 import order as od
+import scinum as sn
 
 from columnflow.util import maybe_import, try_int, try_complex
+from columnflow.types import Iterable, Any, Callable
 
 math = maybe_import("math")
 hist = maybe_import("hist")
@@ -22,14 +26,21 @@ np = maybe_import("numpy")
 plt = maybe_import("matplotlib.pyplot")
 mplhep = maybe_import("mplhep")
 
+
+logger = law.logger.get_logger(__name__)
+
+
 label_options = {
     "wip": "Work in progress",
+    "int": "Internal",
     "pre": "Preliminary",
-    "pw": "Private work",
+    "pw": "Private work (CMS data/simulation)",
+    "pwip": "Private work in progress (CMS)",
     "sim": "Simulation",
     "simwip": "Simulation work in progress",
     "simpre": "Simulation preliminary",
-    "simpw": "Simulation private work",
+    "simpw": "Private work (CMS simulation)",
+    "datapw": "Private work (CMS data)",
     "od": "OpenData",
     "odwip": "OpenData work in progress",
     "odpw": "OpenData private work",
@@ -45,36 +56,167 @@ def get_cms_label(ax: plt.Axes, llabel: str) -> dict:
     :param llabel: The left label of the CMS label.
     :return: A dictionary with the CMS label configuration.
     """
+    llabel = label_options.get(llabel, llabel)
     cms_label_kwargs = {
         "ax": ax,
-        "llabel": label_options.get(llabel, llabel),
+        "llabel": llabel,
         "fontsize": 22,
         "data": False,
     }
+    if "CMS" in llabel:
+        cms_label_kwargs["exp"] = ""
 
     return cms_label_kwargs
 
 
-def apply_settings(containers: Iterable[od.AuxDataMixin], settings: dict[dict, Any] | None):
+def round_dynamic(value: int | float) -> int | float:
+    """
+    Rounds a *value* at various scales to a subjective, sensible precision. Rounding rules:
+
+        - 0 -> 0 (int)
+        - (0, 1) -> round to 1 significant digit (float)
+        - [1, 10) -> round to 1 significant digit (int)
+        - [10, inf) -> round to 2 significant digits (int)
+
+    :param value: The value to round.
+    :return: The rounded value.
+    """
+    # determine significant digits
+    digits = 1 if abs(value) < 10 else 2
+
+    # split into value and magnitude
+    v_str, _, mag = sn.round_value(value, method=digits)
+
+    # recombine
+    value = float(v_str) * 10**mag
+
+    # return with proper type
+    return int(value) if value >= 1 else value
+
+
+def inject_label(
+    label: str,
+    inject: str | int | float,
+    *,
+    placeholder: str | None = None,
+    before_parentheses: bool = False,
+) -> str:
+    """
+    Injects a string *inject* into a *label* at a specific position, determined by different
+    strategies in the following order:
+
+        - If *placeholder* is defined, *label* should contain a substring ``"__PLACEHOLDER__"``
+        which is replaced.
+        - Otherwise, if *before_parentheses* is set to True, the string is inserted before the last
+        pair of parentheses.
+        - Otherwise, the string is appended to the label.
+
+    :param label: The label to inject the string *inject* into.
+    :param inject: The string to inject.
+    :param placeholder: The placeholder to replace in the label.
+    :param before_parentheses: Whether to insert the string before the parentheses in the label.
+    :return: The updated label.
+    """
+    # replace the placeholder
+    if placeholder and f"__{placeholder}__" in label:
+        return label.replace(f"__{placeholder}__", inject)
+
+    # when the label contains trailing parentheses, insert the string before them
+    if before_parentheses and label.endswith(")"):
+        in_parentheses = 1
+        for i in range(len(label) - 2, -1, -1):
+            c = label[i]
+            if c == ")":
+                in_parentheses += 1
+            elif c == "(":
+                in_parentheses -= 1
+            if not in_parentheses:
+                return f"{label[:i]} {inject} {label[i:]}"
+
+    # otherwise, just append
+    return f"{label} {inject}"
+
+
+def apply_settings(
+    instances: Iterable[od.AuxDataMixin],
+    settings: dict[str, Any] | None,
+    parent_check: Callable[[od.AuxDataMixin, str], bool] | None = None,
+) -> None:
     """
     applies settings from `settings` dictionary to a list of order objects `containers`
 
-    :param containers: list of order objects
-    :param settings: dictionary of settings to apply on the *containers*. Each key should correspond
-        to the name of a container and each value should be a dictionary. The inner dictionary contains
-        keys and values that will be applied on the corresponding container either as an attribute
-        or alternatively as an auxiliary.
+    :param instances: List of order instances to apply settings to.
+    :param settings: Dictionary of settings to apply on the instances. Each key should correspond
+        to the name of an instance and each value should be a dictionary with attributes that will
+        be set on the instance either as a attribute or as an auxiliary.
+    :param parent_check: Function that checks if an instance has a parent with a given name.
     """
     if not settings:
         return
 
-    for inst in containers:
-        inst_settings = settings.get(inst.name, {})
-        for setting_key, setting_value in inst_settings.items():
-            try:
-                setattr(inst, setting_key, setting_value)
-            except AttributeError:
-                inst.set_aux(setting_key, setting_value)
+    for inst in instances:
+        for name, inst_settings in (settings or {}).items():
+            if inst != name and not (callable(parent_check) and parent_check(inst, name)):
+                continue
+            for key, value in inst_settings.items():
+                # try attribute first, otherwise auxiliary entry
+                try:
+                    setattr(inst, key, value)
+                except (AttributeError, ValueError):
+                    inst.set_aux(key, value)
+
+
+def hists_merge_cutflow_steps(
+    hists: dict,
+) -> dict:
+    """
+    Make 'step' axis uniform among a set of histograms. Takes a dict of 1D histogram
+    objects with a single 'step' axis of type *StrCategory*, computes the full list of possible
+    'step' values across all histograms, and returns a dict of histograms whose 'step' axis
+    has a corresponding, uniform structure. The values and variances inserted for missing 'step'
+    are taken from the previous existing step.
+    """
+    # return immediately if fewer than two hists to merge
+    if len(hists) < 2:
+        return hists
+
+    # get histogram instances
+    hist_insts = list(hists.values())
+
+    # validate inputs
+    if any(h.ndim != 1 for h in hist_insts):
+        raise ValueError(
+            "cannot merge cutflow steps: histograms must be one-dimensional",
+        )
+
+    # ensure step structure is uniform by taking a linear
+    # combination with only one nonzero coefficient
+    hist_insts_merged = []
+    for coeffs in np.eye(len(hist_insts)):
+        hist_row = sum(
+            h * coeff
+            for h, coeff in zip(hist_insts, coeffs)
+        )
+        hist_insts_merged.append(hist_row)
+
+    # fill missing entries from preceding steps
+    merged_steps = list(hist_insts_merged[0].axes[0])
+    for hist_inst, hist_inst_merged in zip(hist_insts, hist_insts_merged):
+        last_step = merged_steps[0]
+        for merged_step in merged_steps[1:]:
+            if merged_step not in hist_inst.axes[0]:
+                hist_inst_merged[merged_step] = hist_inst_merged[last_step]
+            else:
+                last_step = merged_step
+
+    # put merged hists into dict
+    hists = {
+        k: h
+        for k, h in zip(hists, hist_insts_merged)
+    }
+
+    # return
+    return hists
 
 
 def apply_process_settings(
@@ -86,25 +228,60 @@ def apply_process_settings(
     the `scale` setting is directly applied to the histograms
     """
     # apply all settings on process insts
-    process_insts = hists.keys()
-    apply_settings(process_insts, process_settings)
+    apply_settings(
+        hists.keys(),
+        process_settings,
+        parent_check=(lambda proc, parent_name: proc.has_parent_process(parent_name)),
+    )
 
-    # apply "scale" setting directly to the hists
+    # helper to compute the stack integral
+    stack_integral = None
+
+    def get_stack_integral() -> float:
+        nonlocal stack_integral
+        if stack_integral is None:
+            stack_integral = sum(
+                proc_h.sum().value
+                for proc, proc_h in hists.items()
+                if not hasattr(proc, "unstack") and not proc.is_data
+            )
+        return stack_integral
+
     for proc_inst, h in hists.items():
+        # apply "scale" setting directly to the hists
         scale_factor = getattr(proc_inst, "scale", None) or proc_inst.x("scale", None)
+        if scale_factor == "stack":
+            # compute the scale factor and round
+            scale_factor = round_dynamic(get_stack_integral() / h.sum().value)
         if try_int(scale_factor):
             scale_factor = int(scale_factor)
             hists[proc_inst] = h * scale_factor
-            # TODO: there might be a prettier way for the label
-            proc_inst.label = f"{proc_inst.label} x{scale_factor}"
+            scale_factor_str = (
+                str(scale_factor)
+                if scale_factor < 1e5
+                else re.sub(r"e(\+?)(-?)(0*)", r"e\2", f"{scale_factor:.1e}")
+            )
+            proc_inst.label = inject_label(
+                proc_inst.label,
+                rf"$\times${scale_factor_str}",
+                placeholder="SCALE",
+                before_parentheses=True,
+            )
+
+        # remove remaining placeholders
+        proc_inst.label = remove_label_placeholders(proc_inst.label)
 
     return hists
 
 
+def remove_label_placeholders(label: str) -> str:
+    return re.sub("__[A-Z0-9]+__", "", label)
+
+
 def apply_variable_settings(
-        hists: dict,
-        variable_insts: list[od.Variable],
-        variable_settings: dict | None = None,
+    hists: dict,
+    variable_insts: list[od.Variable],
+    variable_settings: dict | None = None,
 ) -> dict:
     """
     applies settings from *variable_settings* dictionary to the *variable_insts*;
@@ -123,14 +300,18 @@ def apply_variable_settings(
                 h = h[{var_inst.name: hist.rebin(rebin_factor)}]
                 hists[proc_inst] = h
 
-
         # overflow and underflow bins
-        overflow = getattr(var_inst, "overflow", False) or var_inst.x("overflow", False)
-        underflow = getattr(var_inst, "underflow", False) or var_inst.x("underflow", False)
+        overflow = getattr(var_inst, "overflow", None)
+        if overflow is None:
+            overflow = var_inst.x("overflow", False)
+        underflow = getattr(var_inst, "underflow", None)
+        if underflow is None:
+            underflow = var_inst.x("underflow", False)
 
         if overflow or underflow:
             for proc_inst, h in list(hists.items()):
                 h = use_flow_bins(h, var_inst.name, underflow=underflow, overflow=overflow)
+                hists[proc_inst] = h
 
         # slicing
         slices = getattr(var_inst, "slice", None) or var_inst.x("slice", None)
@@ -160,18 +341,20 @@ def use_flow_bins(
     :param axis_name: Name or index of the axis of interest.
     :param underflow: Whether to add the content of the underflow bin to the first bin of axis *axis_name.
     :param overflow: Whether to add the content of the overflow bin to the last bin of axis *axis_name*.
-    :return: Histogram with underflow and/or overflow content added to the first/last bin of the histogram.
+    :return: Copy of the histogram with underflow and/or overflow content added to the first/last
+        bin of the histogram.
     """
-    if not overflow and not underflow:
-        print(f"{use_flow_bins.__name__} has nothing to do since overflow and underflow are set to False")
-        return h_in
-
-    axis_idx = axis_name if isinstance(axis_name, int) else h_in.axes.name.index(axis_name)
-
     # work on a copy of the histogram
     h_out = h_in.copy()
-    h_view = h_out.view(flow=True)
 
+    # nothing to do if neither flag is set
+    if not overflow and not underflow:
+        print(f"{use_flow_bins.__name__} has nothing to do since overflow and underflow are set to False")
+        return h_out
+
+    # determine the index of the axis of interest and check if it has flow bins activated
+    axis_idx = axis_name if isinstance(axis_name, int) else h_in.axes.name.index(axis_name)
+    h_view = h_out.view(flow=True)
     if h_out.view().shape[axis_idx] + 2 != h_view.shape[axis_idx]:
         raise Exception(f"We expect axis {axis_name} to have assigned an underflow and overflow bin")
 
@@ -247,64 +430,68 @@ def prepare_style_config(
     if not yscale:
         yscale = "log" if variable_inst.log_y else "linear"
 
+    discrete_shift = (variable_inst.x_min if variable_inst.x_discrete else 0)
+
     xlim = (
-        variable_inst.x("x_min", variable_inst.x_min),
-        variable_inst.x("x_max", variable_inst.x_max),
+        variable_inst.x("x_min", variable_inst.x_min) - discrete_shift,
+        variable_inst.x("x_max", variable_inst.x_max) - discrete_shift,
     )
+
+    # build the label from category and optional variable selection labels
+    cat_label = join_labels(category_inst.label, variable_inst.x("selection_label", None))
+
+    # unit format on axes (could be configurable)
+    unit_format = "{title} [{unit}]"
 
     style_config = {
         "ax_cfg": {
             "xlim": xlim,
-            "ylabel": variable_inst.get_full_y_title(bin_width="" if density else None),
-            "xlabel": variable_inst.get_full_x_title(),
+            # TODO: need to make bin width and unit configurable in future
+            "ylabel": variable_inst.get_full_y_title(bin_width=False, unit=False, unit_format=unit_format),
+            "xlabel": variable_inst.get_full_x_title(unit_format=unit_format),
             "yscale": yscale,
             "xscale": "log" if variable_inst.log_x else "linear",
         },
         "rax_cfg": {
             "ylabel": "Data / MC",
-            "xlabel": variable_inst.get_full_x_title(),
+            "xlabel": variable_inst.get_full_x_title(unit_format=unit_format),
         },
         "legend_cfg": {},
-        "annotate_cfg": {"text": category_inst.label},
+        "annotate_cfg": {"text": cat_label or ""},
         "cms_label_cfg": {
-            "lumi": round(0.001 * config_inst.x.luminosity.get("nominal"), 2),  # /pb -> /fb
+            "lumi": f"{0.001 * config_inst.x.luminosity.get('nominal'):.1f}",  # /pb -> /fb
             "com": config_inst.campaign.ecm,
         },
     }
 
     # disable minor ticks based on variable_inst
-    if variable_inst.discrete_x:
-        # TODO: options for very large ranges, or non-uniform discrete x
-        tx = range(int(xlim[0]), int(xlim[1] + 1))
-        style_config["ax_cfg"]["xticks"] = tx
+    axis_type = variable_inst.x("axis_type", "variable")
+    if variable_inst.discrete_x or "int" in axis_type:
+        # remove the "xscale" attribute since it messes up the bin edges
+        style_config["ax_cfg"].pop("xscale")
         style_config["ax_cfg"]["minorxticks"] = []
-
-        # add custom bin labels if specified and same amount of x ticks
-        if x_labels := variable_inst.x_labels:
-            if len(x_labels) == len(tx):
-                style_config["ax_cfg"]["xticklabels"] = x_labels
-
     if variable_inst.discrete_y:
         style_config["ax_cfg"]["minoryticks"] = []
 
     return style_config
 
 
-def prepare_plot_config(
+def prepare_stack_plot_config(
     hists: OrderedDict,
     shape_norm: bool | None = False,
     hide_errors: bool | None = None,
+    **kwargs,
 ) -> OrderedDict:
     """
     Prepares a plot config with one entry to create plots containing a stack of
     backgrounds with uncertainty bands, unstacked processes as lines and
     data entrys with errorbars.
     """
-
     # separate histograms into stack, lines and data hists
     mc_hists, mc_colors, mc_edgecolors, mc_labels = [], [], [], []
     line_hists, line_colors, line_labels, line_hide_errors = [], [], [], []
     data_hists, data_hide_errors = [], []
+    data_label = None
 
     for process_inst, h in hists.items():
         # if given, per-process setting overrides task parameter
@@ -314,6 +501,8 @@ def prepare_plot_config(
         if process_inst.is_data:
             data_hists.append(h)
             data_hide_errors.append(proc_hide_errors)
+            if data_label is None:
+                data_label = process_inst.label
         elif process_inst.is_mc:
             if getattr(process_inst, "unstack", False):
                 line_hists.append(h)
@@ -331,9 +520,7 @@ def prepare_plot_config(
         h_data = sum(data_hists[1:], data_hists[0].copy())
     if mc_hists:
         h_mc = sum(mc_hists[1:], mc_hists[0].copy())
-        # reverse hists when building MC stack so that the
-        # first process is on top
-        h_mc_stack = hist.Stack(*mc_hists[::-1])
+        h_mc_stack = hist.Stack(*mc_hists)
 
     # setup plotting configs
     plot_config = OrderedDict()
@@ -346,10 +533,10 @@ def prepare_plot_config(
             "hist": h_mc_stack,
             "kwargs": {
                 "norm": mc_norm,
-                "label": mc_labels[::-1],
-                "color": mc_colors[::-1],
-                "edgecolor": mc_edgecolors[::-1],
-                "linewidth": [(0 if c is None else 1) for c in mc_colors[::-1]],
+                "label": mc_labels,
+                "color": mc_colors,
+                "edgecolor": mc_edgecolors,
+                "linewidth": [(0 if c is None else 1) for c in mc_colors],
             },
         }
 
@@ -394,7 +581,7 @@ def prepare_plot_config(
             "hist": h_data,
             "kwargs": {
                 "norm": data_norm,
-                "label": "Data",
+                "label": data_label or "Data",
             },
         }
 
@@ -420,6 +607,24 @@ def get_position(minimum: float, maximum: float, factor: float = 1.4, logscale: 
         value = (maximum - minimum) * factor + minimum
 
     return value
+
+
+def join_labels(
+    *labels: str | list[str | None] | None,
+    inline_sep: str = ",",
+    multiline_sep: str = "\n",
+) -> str:
+    if not labels:
+        return ""
+
+    # the first label decides whether the overall label is inline or multiline
+    inline = isinstance(labels[0], str)
+
+    # collect parts
+    parts = sum(map(law.util.make_list, labels), [])
+
+    # join and return
+    return (inline_sep if inline else multiline_sep).join(filter(None, parts))
 
 
 def reduce_with(spec: str | float | callable, values: list[float]) -> float:
@@ -567,3 +772,58 @@ def get_profile_variations(h_in: hist.Hist, axis: int = 1) -> dict[str, hist.His
     h_down[...] = h_view
 
     return {"nominal": h_nom, "up": h_up, "down": h_down}
+
+
+def blind_sensitive_bins(
+    hists: dict[od.Process, hist.Hist],
+    config_inst: od.Config,
+    threshold: float,
+) -> dict[od.Process, hist.Hist]:
+    """
+    Function that takes a histogram *h_in* and blinds the values of the profile
+    over the axis *axis* that are below a certain threshold *threshold*.
+    The function needs an entry in the process_groups key of the config auxiliary
+    that is called "signals" to know, where the signal processes are defined (regex allowed).
+    The histograms are not changed inplace, but copies of the modified histograms are returned.
+    """
+    # build the logic to seperate signal processes
+    signal_procs: set[od.Process] = {
+        config_inst.get_process(proc)
+        for proc in config_inst.x.process_groups.get("signals", [])
+    }
+    check_if_signal = lambda proc: any(signal == proc or signal.has_process(proc) for signal in signal_procs)
+
+    # separate histograms into signals, backgrounds and data hists and calculate sums
+    signals = {proc: hist for proc, hist in hists.items() if proc.is_mc and check_if_signal(proc)}
+    data = {proc: hist.copy() for proc, hist in hists.items() if proc.is_data}
+    backgrounds = {proc: hist for proc, hist in hists.items() if proc.is_mc and proc not in signals}
+
+    # Return hists unchanged in case any of the three dicts is empty.
+    if not signals or not backgrounds or not data:
+        logger.info(
+            "one of the following categories: signals, backgrounds or data was not found in the given processes, "
+            "returning unchanged histograms",
+        )
+        return hists
+
+    signals_sum = sum(signals.values())
+    backgrounds_sum = sum(backgrounds.values())
+
+    # calculate sensitivity by S / sqrt(S + B)
+    sensitivity = signals_sum.values() / np.sqrt(signals_sum.values() + backgrounds_sum.values())
+    mask = sensitivity >= threshold
+
+    # adjust the mask to blind the bins inbetween blinded ones
+    if sum(mask) > 1:
+        first_ind, last_ind = np.where(mask)[0][::sum(mask) - 1]
+        mask[first_ind:last_ind] = True
+
+    # set data points in masked region to zero
+    for proc, hist in data.items():
+        hist.values()[mask] = 0
+        hist.variances()[mask] = 0
+
+    # merge all histograms
+    hists = law.util.merge_dicts(signals, backgrounds, data)
+
+    return hists

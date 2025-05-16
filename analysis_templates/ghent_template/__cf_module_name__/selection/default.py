@@ -10,15 +10,16 @@ from typing import Tuple
 import law
 
 from columnflow.util import maybe_import, four_vec
-from columnflow.columnar_util import set_ak_column, optional_column, has_ak_column
+from columnflow.columnar_util import optional_column, has_ak_column
 from columnflow.production.util import attach_coffea_behavior
 
 from columnflow.selection import Selector, SelectionResult, selector
-from columnflow.selection.util import masked_sorted_indices
 
 from columnflow.production.cms.mc_weight import mc_weight
 from columnflow.production.categories import category_ids
 from columnflow.production.processes import process_ids
+
+from columnflow.production.cmsGhent.btag_weights import jet_btag, btag_efficiency_hists
 
 from __cf_short_name_lc__.production.weights import event_weights_to_normalize
 from __cf_short_name_lc__.production.cutflow_features import cutflow_features
@@ -96,7 +97,7 @@ def lepton_selection(
     # required for pt cuts and Z-cuts on masks
     fill_with = {
         "pt": -999, "eta": -999, "phi": -999, "charge": -999,
-        "pdgId": -999, "mass": -999,  "sip3d": -999, 'tight': False,
+        "pdgId": -999, "mass": -999, "sip3d": -999, 'tight': False,
     }
     lepton = ak.fill_none(ak.pad_none(lepton, 2, axis=-1), fill_with)
 
@@ -129,7 +130,7 @@ def lepton_selection(
 
 
 @selector(
-    uses=(four_vec("Jet", ("btagDeepFlavB"))),
+    uses=four_vec("Jet", ("btagDeepFlavB")) | {jet_btag},
     exposed=False,
 )
 def jet_selection(
@@ -140,25 +141,26 @@ def jet_selection(
     **kwargs,
 ) -> Tuple[ak.Array, SelectionResult]:
 
+    events = self[jet_btag](events, working_points=["M",], jet_mask=(abs(events.Jet.eta) < 2.4))
+
     jet = (events.Jet[results.objects.Jet.Jet])
 
-    bjet_mask_medium = (jet.btagDeepFlavB >= self.config_inst.x.btag_working_points.deepjet.medium)
-
-    jet_event_mask = (ak.sum(bjet_mask_medium, axis=-1) >= 1)
-
+    jet_event_mask = (ak.sum(jet.btag_M, axis=-1) >= 1)
+    jet_nobtag_event_mask = (ak.sum(jet.pt > 0, axis=-1) >= 1)
     return events, SelectionResult(
         steps={
             "Jet": jet_event_mask,
+            "Jet_nobtag": jet_nobtag_event_mask,
         },
     )
 
 
 @selector(
     uses={
-        category_ids, __cf_short_name_lc___increment_stats
+        category_ids, __cf_short_name_lc___increment_stats, cutflow_features
     },
     produces={
-        category_ids, __cf_short_name_lc___increment_stats
+        category_ids, __cf_short_name_lc___increment_stats, cutflow_features
     },
     exposed=False,
 )
@@ -172,8 +174,7 @@ def post_selection(
     # build categories
     events = self[category_ids](events, results=results, **kwargs)
     # add cutflow features
-    if self.config_inst.x("do_cutflow_features", False):
-        events = self[cutflow_features](events, results=results, **kwargs)
+    events = self[cutflow_features](events, results=results, **kwargs)
 
     # produce event weights
     if self.dataset_inst.is_mc:
@@ -187,9 +188,6 @@ def post_selection(
 
 @post_selection.init
 def post_selection_init(self: Selector) -> None:
-    if self.config_inst.x("do_cutflow_features", False):
-        self.uses.add(cutflow_features)
-        self.produces.add(cutflow_features)
 
     if not getattr(self, "dataset_inst", None) or self.dataset_inst.is_data:
         return
@@ -200,11 +198,11 @@ def post_selection_init(self: Selector) -> None:
 
 @selector(
     uses={
-        pre_selection, post_selection,
+        pre_selection, post_selection, btag_efficiency_hists,
         object_selection, trigger_selection, lepton_selection, jet_selection,
     },
     produces={
-        pre_selection, post_selection,
+        pre_selection, post_selection, btag_efficiency_hists,
         object_selection, trigger_selection, lepton_selection, jet_selection,
     },
     exposed=True,
@@ -213,6 +211,7 @@ def default(
     self: Selector,
     events: ak.Array,
     stats: defaultdict,
+    hists: dict,
     **kwargs,
 ) -> tuple[ak.Array, SelectionResult]:
     # prepare the selection results that are updated at every step
@@ -236,12 +235,20 @@ def default(
     events, jet_selection_results = self[jet_selection](events, results, stats, **kwargs)
     results += jet_selection_results
 
+    results.x.event_no_btag = (
+        results.event &
+        results.steps.Trigger &
+        results.steps.Lepton &
+        results.steps.Jet_nobtag)
+
+    if self.dataset_inst.is_mc:
+        self[btag_efficiency_hists](events, results, hists=hists)
+
     # combine event selection after all steps
     results.event = (results.event &
                      results.steps.Trigger &
                      results.steps.Lepton &
-                     results.steps.Jet &
-                     results.steps.Bjet)
+                     results.steps.Jet)
 
     # add cutflow features, passing per-object masks
     events, results = self[post_selection](events, results, stats, **kwargs)

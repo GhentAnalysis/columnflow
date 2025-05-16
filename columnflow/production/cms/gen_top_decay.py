@@ -19,10 +19,9 @@ def _get_indexed_hard_children(gen_particle, start_index):
     return children[children.hasFlags("isHardProcess")]
 
 
-
-@selector(
-    uses=four_vec("GenPart", ("pdgId", "genPartIdxMother", "statusFlags")),
-    exposed=False,
+@producer(
+    uses={"GenPart.{genPartIdxMother,pdgId,statusFlags}"},
+    produces={"gen_top_decay"},
 )
 def gen_top_decay_products(self: Selector, events: ak.Array, **kwargs) -> Tuple[ak.Array, SelectionResult]:
     """

@@ -14,7 +14,6 @@ from columnflow.tasks.framework.base import Requirements, AnalysisTask, DatasetT
 from columnflow.tasks.framework.mixins import (
     CalibratorsMixin,
     SelectorMixin,
-    ProducerMixin,
     ProducersMixin,
     MLModelDataMixin,
     MLModelTrainingMixin,
@@ -88,12 +87,15 @@ class PrepareMLEvents(
             # set producer inst to None when no producer is requested
             self._preparation_producer_inst = None
             return self._preparation_producer_inst
-
-        self._preparation_producer_inst = ProducerMixin.get_producer_inst(producer, {"task": self})
+        self._preparation_producer_inst = self.get_producer_insts([producer], {"task": self})[0]
 
         # overwrite the sandbox when set
-        if self._preparation_producer_inst.sandbox:
-            self.sandbox = self._preparation_producer_inst.sandbox
+        sandbox = self._preparation_producer_inst.get_sandbox()
+        if sandbox:
+            self.sandbox = sandbox
+            # rebuild the sandbox inst when already initialized
+            if self._sandbox_initialized:
+                self._initialize_sandbox(force=True)
 
         return self._preparation_producer_inst
 
@@ -146,6 +148,7 @@ class PrepareMLEvents(
         }
         return outputs
 
+    @law.decorator.notify
     @law.decorator.log
     @law.decorator.localize
     @law.decorator.safe_output
@@ -202,7 +205,7 @@ class PrepareMLEvents(
             mode="r",
         ) as inps:
             for (events, *columns), pos in self.iter_chunked_io(
-                [inp.path for inp in inps],
+                [inp.abspath for inp in inps],
                 source_type=len(files) * ["awkward_parquet"] + [None] * len(reader_targets),
                 read_columns=(len(files) + len(reader_targets)) * [read_columns],
             ):
@@ -251,7 +254,7 @@ class PrepareMLEvents(
                     # save as parquet via a thread in the same pool
                     chunk = tmp_dir.child(f"file_{f}_{pos.index}.parquet", type="f")
                     output_chunks[f][pos.index] = chunk
-                    self.chunked_io.queue(sorted_ak_to_parquet, (fold_events, chunk.path))
+                    self.chunked_io.queue(sorted_ak_to_parquet, (fold_events, chunk.abspath))
 
             # merge output files of all folds
             for _output_chunks, output in zip(output_chunks, outputs["mlevents"].targets):
@@ -298,13 +301,9 @@ class MergeMLStats(
     SelectorMixin,
     CalibratorsMixin,
     DatasetTask,
-    law.tasks.ForestMerge,
+    law.LocalWorkflow,
+    RemoteWorkflow,
 ):
-    # recursively merge 20 files into one
-    merge_factor = 20
-
-    # skip receiving some parameters via req
-    exclude_params_req_get = {"workflow"}
 
     # upstream requirements
     reqs = Requirements(
@@ -312,39 +311,35 @@ class MergeMLStats(
     )
 
     def create_branch_map(self):
-        # DatasetTask implements a custom branch map, but we want to use the one in ForestMerge
-        return law.tasks.ForestMerge.create_branch_map(self)
+        # dummy branch map
+        return {0: None}
 
-    def merge_workflow_requires(self):
-        return self.reqs.PrepareMLEvents.req(self, _exclude={"branches"})
+    def workflow_requires(self):
+        reqs = super().workflow_requires()
+        reqs["events"] = self.reqs.PrepareMLEvents.req_different_branching(self)
+        return reqs
 
-    def merge_requires(self, start_branch, end_branch):
-        return self.reqs.PrepareMLEvents.req(
+    def requires(self):
+        return self.reqs.PrepareMLEvents.req_different_branching(
             self,
-            branches=((start_branch, end_branch),),
+            branch=-1,
             workflow="local",
-            _exclude={"branch"},
         )
 
-    def merge_output(self):
+    def output(self):
         return {"stats": self.target("stats.json")}
 
-    def trace_merge_inputs(self, inputs):
-        return super().trace_merge_inputs(inputs["collection"].targets.values())
-
+    @law.decorator.notify
     @law.decorator.log
     def run(self):
-        return super().run()
-
-    def merge(self, inputs, output):
         # merge input stats
         merged_stats = defaultdict(float)
-        for inp in inputs:
+        for inp in self.input().collection.targets.values():
             stats = inp["stats"].load(formatter="json", cache=False)
             self.merge_counts(merged_stats, stats)
 
         # write the output
-        output["stats"].dump(merged_stats, indent=4, formatter="json", cache=False)
+        self.output()["stats"].dump(merged_stats, indent=4, formatter="json", cache=False)
 
     @classmethod
     def merge_counts(cls, dst: dict, src: dict) -> dict:
@@ -422,8 +417,8 @@ class MergeMLEvents(
     def merge_workflow_requires(self):
         req = self.reqs.PrepareMLEvents.req(self, _exclude={"branches"})
 
-        # if the merging stats exist, allow the forest to be cached
-        self._cache_forest = req.merging_stats_exist
+        # if the workflow shape is known, allow the forest to be cached
+        self._cache_forest = req.workflow_condition()
 
         return req
 
@@ -440,6 +435,7 @@ class MergeMLEvents(
         k = self.ml_model_inst.folds
         return {"mlevents": self.target(f"mlevents_f{self.fold}of{k}.parquet")}
 
+    @law.decorator.notify
     @law.decorator.log
     def run(self):
         return super().run()
@@ -527,7 +523,7 @@ class MLTraining(
                     calibrators=_calibrators,
                     selector=_selector,
                     producers=_producers,
-                    tree_index=-1)
+                )
                 for dataset_inst in dataset_insts
             }
             for (config_inst, dataset_insts), _calibrators, _selector, _producers in zip(
@@ -580,6 +576,7 @@ class MLTraining(
     def output(self):
         return self.ml_model_inst.output(self)
 
+    @law.decorator.notify
     @law.decorator.log
     @law.decorator.safe_output
     def run(self):
@@ -639,7 +636,7 @@ class MLEvaluation(
             self._preparation_producer_inst = None
             return self._preparation_producer_inst
 
-        self._preparation_producer_inst = ProducerMixin.get_producer_inst(producer, {"task": self})
+        self._preparation_producer_inst = self.get_producer_insts([producer], {"task": self})[0]
 
         # check that preparation_producer does not clash with ml_model_inst sandbox
         if (
@@ -709,6 +706,7 @@ class MLEvaluation(
     def output(self):
         return {"mlcolumns": self.target(f"mlcolumns_{self.branch}.parquet")}
 
+    @law.decorator.notify
     @law.decorator.log
     @law.decorator.localize
     @law.decorator.safe_output
@@ -764,7 +762,7 @@ class MLEvaluation(
         route_filter = RouteFilter(write_columns)
 
         # iterate over chunks of events and columns
-        file_targets = [inputs["events"]["collection"][0]["events"]]
+        file_targets = [inputs["events"]["events"]]
         if self.producer_insts:
             file_targets.extend([inp["columns"] for inp in inputs["producers"]])
         if reader_targets:
@@ -776,7 +774,7 @@ class MLEvaluation(
             mode="r",
         ) as inps:
             for (events, *columns), pos in self.iter_chunked_io(
-                [inp.path for inp in inps],
+                [inp.abspath for inp in inps],
                 source_type=len(file_targets) * ["awkward_parquet"] + [None] * len(reader_targets),
                 read_columns=(len(file_targets) + len(reader_targets)) * [read_columns],
             ):
@@ -826,7 +824,7 @@ class MLEvaluation(
                 # save as parquet via a thread in the same pool
                 chunk = tmp_dir.child(f"file_{pos.index}.parquet", type="f")
                 output_chunks[pos.index] = chunk
-                self.chunked_io.queue(sorted_ak_to_parquet, (events, chunk.path))
+                self.chunked_io.queue(sorted_ak_to_parquet, (events, chunk.abspath))
 
         # merge output files
         sorted_chunks = [output_chunks[key] for key in sorted(output_chunks)]
@@ -1031,7 +1029,7 @@ class PlotMLResultsBase(
                     "which is not implemented yet.",
                 )
 
-            events = ak.from_parquet(inp["mlcolumns"].path)
+            events = ak.from_parquet(inp["mlcolumns"].abspath)
 
             # masking with leaf categories
             category_mask = False
@@ -1082,6 +1080,18 @@ class PlotMLResults(PlotMLResultsBase):
     receiver operating characteristic (ROC) curve. This task uses the output of the
     MergeMLEvaluation task as input and saves the plots with the corresponding array
     used to create the plot.
+
+    For the function to run correctly, the following input structure is required:
+    * The ``category_ids`` column must be kept in the Evaluation and passed with the network outputs.
+    (must be accessible via ``events.category_id`` and can be set by adding ``category_ids`` to the
+    :py:meth:`~columnflow.ml.MLModel.uses` and :py:meth:`~columnflow.ml.MLModel.produces`
+    methode of the ML-Model)
+    * The outputs of the ML model must be stored under a column with the name of the model itself
+    (This can be set in the :py:meth:`~columnflow.ml.MLModel.evaluate` methode of the model via:
+
+    ``events = set_ak_column(events, f"{self.cls_name}.{output_i}", output_i)``
+
+    ).
     """
 
     # override the plot_function parameter to be able to only choose between CM and ROC
@@ -1104,6 +1114,9 @@ class PlotMLResults(PlotMLResultsBase):
                 params.general_settings[label] = params.general_settings[label].split(";")
 
     def output(self: PlotMLResults):
+        """
+        override the output method to return the plots and the array used for plotting.
+        """
         b = self.branch_data
         return {
             "plots": [
@@ -1113,7 +1126,7 @@ class PlotMLResults(PlotMLResultsBase):
                 )
             ],
             "array": self.target(
-                f"plot__{self.plot_function}__proc_{self.processes_repr}__cat_{b.category}/data.parquet",
+                f"plot__{self.plot_function}__proc_{self.processes_repr}__cat_{b.category}/data.pickle",
             ),
         }
 
@@ -1152,6 +1165,6 @@ class PlotMLResults(PlotMLResultsBase):
 
                 for index, f in enumerate(figs):
                     f.savefig(
-                        file_path.abs_dirname + "/" + file_path.basename.replace("0", str(index)),
+                        file_path.absdirname + "/" + file_path.basename.replace("0", str(index)),
                         format=file_path.ext(),
                     )

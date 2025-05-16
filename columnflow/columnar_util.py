@@ -6,17 +6,10 @@ Helpers and utilities for working with columnar libraries.
 
 from __future__ import annotations
 
-__all__ = [
-    "mandatory_coffea_columns", "ColumnCollection", "EMPTY_INT", "EMPTY_FLOAT",
-    "Route", "RouteFilter", "ArrayFunction", "TaskArrayFunction", "ChunkedIOHandler",
-    "eval_item", "get_ak_routes", "has_ak_column", "set_ak_column", "remove_ak_column",
-    "add_ak_alias", "add_ak_aliases", "update_ak_array", "flatten_ak_array", "sort_ak_fields",
-    "sorted_ak_to_parquet", "sorted_ak_to_root", "attach_behavior", "layout_ak_array",
-    "flat_np_view", "ak_copy", "fill_hist", "deferred_column", "optional_column",
-]
+__all__ = []
 
 import os
-import gc
+import sys
 import re
 import math
 import time
@@ -26,13 +19,13 @@ import threading
 import multiprocessing
 import multiprocessing.pool
 from functools import partial
-from collections import namedtuple, OrderedDict
+from collections import namedtuple, OrderedDict, deque, defaultdict
 
 import law
 import order as od
 from law.util import InsertableDict
 
-from columnflow.types import Sequence, Callable, Any, T
+from columnflow.types import Sequence, Callable, Any, T, Generator
 from columnflow.util import (
     UNSET, maybe_import, classproperty, DotDict, DerivableMeta, Derivable, pattern_matcher,
     get_source_code, real_path,
@@ -47,21 +40,64 @@ maybe_import("coffea.nanoevents")
 maybe_import("coffea.nanoevents.methods.base")
 maybe_import("coffea.nanoevents.methods.nanoaod")
 pq = maybe_import("pyarrow.parquet")
-hist = maybe_import("hist")
 
 
 # loggers
 logger = law.logger.get_logger(__name__)
 logger_perf = law.logger.get_logger(f"{__name__}-perf")
 
-#: Columns that are always required when opening a nano file with coffea.
-mandatory_coffea_columns = {"run", "luminosityBlock", "event"}
-
 #: Empty-value definition in places where an integer number is expected but not present.
 EMPTY_INT = -99999
 
 #: Empty-value definition in places where a float number is expected but not present.
 EMPTY_FLOAT = -99999.0
+
+#: Columns that are always required when opening a nano file with coffea.
+mandatory_coffea_columns = {"run", "luminosityBlock", "event"}
+
+#: Information on behavior of certain collections to (re-)attach it via attach_behavior.
+default_coffea_collections = {
+    "Jet": {
+        "type_name": "Jet",
+        "check_attr": "metric_table",
+        "skip_fields": "*Idx*G",
+    },
+    "FatJet": {
+        "type_name": "FatJet",
+        "check_attr": "metric_table",
+        "skip_fields": "*Idx*G",
+    },
+    "SubJet": {
+        "type_name": "Jet",
+        "check_attr": "metric_table",
+        "skip_fields": "*Idx*G",
+    },
+    "Muon": {
+        "type_name": "Muon",
+        "check_attr": "metric_table",
+        "skip_fields": "*Idx*G",
+    },
+    "Electron": {
+        "type_name": "Electron",
+        "check_attr": "metric_table",
+        "skip_fields": "*Idx*G",
+    },
+    "Tau": {
+        "type_name": "Tau",
+        "check_attr": "metric_table",
+        "skip_fields": "*Idx*G",
+    },
+    "MET": {
+        "type_name": "MissingET",
+        "check_attr": "metric_table",
+        "skip_fields": "*Idx*G",
+    },
+    "PuppiMET": {
+        "type_name": "MissingET",
+        "check_attr": "metric_table",
+        "skip_fields": "*Idx*G",
+    },
+}
 
 
 class ItemEval(object):
@@ -373,6 +409,15 @@ class Route(od.TagMixin):
             return self.column == other
         return False
 
+    def __lt__(self, other: Route | str | Sequence[str | int | slice | type(Ellipsis) | list]) -> bool:
+        if isinstance(other, Route):
+            return self.fields < other.fields
+        if isinstance(other, (list, tuple)):
+            return self.fields < tuple(other)
+        if isinstance(other, str):
+            return self.column < other
+        return False
+
     def __bool__(self) -> bool:
         return len(self._fields) > 0
 
@@ -582,7 +627,7 @@ def get_ak_routes(
         if getattr(arr, "fields", None) and (max_depth <= 0 or len(fields) < max_depth):
             # extend the lookup with nested fields
             lookup.extend([
-                (getattr(arr, field), fields + (field,))
+                (arr[field], fields + (field,))
                 for field in arr.fields
             ])
         else:
@@ -1077,6 +1122,105 @@ def sorted_ak_to_root(
     f.close()
 
 
+def sorted_indices_from_mask(
+    mask: ak.Array,
+    metric: ak.Array,
+    sort_axis: int = -1,
+    ascending: bool = True,
+) -> ak.Array:
+    """
+    Takes a boolean *mask* and converts it to an array of indices, sorted using a *metric* of equal
+    size along a *sort_axis* and, by default, in *ascending* order. Example:
+
+    .. code-block:: python
+
+        mask = [[True, False, False, True], ...]
+        metric = [[5.0, 1.0, 0.9, 4.1], ...]
+
+        sorted_indices_from_mask(mask, metric)
+        # -> [[3, 0], ...]
+
+    :param mask: The boolean mask.
+    :param metric: The metric to sort by.
+    :param sort_axis: The axis along which to sort.
+    :param ascending: Whether to sort in ascending order.
+    :return: An array of sorted indices.
+    """
+    indices = ak.argsort(metric, axis=sort_axis, ascending=ascending)
+    return indices[mask[indices]]
+
+
+def mask_from_indices(indices: np.array | ak.Array, layout_array: ak.Array) -> ak.Array:
+    """
+    Takes an array of *indices* and a *layout_array* and returns a boolean mask with the same shape
+    as *layout_array* where values at *indices* are set to *True*. Example:
+
+    .. code-block:: python
+
+        indices = [[2, 0], ...]
+        layout_array = [[x, y, z], ...]
+
+        mask_from_indices(indices, layout_array)
+        # -> [[True, False, True], ...]
+
+    :param indices: The indices to set to *True*.
+    :param layout_array: The layout array to use as a template.
+    :return: A boolean mask with the same shape as *layout_array*.
+    """
+    # create a flat mask starting with false
+    flat_mask = flat_np_view(ak.full_like(layout_array, False, dtype=bool))
+    # use offsets of the layout to create increasing indices
+    flat_indices = flat_np_view((indices + layout_array.layout.offsets.data[:-1, ..., None]))
+    # set the indices to true
+    flat_mask[flat_indices] = True
+    # layout the mask
+    return layout_ak_array(flat_mask, layout_array)
+
+
+def full_like(layout_array: ak.Array, value: Any, *, dtype: Any = None, **kwargs) -> ak.Array:
+    """
+    Creates an awkward array with the same layout as *layout_array* and fills it with a constant
+    *value* of type *dtype*. The difference to awkward's standalone ``ak.full_like`` is that all
+    original parameters (like docstrings, annotations, etc.) are removed from the layout of the
+    resulting array.
+
+    :param layout_array: The layout array to use as a template.
+    :param value: The value to fill the array with.
+    :param dtype: The data type of the array.
+    :return: An awkward array with the same layout as *layout_array* and filled with *value*.
+    """
+    return ak.without_parameters(ak.full_like(layout_array, value, dtype=dtype, **kwargs))
+
+
+def fill_at(
+    ak_array: ak.Array,
+    where: ak.Array,
+    route: Route | str,
+    value: float | int,
+    *,
+    value_type: type | str | None = None,
+) -> ak.Array:
+    """
+    Fills a column identified through *route* in an *ak_array* with a *value* where a
+    corresponding *where* mask is *True*.
+
+    :param ak_array: The input array.
+    :param where: The boolean mask where to fill the value.
+    :param route: The route describing the column to fill.
+    :param value: The value to fill.
+    :param value_type: The data type of the value. Inferred from value if not set.
+    :return: A new array with the value filled at the specified route.
+    """
+    # cast to route
+    route = Route(route)
+
+    # create new values with selective values
+    new_values = ak.where(where, value, route.apply(ak_array))
+
+    # insert back
+    return set_ak_column(ak_array, route, new_values, value_type=value_type)
+
+
 def attach_behavior(
     ak_array: ak.Array,
     type_name: str,
@@ -1125,6 +1269,57 @@ def attach_behavior(
     )
 
 
+def attach_coffea_behavior(
+    ak_array: ak.Array,
+    collections: dict | Sequence | None = None,
+) -> ak.Array:
+    """
+    Add coffea's NanoEvents behavior to collections in an *ak_array*. When empty, *collections*
+    defaults to :py:attr:``default_coffea_collections``.
+
+    :param ak_array: The input array.
+    :param collections: The collections to attach behavior to.
+    :return: The array with the behavior attached.
+    """
+    # update or reduce collection info
+    _collections = default_coffea_collections
+    if isinstance(collections, dict):
+        _collections = _collections.copy()
+        _collections.update(collections)
+    elif isinstance(collections, (list, tuple)):
+        _collections = {
+            name: info
+            for name, info in _collections.items()
+            if name in collections
+        }
+
+    for name, info in _collections.items():
+        if not info:
+            continue
+
+        # get the collection to update
+        if name not in ak_array.fields:
+            continue
+        coll = ak_array[name]
+
+        # when a check_attr is defined, do nothing in case it already exists
+        if info.get("check_attr") and getattr(coll, info["check_attr"], None) is not None:
+            continue
+
+        # default infos
+        type_name = info.get("type_name") or name
+        skip_fields = info.get("skip_fields")
+
+        # apply the behavior
+        ak_array = set_ak_column(
+            ak_array,
+            name,
+            attach_behavior(coll, type_name, skip_fields=skip_fields),
+        )
+
+    return ak_array
+
+
 def layout_ak_array(data_array: np.array | ak.Array, layout_array: ak.Array) -> ak.Array:
     """
     Takes a *data_array* and structures its contents into the same structure as *layout_array*, with
@@ -1142,22 +1337,11 @@ def layout_ak_array(data_array: np.array | ak.Array, layout_array: ak.Array) -> 
     return ak.unflatten(ak.flatten(data_array, axis=None), ak.num(layout_array, axis=1), axis=0)
 
 
-def flat_np_view(ak_array: ak.Array, axis: int = 1) -> np.array:
+def flat_np_view(ak_array: ak.Array, axis: int | None = None) -> np.array:
     """
     Takes an *ak_array* and returns a fully flattened numpy view. The flattening is applied along
     *axis*. See *ak.flatten* for more info.
-
-    .. note::
-        Changes applied in-place to that view are transferred to the original *ak_array*, but
-        **only** when the axis is not *None* but an integer value. For this reason, passing
-        ``axis=None`` will cause an exception to be thrown.
     """
-    if axis is None:
-        raise ValueError(
-            "axis must not be None as changes applied the returned view will not propagate to the ",
-            "original awkward array",
-        )
-
     return np.asarray(ak.flatten(ak_array, axis=axis))
 
 
@@ -1338,7 +1522,7 @@ class ArrayFunction(Derivable):
     .. code-block:: python
 
         @my_other_func.init
-        def my_other_func_init(self: ArrayFunction):
+        def my_other_func_init(self):
             self.uses.add(my_func)
 
         # the above adds an initialization function to the already created class my_other_func,
@@ -1570,6 +1754,17 @@ class ArrayFunction(Derivable):
         return cls.IOFlagged(cls, cls.IOFlag.PRODUCES)
 
     @classmethod
+    def call(cls, func: Callable[[Any, ...], Any]) -> None:
+        """
+        Decorator to wrap a function *func* that should be registered as :py:meth:`call_func`
+        which defines the main callable for processing chunks of data. The function should accept
+        arbitrary arguments and can return arbitrary objects.
+
+        The decorator does not return the wrapped function.
+        """
+        cls.call_func = func
+
+    @classmethod
     def init(cls, func: Callable[[], None]) -> None:
         """
         Decorator to wrap a function *func* that should be registered as :py:meth:`init_func`
@@ -1592,7 +1787,7 @@ class ArrayFunction(Derivable):
         cls.skip_func = func
 
     def __init__(
-        self: ArrayFunction,
+        self,
         call_func: Callable | None = law.no_value,
         init_func: Callable | None = law.no_value,
         skip_func: Callable | None = law.no_value,
@@ -1639,6 +1834,9 @@ class ArrayFunction(Derivable):
                         f"to set: {e.args[0]}",
                     )
                     raise e
+
+                # remove keyword from further processing
+                kwargs.pop(attr)
             else:
                 try:
                     deps = set(law.util.make_list(getattr(self.__class__, attr)))
@@ -1653,23 +1851,67 @@ class ArrayFunction(Derivable):
             # also register a set for storing instances, filled in create_dependencies
             setattr(self, f"{attr}_instances", set())
 
+        # set all other keyword arguments as instance attributes
+        for attr, value in kwargs.items():
+            setattr(self, attr, value)
+
         # dictionary of dependency class to instance, set in create_dependencies
         self.deps = DotDict()
 
         # dictionary of keyword arguments mapped to dependenc classes to be forwarded to their init
-        self.deps_kwargs = DotDict()
+        self.deps_kwargs = defaultdict(dict)  # TODO: avoid using `defaultdict`
 
         # deferred part of the initialization
         if deferred_init:
             self.deferred_init(instance_cache=instance_cache)
 
-    def __getitem__(self: ArrayFunction, dep_cls: DerivableMeta) -> ArrayFunction:
+    def __getitem__(self, dep_cls: DerivableMeta) -> ArrayFunction:
         """
         Item access to dependencies.
         """
         return self.deps[dep_cls]
 
-    def deferred_init(self: ArrayFunction, instance_cache: dict | None = None) -> dict:
+    def has_dep(self, dep_cls: DerivableMeta) -> bool:
+        """
+        Returns whether a dependency of class *dep_cls* is present.
+
+        :param dep_cls: The class of the potential dependency.
+        :return bool: Whether the dependency is present.
+        """
+        return dep_cls in self.deps
+
+    def walk_deps(
+        self,
+        depth_first: bool = False,
+        include_self: bool = False,
+    ) -> Generator[ArrayFunction, None, None]:
+        """
+        Walks through and yields all dependencies of this instance. By default, the traversal is
+        breadth-first.
+
+        :param depth_first: Whether to traverse the dependencies depth-first.
+        :param include_self: Whether to include this instance in the walk.
+        """
+        seen = set()
+        q = deque(self.deps.values())
+        if include_self:
+            q.appendleft(self)
+
+        # shorthand to extend to queue either to the front or back
+        extend = q.extendleft if depth_first else q.extend
+
+        while q:
+            dep = q.popleft()
+            if dep in seen:
+                continue
+
+            yield dep
+            seen.add(dep)
+
+            # add the next dependencies
+            extend(dep.deps.values())
+
+    def deferred_init(self, instance_cache: dict | None = None) -> dict:
         """
         Controls the deferred part of the initialization process.
         """
@@ -1682,12 +1924,19 @@ class ArrayFunction(Derivable):
             self.init_func()
 
         # instantiate dependencies again, but only perform updates
-        self.create_dependencies(instance_cache, only_update=True)
+        # self.create_dependencies(instance_cache, only_update=True)
 
+        # NOTE: the above does not correctly propagate `deps_kwargs` to the dependencies.
+        # As a workaround, instantiate all dependencies fully a second time by
+        # invalidating the instance cache and setting `only_update` to False
+        instance_cache = {}
+        self.create_dependencies(instance_cache, only_update=False)
+
+        # NOTE: return value currently not being used anywhere -> remove?
         return instance_cache
 
     def create_dependencies(
-        self: ArrayFunction,
+        self,
         instance_cache: dict,
         only_update: bool = False,
     ) -> None:
@@ -1780,7 +2029,7 @@ class ArrayFunction(Derivable):
                     del self.deps[cls]
 
     def instantiate_dependency(
-        self: ArrayFunction,
+        self,
         cls: DerivableMeta,
         **kwargs: Any,
     ) -> ArrayFunction:
@@ -1796,7 +2045,7 @@ class ArrayFunction(Derivable):
 
         return cls(**kwargs)
 
-    def get_dependencies(self: ArrayFunction) -> set[ArrayFunction | Any]:
+    def get_dependencies(self) -> set[ArrayFunction | Any]:
         """
         Returns a set of instances of all dependencies.
         """
@@ -1813,7 +2062,7 @@ class ArrayFunction(Derivable):
         return deps
 
     def _get_columns(
-        self: ArrayFunction,
+        self,
         io_flag: IOFlag,
         dependencies: bool = True,
         _cache: set | None = None,
@@ -1850,26 +2099,30 @@ class ArrayFunction(Derivable):
 
                 # add the columns
                 columns |= flagged.wrapped._get_columns(flagged.io_flag, _cache=_cache)
+            elif isinstance(obj, str):
+                # expand braces in strings
+                columns |= set(map(Route, law.util.brace_expand(obj)))
             else:
+                # let Route handle it
                 columns.add(Route(obj))
 
         return columns
 
-    def _get_used_columns(self: ArrayFunction, _cache: set | None = None) -> set[Route]:
+    def _get_used_columns(self, _cache: set | None = None) -> set[Route]:
         return self._get_columns(io_flag=self.IOFlag.USES, _cache=_cache)
 
     @property
-    def used_columns(self: ArrayFunction) -> set[Route]:
+    def used_columns(self) -> set[Route]:
         return self._get_used_columns()
 
-    def _get_produced_columns(self: ArrayFunction, _cache: set | None = None) -> set[Route]:
+    def _get_produced_columns(self, _cache: set | None = None) -> set[Route]:
         return self._get_columns(io_flag=self.IOFlag.PRODUCES, _cache=_cache)
 
     @property
-    def produced_columns(self: ArrayFunction) -> set[Route]:
+    def produced_columns(self) -> set[Route]:
         return self._get_produced_columns()
 
-    def _check_columns(self: ArrayFunction, ak_array: ak.Array, io_flag: IOFlag) -> None:
+    def _check_columns(self, ak_array: ak.Array, io_flag: IOFlag) -> None:
         """
         Check if awkward array contains at least one column matching each
         entry in 'uses' or 'produces' and raise Exception if none were found.
@@ -1901,7 +2154,7 @@ class ArrayFunction(Derivable):
         missing = ", ".join(sorted(map(str, missing)))
         raise Exception(f"'{self.cls_name}' did not {action} any columns matching: {missing}")
 
-    def __call__(self: ArrayFunction, *args, **kwargs) -> Any:
+    def __call__(self, *args, **kwargs) -> Any:
         """
         Forwards the call to :py:attr:`call_func` with all *args* and *kwargs*. An exception is
         raised if :py:attr:`call_func` is not callable.
@@ -1949,20 +2202,22 @@ class ArrayFunction(Derivable):
 deferred_column = ArrayFunction.DeferredColumn.deferred_column
 
 
-def optional_column(
+def tagged_column(
+    tag: str | Sequence[str] | set[str],
     *routes: Route | Any | set[Route | Any],
 ) -> Route | set[Route]:
     """
     Takes one or several objects *routes* whose type can be anything that is accepted by the
     :py:class:`~.Route` constructor, and returns a single or a set of route objects being tagged
-    ``"optional"``.
+    *tag*, which can be a single tag, a sequence, or a set of tags. Brace expansion is supported
+    in strings.
     """
     if not routes:
         raise Exception("at least one route argument must be given")
 
-    def opt_route(r):
+    def tagged_route(r):
         route = Route(r)
-        route.add_tag("optional")
+        route.add_tag(tag)
         return route
 
     # determine if multple objects are given and handle the case where a single set is given
@@ -1973,8 +2228,39 @@ def optional_column(
     elif len(routes) > 1:
         multiple = True
 
-    # create multiple or a single tagged route
-    return set(map(opt_route, routes)) if multiple else opt_route(list(routes)[0])
+    # create tagged routes
+    tagged_routes = set()
+    for r in routes:
+        # brace expansions for strings
+        if isinstance(r, str):
+            tagged_routes |= set(map(tagged_route, law.util.brace_expand(r)))
+        else:
+            tagged_routes.add(tagged_route(r))
+
+    multiple |= len(tagged_routes) > 1
+    return tagged_routes if multiple else tagged_routes.pop()
+
+
+def optional_column(
+    *routes: Route | Any | set[Route | Any],
+) -> Route | set[Route]:
+    """
+    Takes one or several objects *routes* whose type can be anything that is accepted by the
+    :py:class:`~.Route` constructor, and returns a single or a set of route objects being tagged
+    ``"optional"``.
+    """
+    return tagged_column("optional", *routes)
+
+
+def skip_column(
+    *routes: Route | Any | set[Route | Any],
+) -> Route | set[Route]:
+    """
+    Takes one or several objects *routes* whose type can be anything that is accepted by the
+    :py:class:`~.Route` constructor, and returns a single or a set of route objects being tagged
+    ``"skip"``.
+    """
+    return tagged_column("skip", *routes)
 
 
 class TaskArrayFunction(ArrayFunction):
@@ -2104,8 +2390,15 @@ class TaskArrayFunction(ArrayFunction):
     setup_func = None
     sandbox = None
     call_force = None
+    max_chunk_size = None
     shifts = set()
     _dependency_sets = ArrayFunction._dependency_sets | {"shifts"}
+
+    def __str__(self) -> str:
+        """
+        Returns a string representation of this TaskArrayFunction instance.
+        """
+        return self.cls_name
 
     @staticmethod
     def pick_cached_result(cached_result: T, *args, **kwargs) -> T:
@@ -2163,10 +2456,10 @@ class TaskArrayFunction(ArrayFunction):
         positional arguments:
 
             - *reqs*, a dictionary containing the required tasks as defined by the custom
-              :py:meth:`requires_func`.
+            :py:meth:`requires_func`.
             - *inputs*, a dictionary containing the outputs created by the tasks in *reqs*.
             - *reader_targets*, an InsertableDict containing the targets to be included
-              in an event chunk loop
+            in an event chunk loop
 
         The decorator does not return the wrapped function.
         """
@@ -2179,6 +2472,7 @@ class TaskArrayFunction(ArrayFunction):
         setup_func: Callable | law.NoValue | None = law.no_value,
         sandbox: str | law.NoValue | None = law.no_value,
         call_force: bool | law.NoValue | None = law.no_value,
+        max_chunk_size: int | None = law.no_value,
         pick_cached_result: Callable | law.NoValue | None = law.no_value,
         inst_dict: dict | None = None,
         **kwargs,
@@ -2197,6 +2491,8 @@ class TaskArrayFunction(ArrayFunction):
             sandbox = self.__class__.sandbox
         if call_force == law.no_value:
             call_force = self.__class__.call_force
+        if max_chunk_size == law.no_value:
+            max_chunk_size = self.__class__.max_chunk_size
         if pick_cached_result == law.no_value:
             pick_cached_result = self.__class__.pick_cached_result
 
@@ -2209,6 +2505,7 @@ class TaskArrayFunction(ArrayFunction):
         # other attributes
         self.sandbox = sandbox
         self.call_force = call_force
+        self.max_chunk_size = max_chunk_size
         self.pick_cached_result = pick_cached_result
 
         # cached results of the main call function per thread id
@@ -2300,7 +2597,7 @@ class TaskArrayFunction(ArrayFunction):
         """
         # default requirements
         if reqs is None:
-            reqs = {}
+            reqs = DotDict()
 
         # create the call cache
         if _cache is None:
@@ -2308,7 +2605,9 @@ class TaskArrayFunction(ArrayFunction):
 
         # run this instance's requires function
         if callable(self.requires_func):
-            self.requires_func(reqs)
+            if self.cls_name not in reqs:
+                reqs[self.cls_name] = DotDict()
+            self.requires_func(reqs[self.cls_name])
 
         # run the requirements of all dependent objects
         for dep in self.get_dependencies():
@@ -2333,7 +2632,7 @@ class TaskArrayFunction(ArrayFunction):
         """
         # default column targets
         if reader_targets is None:
-            reader_targets = {}
+            reader_targets = DotDict()
 
         # create the call cache
         if _cache is None:
@@ -2341,7 +2640,11 @@ class TaskArrayFunction(ArrayFunction):
 
         # run this instance's setup function
         if callable(self.setup_func):
-            self.setup_func(reqs, inputs, reader_targets)
+            if self.cls_name not in reqs:
+                reqs[self.cls_name] = DotDict()
+            if self.cls_name not in inputs:
+                inputs[self.cls_name] = DotDict()
+            self.setup_func(reqs[self.cls_name], inputs[self.cls_name], reader_targets)
 
         # run the setup of all dependent objects
         for dep in self.get_dependencies():
@@ -2394,6 +2697,51 @@ class TaskArrayFunction(ArrayFunction):
             self._cache_result(result)
 
         return result
+
+    def get_sandbox(self, raise_on_collision: bool = False) -> str | None:
+        """
+        Returns the sandbox defined by this instance or any of its dependencies. When multiple
+        different sandboxes are found, a warning is issued the first one is returned.
+
+        :param raise_on_collision: Whether to raise an exception when multiple different sandboxes
+            are found instead of just issuing a warning.
+        :return: The sandbox name or *None* if none is set.
+        """
+        # collect all unique sandboxes
+        sandboxes = law.util.make_unique(
+            dep.sandbox
+            for dep in self.walk_deps(include_self=True)
+            if dep.sandbox
+        )
+
+        # trivial cases
+        if not sandboxes:
+            return None
+        if len(sandboxes) == 1:
+            return sandboxes[0]
+
+        # collision handling
+        msg = (
+            f"multiple sandboxes found while traversing dependencies of {self.cls_name}: "
+            f"{','.sandboxes}"
+        )
+        if not raise_on_collision:
+            logger.warning(f"{msg}; using the first one")
+            return sandboxes[0]
+        raise Exception(msg)
+
+    def get_min_chunk_size(self) -> int | None:
+        """
+        Walks through all dependencies and returns the minimum value of :py:attr:`max_chunk_size`
+        which defines the bottleneck for chunked processing.
+
+        :return: The minimum value of :py:attr:`max_chunk_size` or *None* if none is set.
+        """
+        # get maximum chunk sizes for all deps
+        sizes = (dep.max_chunk_size for dep in self.walk_deps(include_self=True))
+
+        # select the minimum value that defines the bottleneck
+        return min((s for s in sizes if isinstance(s, int)), default=None)
 
 
 class NoThreadPool(object):
@@ -2516,18 +2864,32 @@ class DaskArrayReader(object):
         PARTITIONS = enum.auto()
 
     def __init__(
-        self: DaskArrayReader,
+        self,
         path: str,
         open_options: dict | None = None,
-        # TODO: we want to go back to SLICES as soon as possible, but currently there is an issue
-        #       that we load all events into memory for each chunk when using SLICES
         materialization_strategy: MaterializationStrategy = MaterializationStrategy.PARTITIONS,
     ):
         super().__init__()
 
-        # open the file
         open_options = open_options or {}
-        open_options["split_row_groups"] = False
+
+        # backwards compatibility: when row group splitting is enbaled (the default), detect whether
+        # the input file was written with support for that; a file does not support splitting in
+        # case nested nodes separated by "*.list.element.*" (rather than "*.list.item.*") are found
+        # (to be removed in the future)
+        if open_options.get("split_row_groups"):
+            nodes = ak.ak_from_parquet.metadata(path)[0]
+            cre = re.compile(r"^.+\.list\.element(|\..+)$")
+            if any(map(cre.match, nodes)):
+                logger.warning(
+                    f"while reading input parquet file from {path}, 'split_row_groups' is enabled "
+                    "but the file does not support it; it was probably created with an older "
+                    "version of columnflow which did not make use of this feature; row group "
+                    "splitting will be disabled, potentially leading to suboptimal performance",
+                )
+                open_options["split_row_groups"] = False
+
+        # open the file
         self.dak_array = dak.from_parquet(path, **open_options)
         self.path = path
 
@@ -2540,7 +2902,7 @@ class DaskArrayReader(object):
             # mapping of partition indices to cache information (chunks still to be handled and a
             # cached array) that changes during the read process in _materialize_via_partitions
             self.partition_cache = {
-                p: DotDict(chunks=[], array=None)
+                p: DotDict(chunks=set(), array=None)
                 for p in range(self.dak_array.npartitions)
             }
 
@@ -2548,24 +2910,25 @@ class DaskArrayReader(object):
             self.chunk_to_partitions_lock = threading.Lock()
             self.partition_locks = {p: threading.Lock() for p in range(self.dak_array.npartitions)}
 
-    def __del__(self: DaskArrayReader) -> None:
+    def __del__(self) -> None:
         self.close()
 
-    def __len__(self: DaskArrayReader) -> int:
+    def __len__(self) -> int:
+        if not self.dak_array.known_divisions:
+            self.dak_array.eager_compute_divisions()
         return len(self.dak_array)
 
     @property
-    def closed(self: DaskArrayReader) -> bool:
+    def closed(self) -> bool:
         return self.dak_array is None
 
-    def close(self: DaskArrayReader) -> None:
-        # free memory and perform an eager, overly cautious gc round
+    def close(self) -> None:
+        # free memory
         self.dak_array = None
         if getattr(self, "partition_cache", None):
             self.partition_cache.clear()
-        gc.collect()
 
-    def materialize(self: DaskArrayReader, *args, **kwargs) -> ak.Array:
+    def materialize(self, *args, **kwargs) -> ak.Array:
         """
         Materializes (reads from disk) a slice of the array using the configured
         :py:attr:`materialization_strategy`. All *args* and *kwargs* are forwarded to the internal
@@ -2584,13 +2947,15 @@ class DaskArrayReader(object):
         )
 
     def _materialize_via_slices(
-        self: DaskArrayReader,
+        self,
         *,
         chunk_index: int,
         entry_start: int,
         entry_stop: int,
         max_chunk_size: int,
     ) -> ak.Array:
+        # NOTE: calling `compute()` will materialize the data from the full dataset in memory
+        # even if we only return a slice of the data.
         return self.dak_array[entry_start:entry_stop].compute()
 
     def _materialize_via_partitions(
@@ -2621,7 +2986,9 @@ class DaskArrayReader(object):
         # fill the chunk -> partitions mapping once
         with self.chunk_to_partitions_lock:
             if not self.chunk_to_partitions:
-                divs = self.dak_array.divisions
+                if not self.dak_array.known_divisions:
+                    self.dak_array.eager_compute_divisions()
+                divs = tuple(map(int, self.dak_array.divisions))
                 # note: a hare-and-tortoise algorithm could be possible to get the mapping with less
                 # than n^2 complexity, but for our case with ~30 chunks this should be ok (for now)
                 n_chunks = int(math.ceil(len(self) / max_chunk_size))
@@ -2637,7 +3004,7 @@ class DaskArrayReader(object):
                         if p_start >= _entry_stop > _entry_start:
                             break
                         partitions.append(p)
-                        self.partition_cache[p].chunks.append(_chunk_index)
+                        self.partition_cache[p].chunks.add(_chunk_index)
                     self.chunk_to_partitions[_chunk_index] = partitions
 
         # read partitions one at a time and store parts that make up the chunk for concatenation
@@ -2645,7 +3012,7 @@ class DaskArrayReader(object):
         for p in self.chunk_to_partitions[chunk_index]:
             # obtain the array
             with self.partition_locks[p]:
-                # remove this chunk for the list of chunks to be handled
+                # remove this chunk from the list of chunks to be handled
                 self.partition_cache[p].chunks.remove(chunk_index)
 
                 if self.partition_cache[p].array is None:
@@ -2668,8 +3035,8 @@ class DaskArrayReader(object):
         # construct the full array
         arr = parts[0] if len(parts) == 1 else ak.concatenate(parts, axis=0)
 
+        # cleanup
         del parts
-        gc.collect()
 
         return arr
 
@@ -2753,12 +3120,16 @@ class ChunkedIOHandler(object):
         ["chunk", "chunk_pos"],
     )
 
+    default_chunk_size = law.config.get_expanded_int("analysis", "chunked_io_chunk_size", 50000)
+    default_pool_size = law.config.get_expanded_int("analysis", "chunked_io_pool_size", 2)
+
     def __init__(
         self,
         source: Any,
+        *,
         source_type: str | Sequence[str] | None = None,
-        chunk_size: int = law.config.get_expanded_int("analysis", "chunked_io_chunk_size", 50000),
-        pool_size: int = law.config.get_expanded_int("analysis", "chunked_io_pool_size", 4),
+        chunk_size: int = default_chunk_size,
+        pool_size: int = default_pool_size,
         open_options: dict | Sequence[dict] | None = None,
         read_options: dict | Sequence[dict] | None = None,
         read_columns: set | Sequence[set] | None = None,
@@ -3012,13 +3383,13 @@ class ChunkedIOHandler(object):
         ),
         open_options: dict | None = None,
         read_columns: set[str | Route] | None = None,
-    ) -> tuple[uproot.ReadOnlyDirectory, int]:
+    ) -> tuple[tuple[uproot.ReadOnlyDirectory, str], int]:
         """
         Opens an uproot file at *source* for subsequent processing with coffea and returns a 2-tuple
-        *(uproot file, tree entries)*. *source* can be the path of the file, an already opened,
-        readable uproot file (assuming the tree is called "Events"), or a 2-tuple whose second item
-        defines the name of the tree to be loaded. *open_options* are forwarded to ``uproot.open``
-        if a new file is opened. Passing *read_columns* has no effect.
+        *((uproot file, tree name), tree entries)*. *source* can be the path of the file, an already
+        opened, readable uproot file (assuming the tree is called "Events"), or a 2-tuple whose
+        second item defines the name of the tree to be loaded. *open_options* are forwarded to
+        ``uproot.open`` if a new file is opened. Passing *read_columns* has no effect.
         """
         tree_name = "Events"
         if isinstance(source, tuple) and len(source) == 2:
@@ -3035,38 +3406,39 @@ class ChunkedIOHandler(object):
         else:
             raise Exception(f"'{source}' cannot be opened as coffea_root")
 
-        return (source, tree.num_entries)
+        return ((source, tree_name), tree.num_entries)
 
     @classmethod
     def close_coffea_root(
         cls,
-        source_object: str | uproot.ReadOnlyDirectory,
+        source_object: tuple[str | uproot.ReadOnlyDirectory, str],
     ) -> None:
         """
-        Closes a ROOT file referred to by *source_object* if it is a ``ReadOnlyDirectory``. In case
-        a string is passed, this method does nothing.
+        Closes a ROOT file referred to by the first item in a 2-tuple *source_object* if it is a
+        ``ReadOnlyDirectory``. In case a string is passed, this method does nothing.
         """
-        close = None if isinstance(source_object, str) else getattr(source_object, "close", None)
+        close = getattr(source_object[0], "close", None)
         if callable(close):
             close()
 
     @classmethod
     def read_coffea_root(
         cls,
-        source_object: str | uproot.ReadOnlyDirectory,
+        source_object: tuple[str | uproot.ReadOnlyDirectory, str],
         chunk_pos: ChunkPosition,
         read_options: dict | None = None,
         read_columns: set[str | Route] | None = None,
     ) -> coffea.nanoevents.methods.base.NanoEventsArray:
         """
-        Given a file location or opened uproot file *source_object*, returns an awkward array chunk
-        referred to by *chunk_pos*, assuming nanoAOD structure. *read_options* are passed to
-        ``coffea.nanoevents.NanoEventsFactory.from_root``. *read_columns* are converted to strings
-        and, if not already present, added as nested field ``iteritems_options.filter_name`` to
-        *read_options*.
+        Given a file location or opened uproot file, and a tree name in a 2-tuple *source_object*,
+        returns an awkward array chunk referred to by *chunk_pos*, assuming nanoAOD structure.
+        *read_options* are passed to ``coffea.nanoevents.NanoEventsFactory.from_root``.
+        *read_columns* are converted to strings and, if not already present, added as nested fields
+        ``iteritems_options.filter_name`` to *read_options*.
         """
         # default read options
         read_options = read_options or {}
+        read_options["delayed"] = False
         read_options["runtime_cache"] = None
         read_options["persistent_cache"] = None
 
@@ -3089,8 +3461,10 @@ class ChunkedIOHandler(object):
             read_options.setdefault("iteritems_options", {})["filter_name"] = filter_name
 
         # read the events chunk into memory
+        _source_object, tree_name = source_object
         chunk = coffea.nanoevents.NanoEventsFactory.from_root(
-            source_object,
+            _source_object,
+            treepath=tree_name,
             entry_start=chunk_pos.entry_start,
             entry_stop=chunk_pos.entry_stop,
             **read_options,
@@ -3187,6 +3561,7 @@ class ChunkedIOHandler(object):
 
         # default open options
         open_options = open_options or {}
+        open_options.setdefault("split_row_groups", True)  # preserve input file partitions
 
         # inject read_columns
         if read_columns and "columns" not in open_options:
@@ -3258,7 +3633,6 @@ class ChunkedIOHandler(object):
 
         # reset some attributes
         del self.source_objects[:]
-        gc.collect()
         self.n_entries = None
 
         # open all sources and make sure they have the same number of entries
@@ -3269,7 +3643,11 @@ class ChunkedIOHandler(object):
             self.read_columns_list,
         )):
             # open the source
-            obj, n = source_handler.open(source, open_options=open_options, read_columns=read_columns)
+            obj, n = source_handler.open(
+                source,
+                open_options=open_options,
+                read_columns=(sorted(read_columns) if read_columns else read_columns),
+            )
             # check entries
             if i == 0:
                 self.n_entries = n
@@ -3295,9 +3673,8 @@ class ChunkedIOHandler(object):
         for (obj, source_handler) in zip(self.source_objects, self.source_handlers):
             source_handler.close(obj)
 
-        # just delete the file cache and reset some attributes
+        # delete the file cache
         del self.source_objects[:]
-        gc.collect()
 
     def queue(self, *args, **kwargs) -> None:
         """
@@ -3316,7 +3693,12 @@ class ChunkedIOHandler(object):
 
         # create a list of read functions
         read_funcs = [
-            partial(source_handler.read, obj, read_options=read_options, read_columns=read_columns)
+            partial(
+                source_handler.read,
+                obj,
+                read_options=read_options,
+                read_columns=(sorted(read_columns) if read_columns else read_columns),
+            )
             for obj, source_handler, read_options, read_columns in zip(
                 self.source_objects,
                 self.source_handlers,
@@ -3363,17 +3745,15 @@ class ChunkedIOHandler(object):
                 # find the first done result and remove it from the list
                 # this will do nothing in the first iteration
                 result_obj = no_result
-                for i, result in enumerate(list(results)):
-                    if not result.ready():
-                        continue
-
-                    result_obj = result.get()
-                    results.pop(i)
-                    break
+                for i, result in enumerate(results):
+                    if result.ready():
+                        result_obj = result.get()
+                        results.pop(i)
+                        break
 
                 # if no result was ready, sleep and try again
                 if results and result_obj == no_result:
-                    time.sleep(0.05)
+                    time.sleep(0.02)
                     continue
 
                 # immediately try to fill up the pool
@@ -3385,23 +3765,27 @@ class ChunkedIOHandler(object):
                 if isinstance(result_obj, self.ReadResult):
                     if self.iter_message:
                         print(self.iter_message.format(pos=result_obj.chunk_pos))
+                        sys.stdout.flush()
 
                     # probably overly-cautious, but run garbage collection before and after
-                    gc.collect()
                     t1 = time.perf_counter()
                     try:
                         yield (result_obj.chunk, result_obj.chunk_pos)
                     finally:
                         duration = time.perf_counter() - t1
                         logger_perf.debug(
-                            f"processing of chunk {result_obj.chunk_pos.index} took " +
-                            law.util.human_duration(seconds=duration),
+                            f"processing of chunk {result_obj.chunk_pos.index} took "
+                            f"{law.util.human_duration(seconds=duration)}",
                         )
-                    gc.collect()
-        finally:
+                del result_obj
+            self.pool.close()
+        except:
             self.pool.terminate()
+            raise
+        finally:
             self.pool.join()
             self.pool = None
+            del results
 
     def __del__(self):
         """
