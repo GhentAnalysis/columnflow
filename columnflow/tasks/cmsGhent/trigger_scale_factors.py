@@ -110,13 +110,13 @@ class TriggerDatasetsMixin(
         return parts
 
     @classmethod
-    def resolve_param_values(cls, params: law.util.InsertableDict[str, Any]) -> law.util.InsertableDict[str, Any]:
+    def resolve_param_values_pre_init(cls, params: dict[str, Any]) -> dict[str, Any]:
         redo_default_datasets = False
         # when empty, use the config default
         if not params.get("datasets", None):
             redo_default_datasets = True
 
-        params = super().resolve_param_values(params)
+        params = super().resolve_param_values_pre_init(params)
         if not redo_default_datasets:
             return params
 
@@ -131,8 +131,8 @@ class TriggerDatasetsMixin(
 class TriggerScaleFactors(
     TriggerDatasetsMixin,
     SelectionEfficiencyHistMixin,
-    SelectorClassMixin,
     CalibratorClassesMixin,
+    SelectorClassMixin,
     law.LocalWorkflow,
     RemoteWorkflow,
 ):
@@ -286,11 +286,8 @@ class PlotTriggerScaleFactorsBase(
     sandbox = dev_sandbox(law.config.get("analysis", "default_columnar_sandbox"))
 
     @classmethod
-    def resolve_param_values(
-        cls,
-        params: law.util.InsertableDict[str, Any],
-    ) -> law.util.InsertableDict[str, Any]:
-        params = super().resolve_param_values(params)
+    def resolve_param_values_pre_init(cls, params: dict[str, Any]) -> dict[str, Any]:
+        params = super().resolve_param_values_pre_init(params)
 
         if (config_inst := params.get("config_inst")) and (datasets := params.get("datasets")):
             if params.get("process") is None:

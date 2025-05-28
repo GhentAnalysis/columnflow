@@ -96,11 +96,15 @@ class BTagEfficiencyPlot(
     SelectorClassMixin,
     CalibratorClassesMixin,
     law.LocalWorkflow,
+    RemoteWorkflow,
     PlotBase2D,
 ):
     resolution_task_cls = BTagEfficiency
 
-    reqs = Requirements(BTagEfficiency=BTagEfficiency)
+    reqs = Requirements(
+        RemoteWorkflow.reqs,
+        BTagEfficiency=BTagEfficiency,
+    )
 
     plot_function = PlotBase.plot_function.copy(
         default="columnflow.plotting.plot_functions_2d.plot_2d",
