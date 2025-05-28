@@ -152,6 +152,7 @@ class CreateHistograms(_CreateHistograms):
         from columnflow.columnar_util import (
             Route, update_ak_array, add_ak_aliases, has_ak_column, attach_coffea_behavior,
         )
+        from columnflow.columnar_util_Ghent import remove_obj_overlap
 
         # prepare inputs
         inputs = self.input()
@@ -226,6 +227,7 @@ class CreateHistograms(_CreateHistograms):
                     self.raise_if_overlapping([events] + list(columns))
 
                 # add additional columns
+                events, *columns = remove_obj_overlap(events, *columns)
                 events = update_ak_array(events, *columns)
 
                 # add aliases
