@@ -290,6 +290,7 @@ def fixed_wp_btag_weights_init(self: Producer) -> None:
     btag_eff_file = self.get_btag_eff(self.config_inst.x.external_files).get(self.dataset_group, None)
     self.has_external_efficiencies = btag_eff_file is not None and os.path.exists(btag_eff_file)
 
+
 @fixed_wp_btag_weights.setup
 def fixed_wp_btag_weights_setup(
     self: Producer,

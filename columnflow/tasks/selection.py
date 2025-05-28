@@ -171,7 +171,7 @@ class SelectEvents(_SelectEvents):
             inputs=luigi.task.getpaths(selector_reqs),
         )
         n_ext = len(reader_targets)
-        
+
         # veto post init
         self.veto_producer.run_post_init(task=self)
 
@@ -190,8 +190,6 @@ class SelectEvents(_SelectEvents):
 
         # get shift dependent aliases
         aliases = self.local_shift_inst.x("column_aliases", {})
-
-
         # define columns that need to be read
         read_columns = set(map(Route, mandatory_coffea_columns))
         read_columns |= self.selector_inst.used_columns

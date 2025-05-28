@@ -158,7 +158,7 @@ def lepton_mva_producer_requires(self: Calibrator, task: law.Task, reqs: dict) -
 @lepton_mva_producer.setup
 def lepton_mva_producer_setup(
     self: Calibrator,
-    task: law.Task, 
+    task: law.Task,
     reqs: dict,
     inputs: dict,
     reader_targets: law.util.InsertableDict,
