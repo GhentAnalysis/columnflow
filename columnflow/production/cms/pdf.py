@@ -83,7 +83,7 @@ def pdf_weights(
     _raise_unknown_action("outlier_log_mode", outlier_log_mode, ("none", "info", "debug", "warning"))
 
     # check for the correct amount of weights
-    n_weights = ak.num(events.LHEPdfWeight, axis=1)
+    n_weights = ak.num(ak.drop_none(ak.nan_to_none(events.LHEPdfWeight)), axis=1)
     invalid_mask = (n_weights != 101) & (n_weights != 103)
 
     # handle invalid number of weights when configured to raise
@@ -120,7 +120,7 @@ def pdf_weights(
         frac = ak.sum(invalid_mask) / len(events) * 100
         logger.warning(
             "the number of LHEPdfWeights is expected to be 101 or 103, but also found values "
-            f"'{bad_values}' in dataset {self.dataset_inst.name}, will set pdf weights to 1 for "
+            f"'{bad_values}' in dataset {self.dataset_inst.name}, will set pdf weights to 0 for "
             f"these events ({frac:.2f}%)",
         )
 
@@ -205,7 +205,34 @@ def pdf_weights(
         }[outlier_log_mode]
         msg_func(msg)
 
-    # handle invalid values
+    if ak.any(invalid_mask) & ~ak.all(invalid_mask):
+        # catch events where the number of weights is unexpected
+        occurances = ak.sum(invalid_mask)
+        frac = occurances / len(stddev) * 100
+        msg = (
+            f"in dataset {self.dataset_inst.name}, there are {occurances} ({frac:.2f}%) "
+            "events where the number of (non Nan) weights is unexpected"
+        )
+
+        if outlier_action == "remove":
+            # set all pdf weights to 0 when the *outlier_threshold* is passed
+            events = set_ak_column_f32(events, "pdf_weight", ak.where(invalid_mask, 0, events.pdf_weight))
+            events = set_ak_column_f32(events, "pdf_weight_up", ak.where(invalid_mask, 0, events.pdf_weight_up))
+            events = set_ak_column_f32(events, "pdf_weight_down", ak.where(invalid_mask, 0, events.pdf_weight_down))
+
+            msg += "; the nominal/up/down pdf_weight columns have been set to 0 for these events"
+        elif outlier_action == "raise":
+            raise Exception(msg)
+
+        msg_func = {
+            "none": lambda msg: None,
+            "info": logger.info,
+            "warning": logger.warning,
+            "debug": logger.debug,
+        }[outlier_log_mode]
+        msg_func(msg)
+
+
     invalid_pdf_weight = (pdf_weight_nominal == 0)
     if ak.any(invalid_pdf_weight):
         # set all pdf weights to 0 when the nominal pdf weight is 0
