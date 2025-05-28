@@ -50,7 +50,6 @@ class PrepareMLEvents(
     sandbox = dev_sandbox(law.config.get("analysis", "default_columnar_sandbox"))
 
     allow_empty_ml_model = False
-    invokes_preparation_producer = True
 
     @classmethod
     def invokes_preparation_producer(cls, params) -> bool:

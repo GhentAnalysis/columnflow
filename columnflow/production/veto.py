@@ -2,9 +2,8 @@ import law
 from law import LocalFileTarget
 
 from columnflow.production import Producer, producer
-from columnflow.util import maybe_import, DotDict
+from columnflow.util import maybe_import
 from columnflow.columnar_util import set_ak_column
-from columnflow.types import Any
 
 ak = maybe_import("awkward")
 np = maybe_import("numpy")
@@ -71,4 +70,3 @@ def veto_events_post_init(self: Producer, task: law.Task, **kwargs) -> None:
     """
     veto_dict = task.config_inst.aux.get("veto", {})
     self.veto_list = veto_dict.get(task.dataset_inst.name, [])
-

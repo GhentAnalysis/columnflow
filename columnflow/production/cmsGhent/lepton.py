@@ -211,7 +211,7 @@ def lepton_weights_requires(self: Producer, task: law.Task, reqs: dict) -> None:
 @lepton_weights.setup
 def lepton_weights_setup(
     self: Producer,
-    task: law.Task, 
+    task: law.Task,
     reqs: dict,
     inputs: dict,
     reader_targets: law.util.InsertableDict,

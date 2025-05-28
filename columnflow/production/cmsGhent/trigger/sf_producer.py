@@ -93,7 +93,7 @@ def trigger_scale_factors_requires(self: Producer, task: law.Task, reqs: dict) -
 @trigger_scale_factors.setup
 def trigger_scale_factors_setup(
     self: Producer,
-    task: law.Task, 
+    task: law.Task,
     reqs: dict,
     inputs: dict,
     reader_targets,
