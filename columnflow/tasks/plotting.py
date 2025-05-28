@@ -14,7 +14,7 @@ import order as od
 from columnflow.tasks.framework.base import Requirements, ShiftTask
 from columnflow.tasks.framework.mixins import (
     CalibratorsMixin, SelectorStepsMixin, ProducersMixin, MLModelsMixin, WeightProducerMixin,
-    CategoriesMixin, ShiftSourcesMixin, HistHookMixin,
+    CategoriesMixin, ShiftSourcesMixin, HistHookMixin, ParamsCacheMixin,
 )
 from columnflow.tasks.framework.plotting import (
     PlotBase, PlotBase1D, PlotBase2D, ProcessPlotSettingMixin, VariablePlotSettingMixin,
@@ -26,6 +26,7 @@ from columnflow.util import DotDict, dev_sandbox, dict_add_strict
 
 
 class PlotVariablesBase(
+    ParamsCacheMixin,
     HistHookMixin,
     VariablePlotSettingMixin,
     ProcessPlotSettingMixin,
@@ -71,6 +72,7 @@ class PlotVariablesBase(
     def get_plot_shifts(self):
         return
 
+    @law.decorator.notify
     @law.decorator.log
     @view_output_plots
     def run(self):
@@ -110,7 +112,6 @@ class PlotVariablesBase(
             for dataset, inp in self.input().items():
                 dataset_inst = self.config_inst.get_dataset(dataset)
                 h_in = inp["collection"][0]["hists"].targets[self.branch_data.variable].load(formatter="pickle")
-
                 # loop and extract one histogram per process
                 for process_inst in process_insts:
                     # skip when the dataset is already known to not contain any sub process
@@ -212,11 +213,6 @@ class PlotVariablesBaseSingleShift(
 
     def workflow_requires(self):
         reqs = super().workflow_requires()
-
-        # no need to require merged histograms since each branch already requires them as a workflow
-        # if self.workflow == "local":
-        #     reqs.pop("merged_hists", None)
-
         return reqs
 
     def requires(self):
@@ -320,16 +316,8 @@ class PlotVariablesBaseMultiShifts(
             for source in sorted(self.shift_sources)
         ]
 
-    def workflow_requires(self):
-        reqs = super().workflow_requires()
-
-        # no need to require merged histograms since each branch already requires them as a workflow
-        if self.workflow == "local":
-            reqs.pop("merged_hists", None)
-
-        return reqs
-
     def requires(self):
+        # TODO: for data, request MergeHistograms
         return {
             d: self.reqs.MergeShiftedHistograms.req(
                 self,

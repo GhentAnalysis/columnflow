@@ -6,7 +6,6 @@ Lightweight mixins task classes.
 
 from __future__ import annotations
 
-import gc
 import time
 import itertools
 from collections import Counter
@@ -26,6 +25,7 @@ from columnflow.ml import MLModel
 from columnflow.inference import InferenceModel
 from columnflow.columnar_util import Route, ColumnCollection, ChunkedIOHandler
 from columnflow.util import maybe_import, DotDict
+from columnflow.timing import Timer
 
 ak = maybe_import("awkward")
 
@@ -217,7 +217,7 @@ class CalibratorMixin(ConfigTask):
         parts.insert_before("version", "calibrator", f"calib__{self.calibrator_repr}")
         return parts
 
-    def find_keep_columns(self: ConfigTask, collection: ColumnCollection) -> set[Route]:
+    def find_keep_columns(self, collection: ColumnCollection) -> set[Route]:
         """
         Finds the columns to keep based on the *collection*.
 
@@ -440,7 +440,7 @@ class CalibratorsMixin(ConfigTask):
         parts.insert_before("version", "calibrators", f"calib__{self.calibrators_repr}")
         return parts
 
-    def find_keep_columns(self: ConfigTask, collection: ColumnCollection) -> set[Route]:
+    def find_keep_columns(self, collection: ColumnCollection) -> set[Route]:
         """
         Finds the columns to keep based on the *collection*.
 
@@ -642,7 +642,7 @@ class SelectorMixin(ConfigTask):
         parts.insert_before("version", "selector", f"sel__{self.selector_repr}")
         return parts
 
-    def find_keep_columns(self: ConfigTask, collection: ColumnCollection) -> set[Route]:
+    def find_keep_columns(self, collection: ColumnCollection) -> set[Route]:
         columns = super().find_keep_columns(collection)
 
         if collection == ColumnCollection.ALL_FROM_SELECTOR:
@@ -684,7 +684,7 @@ class SelectorStepsMixin(SelectorMixin):
     selector_steps = law.CSVParameter(
         default=selector_steps_all,
         description=f"a subset of steps of the selector to apply; "
-                    f"Set to {selector_steps_all[0]} to apply all (default).",
+        f"Set to {selector_steps_all[0]} to apply all (default).",
         brace_expand=True,
         parse_empty=True,
     )
@@ -958,7 +958,7 @@ class ProducerMixin(ConfigTask):
         parts.insert_before("version", "producer", producer)
         return parts
 
-    def find_keep_columns(self: ConfigTask, collection: ColumnCollection) -> set[Route]:
+    def find_keep_columns(self, collection: ColumnCollection) -> set[Route]:
         """
         Finds the columns to keep based on the *collection*.
 
@@ -1178,7 +1178,7 @@ class ProducersMixin(ConfigTask):
 
         return parts
 
-    def find_keep_columns(self: ConfigTask, collection: ColumnCollection) -> set[Route]:
+    def find_keep_columns(self, collection: ColumnCollection) -> set[Route]:
         """
         Finds the columns to keep based on the *collection*.
 
@@ -1202,17 +1202,16 @@ class ProducersMixin(ConfigTask):
 
 class MLModelMixinBase(AnalysisTask):
     """
-    Base Mixin to include a machine learning applications into tasks.
+    Base mixin to include a machine learning application into tasks.
 
     Inheriting from this mixin will allow a task to instantiate and access a
-    :py:class:`~columnflow.ml.MLModel` instance with name *ml_model*,
-    which is an input parameter for this task.
+    :py:class:`~columnflow.ml.MLModel` instance with name *ml_model*, which is an input parameter
+    for this task.
     """
 
     ml_model = luigi.Parameter(
         description="the name of the ML model to be applied",
     )
-
     ml_model_settings = SettingsParameter(
         default=DotDict(),
         description="settings passed to the init function of the ML model",
@@ -1230,7 +1229,8 @@ class MLModelMixinBase(AnalysisTask):
     @classmethod
     def req_params(cls, inst: law.Task, **kwargs) -> dict[str, Any]:
         """
-        Get the required parameters for the task, preferring the ``--ml-model`` set on task-level via CLI.
+        Get the required parameters for the task, preferring the ``--ml-model`` set on task-level
+        via CLI.
 
         This method first checks if the ``--ml-model`` parameter is set at the task-level via the command line.
         If it is, this parameter is preferred and added to the '_prefer_cli' key in the kwargs dictionary.
@@ -1310,7 +1310,7 @@ class MLModelTrainingMixin(MLModelMixinBase):
     This class provides parameters for configuring the training of machine learning models.
     """
 
-    configs = law.CSVParameter(
+    ml_configs = law.CSVParameter(
         default=(),
         description="comma-separated names of analysis config to use; should only contain a single "
         "name in case the ml model is bound to a single config; when empty, the ml model is "
@@ -1318,7 +1318,7 @@ class MLModelTrainingMixin(MLModelMixinBase):
         brace_expand=True,
         parse_empty=True,
     )
-    calibrators = law.MultiCSVParameter(
+    ml_calibrators = law.MultiCSVParameter(
         default=(),
         description="multiple comma-separated sequences of names of calibrators to apply, "
         "separated by ':'; each sequence corresponds to a config in --configs; when empty, the "
@@ -1327,7 +1327,7 @@ class MLModelTrainingMixin(MLModelMixinBase):
         brace_expand=True,
         parse_empty=True,
     )
-    selectors = law.CSVParameter(
+    ml_selectors = law.CSVParameter(
         default=(),
         description="comma-separated names of selectors to apply; each selector corresponds to a "
         "config in --configs; when empty, the 'default_selector' setting of each config is used if "
@@ -1336,7 +1336,7 @@ class MLModelTrainingMixin(MLModelMixinBase):
         brace_expand=True,
         parse_empty=True,
     )
-    producers = law.MultiCSVParameter(
+    ml_producers = law.MultiCSVParameter(
         default=(),
         description="multiple comma-separated sequences of names of producers to apply, "
         "separated by ':'; each sequence corresponds to a config in --configs; when empty, the "
@@ -1369,7 +1369,7 @@ class MLModelTrainingMixin(MLModelMixinBase):
         :raises Exception: If the number of calibrator sequences does not match
             the number of configs used by the ML model.
         """
-        calibrators: Union[tuple[str], tuple[tuple[str]]] = params.get("calibrators") or (None,)
+        calibrators: Union[tuple[str], tuple[tuple[str]]] = params.get("ml_calibrators") or (None,)
 
         # broadcast to configs
         n_configs = len(ml_model_inst.config_insts)
@@ -1432,7 +1432,7 @@ class MLModelTrainingMixin(MLModelMixinBase):
         :raises Exception: If the number of selector sequences does not match
             the number of configs used by the ML model.
         """
-        selectors = params.get("selectors") or (None,)
+        selectors = params.get("ml_selectors") or (None,)
 
         # broadcast to configs
         n_configs = len(ml_model_inst.config_insts)
@@ -1494,7 +1494,7 @@ class MLModelTrainingMixin(MLModelMixinBase):
         :raises Exception: If the number of producer sequences does not match
             the number of configs used by the ML model.
         """
-        producers = params.get("producers") or (None,)
+        producers = params.get("ml_producers") or (None,)
 
         # broadcast to configs
         n_configs = len(ml_model_inst.config_insts)
@@ -1561,7 +1561,7 @@ class MLModelTrainingMixin(MLModelMixinBase):
             params["ml_model_inst"] = ml_model_inst
 
             # resolve configs
-            _configs = params.get("configs", ())
+            _configs = params.get("ml_configs", ())
             params["configs"] = tuple(ml_model_inst.training_configs(list(_configs)))
             if not params["configs"]:
                 raise Exception(
@@ -1571,13 +1571,13 @@ class MLModelTrainingMixin(MLModelMixinBase):
             ml_model_inst._set_configs(params["configs"])
 
             # resolve calibrators
-            params["calibrators"] = cls.resolve_calibrators(ml_model_inst, params)
+            params["ml_calibrators"] = cls.resolve_calibrators(ml_model_inst, params)
 
             # resolve selectors
-            params["selectors"] = cls.resolve_selectors(ml_model_inst, params)
+            params["ml_selectors"] = cls.resolve_selectors(ml_model_inst, params)
 
             # resolve producers
-            params["producers"] = cls.resolve_producers(ml_model_inst, params)
+            params["ml_producers"] = cls.resolve_producers(ml_model_inst, params)
 
             # call the model's setup hook
             ml_model_inst._setup()
@@ -1590,7 +1590,7 @@ class MLModelTrainingMixin(MLModelMixinBase):
         self.ml_model_inst = self.get_ml_model_inst(
             self.ml_model,
             self.analysis_inst,
-            configs=list(self.configs),
+            configs=list(self.ml_configs),
             parameters=self.ml_model_settings,
         )
 
@@ -1611,20 +1611,21 @@ class MLModelTrainingMixin(MLModelMixinBase):
         :return: An InsertableDict containing the store parts.
         """
         parts = super().store_parts()
+
         # since MLTraining is no CalibratorsMixin, SelectorMixin, ProducerMixin, ConfigTask,
         # all these parts are missing in the `store_parts`
 
-        configs_repr = "__".join(self.configs[:5])
+        configs_repr = "__".join(self.ml_configs[:5])
 
-        if len(self.configs) > 5:
-            configs_repr += f"_{law.util.create_hash(self.configs[5:])}"
+        if len(self.ml_configs) > 5:
+            configs_repr += f"_{law.util.create_hash(self.ml_configs[5:])}"
 
         parts.insert_after("task_family", "configs", configs_repr)
 
         for label, fct_names in [
-            ("calib", self.calibrators),
-            ("sel", tuple((sel,) for sel in self.selectors)),
-            ("prod", self.producers),
+            ("calib", self.ml_calibrators),
+            ("sel", tuple((sel,) for sel in self.ml_selectors)),
+            ("prod", self.ml_producers),
         ]:
             if not fct_names or not any(fct_names):
                 fct_names = ["none"]
@@ -1714,7 +1715,7 @@ class MLModelMixin(ConfigTask, MLModelMixinBase):
 
         return parts
 
-    def find_keep_columns(self: ConfigTask, collection: ColumnCollection) -> set[Route]:
+    def find_keep_columns(self, collection: ColumnCollection) -> set[Route]:
         columns = super().find_keep_columns(collection)
 
         if collection == ColumnCollection.ALL_FROM_ML_EVALUATION and self.ml_model_inst:
@@ -1817,7 +1818,7 @@ class MLModelsMixin(ConfigTask):
 
         return parts
 
-    def find_keep_columns(self: ConfigTask, collection: ColumnCollection) -> set[Route]:
+    def find_keep_columns(self, collection: ColumnCollection) -> set[Route]:
         columns = super().find_keep_columns(collection)
 
         if collection == ColumnCollection.ALL_FROM_ML_EVALUATION:
@@ -1952,6 +1953,7 @@ class VariablesMixin(ConfigTask):
 
     default_variables = None
     allow_empty_variables = False
+    allow_missing_variables = False
 
     @classmethod
     def resolve_param_values(cls, params):
@@ -1973,6 +1975,16 @@ class VariablesMixin(ConfigTask):
 
             # resolve them
             if params["variables"]:
+                # first try to resolve variable groups
+                groups = config_inst.x("variable_groups", {})
+                new_variables = []
+                for variable in params["variables"]:
+                    if variable in groups:
+                        new_variables.extend(groups[variable])
+                    else:
+                        new_variables.append(variable)
+                params["variables"] = tuple(new_variables)
+
                 # first, split into single- and multi-dimensional variables
                 single_vars = []
                 multi_var_parts = []
@@ -1989,6 +2001,7 @@ class VariablesMixin(ConfigTask):
                     config_inst,
                     od.Variable,
                     config_inst.x("variable_groups", {}),
+                    strict=not cls.allow_missing_variables,
                 )
 
                 # for each multi-variable, resolve each part separately and create the full
@@ -2000,6 +2013,7 @@ class VariablesMixin(ConfigTask):
                             config_inst,
                             od.Variable,
                             config_inst.x("variable_groups", {}),
+                            strict=not cls.allow_missing_variables,
                         )
                         for part in parts
                     ]
@@ -2050,6 +2064,66 @@ class VariablesMixin(ConfigTask):
             return self.variables[0]
 
         return f"{len(self.variables)}_{law.util.create_hash(sorted(self.variables))}"
+
+
+class DatasetsMixin(ConfigTask):
+
+    datasets = law.CSVParameter(
+        default=(),
+        description="comma-separated dataset names or patters to select; can also be the key of a "
+        "mapping defined in the 'dataset_groups' auxiliary data of the config; when empty, uses "
+        "all datasets registered in the config; empty "
+        "default",
+        brace_expand=True,
+        parse_empty=True,
+    )
+
+    allow_empty_datasets = False
+
+    @classmethod
+    def resolve_param_values(cls, params):
+        params = super().resolve_param_values(params)
+
+        if "config_inst" not in params:
+            return params
+        config_inst = params["config_inst"]
+
+        # resolve datasets
+        if "datasets" in params:
+            if params["datasets"]:
+                datasets = cls.find_config_objects(
+                    params["datasets"],
+                    config_inst,
+                    od.Dataset,
+                    config_inst.x("dataset_groups", {}),
+                )
+
+            # complain when no datasets were found
+            if not datasets and not cls.allow_empty_datasets:
+                raise ValueError(f"no datasets found matching {params['datasets']}")
+
+            params["datasets"] = tuple(datasets)
+            params["dataset_insts"] = [config_inst.get_dataset(d) for d in params["datasets"]]
+
+        return params
+
+    @classmethod
+    def get_known_shifts(cls, config_inst, params):
+        shifts, upstream_shifts = super().get_known_shifts(config_inst, params)
+
+        # add shifts of all datasets to upstream ones
+        for dataset_inst in params.get("dataset_insts") or []:
+            if dataset_inst.is_mc:
+                upstream_shifts |= set(dataset_inst.info.keys())
+
+        return shifts, upstream_shifts
+
+    @property
+    def datasets_repr(self):
+        if len(self.datasets) == 1:
+            return self.datasets[0]
+
+        return f"{len(self.datasets)}_{law.util.create_hash(sorted(self.datasets))}"
 
 
 class DatasetsProcessesMixin(ConfigTask):
@@ -2288,14 +2362,14 @@ class WeightProducerMixin(ConfigTask):
 
         return shifts, upstream_shifts
 
-    def __init__(self: WeightProducerMixin, *args, **kwargs) -> None:
+    def __init__(self, *args, **kwargs) -> None:
         super().__init__(*args, **kwargs)
 
         # cache for weight producer inst
         self._weight_producer_inst = None
 
     @property
-    def weight_producer_inst(self: WeightProducerMixin) -> WeightProducer:
+    def weight_producer_inst(self) -> WeightProducer:
         if self._weight_producer_inst is None:
             self._weight_producer_inst = self.get_weight_producer_inst(
                 self.weight_producer,
@@ -2314,7 +2388,7 @@ class WeightProducerMixin(ConfigTask):
         return self._weight_producer_inst
 
     @property
-    def weight_producer_repr(self: WeightProducerMixin) -> str:
+    def weight_producer_repr(self) -> str:
         return str(self.weight_producer_inst)
 
     def store_parts(self: WeightProducerMixin) -> law.util.InsertableDict[str, str]:
@@ -2411,7 +2485,7 @@ class ChunkedIOMixin(AnalysisTask):
         # iterate in the handler context
         with handler:
             self.chunked_io = handler
-            msg = f"iterate through {handler.n_entries} events in {handler.n_chunks} chunks ..."
+            msg = f"iterate through {handler.n_entries:_} events in {handler.n_chunks} chunks ..."
             try:
                 # measure runtimes excluding IO
                 loop_durations = []
@@ -2433,9 +2507,8 @@ class ChunkedIOMixin(AnalysisTask):
             finally:
                 self.chunked_io = None
 
-        # eager, overly cautious gc
+        # eager cleanup
         del handler
-        gc.collect()
 
 
 class HistHookMixin(ConfigTask):
@@ -2584,3 +2657,85 @@ class MergeHistogramMixin(
         # optionally remove inputs
         if self.remove_previous:
             inputs.remove()
+
+
+class ParamsCacheMixin:
+
+    # the get_param_values is called again for every value of this parameter (config by default included)
+    cache_param_sep = ["shift", "shift_sources"]
+
+    # dict to store cached params for different tasks
+    cache_param_values = dict()
+
+    time_get_params = luigi.BoolParameter(
+        default=False,
+        description="Whether to report the time taken to load get the parameters",
+    )
+
+    no_cached_params = luigi.BoolParameter(
+        default=False,
+        description="Return normal call to get_param_values and report if it differs from cached output",
+    )
+
+    check_cached_params = luigi.BoolParameter(
+        default=False,
+        description="Return normal call to get_param_values and report if it differs from cached output",
+    )
+
+    @classmethod
+    def cache_tag(cls, kwargs):
+        tag = cls.__name__
+        for p in ["config"] + list(cls.cache_param_sep):
+            if kwargs.get(p, None):
+                tag += f"__{p}_{kwargs[p]}"
+        return tag
+
+    @classmethod
+    def get_param_values(cls, params, args, kwargs):
+
+        tag = cls.cache_tag(kwargs)
+        cache = cls.cache_param_values.setdefault(tag, [])
+        if cache:
+            # return cached params but overwrite branch(es), dataset, and output/status options
+            dct_update = dict(branch=int(kwargs.get("branch", -1)))
+            if "dataset" in kwargs:
+                dct_update["dataset"] = kwargs["dataset"]
+            if "shift" in kwargs:
+                dct_update["shift"] = kwargs["shift"]
+            cached_out = cache[0] | dct_update | {
+                k: kwargs.get(k, ()) for k in
+                ["print_output", "branches", "print_status", "remove_output", "fetch_output"]
+            }
+
+        # call the normal get_param_values first time, or by request
+        if any([
+            check_cached_params := kwargs.get("check_cached_params", False),
+            no_cached_params := kwargs.get("no_cached_params", False),
+            first_call := not cache,
+        ]):
+            if time_get_params := kwargs.get("time_get_params", False):
+                tmr = Timer(f"{tag} get_param_values")
+
+            out = super().get_param_values(params, args, kwargs)
+
+            if time_get_params:
+                tmr("end of call")
+
+            dct_out = dict(out)
+
+        # store first call to cache
+        if first_call:
+            cache.append(dct_out)
+            cls.cache_param_values[cls.cache_tag(dct_out)] = cache
+        # compare cached output to normal call
+        elif check_cached_params:
+            for key, value in dct_out.items():
+                cached_val = cached_out.get(key, None)
+                if cached_val != value:
+                    logger.warning(
+                        "normal call to get_param_values yielded output that differs from cached output\n"
+                        f"Normal call -> {key} [key]: {value}\n"
+                        f"Cached call -> {key} [key]: {cached_val}",
+                    )
+
+        return out if no_cached_params or first_call else list(cached_out.items())

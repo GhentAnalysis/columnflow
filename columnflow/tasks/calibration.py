@@ -8,7 +8,7 @@ import luigi
 import law
 
 from columnflow.tasks.framework.base import Requirements, AnalysisTask, DatasetTask, wrapper_factory
-from columnflow.tasks.framework.mixins import CalibratorMixin, ChunkedIOMixin
+from columnflow.tasks.framework.mixins import CalibratorMixin, ChunkedIOMixin, ParamsCacheMixin
 from columnflow.tasks.framework.remote import RemoteWorkflow
 from columnflow.tasks.external import GetDatasetLFNs
 from columnflow.util import maybe_import, ensure_proxy, dev_sandbox
@@ -17,6 +17,7 @@ ak = maybe_import("awkward")
 
 
 class CalibrateEvents(
+    ParamsCacheMixin,
     CalibratorMixin,
     ChunkedIOMixin,
     DatasetTask,
@@ -33,6 +34,7 @@ class CalibrateEvents(
 
     # default sandbox, might be overwritten by calibrator function
     sandbox = dev_sandbox(law.config.get("analysis", "default_columnar_sandbox"))
+    cache_param_sep = ["calibrator"]
 
     # upstream requirements
     reqs = Requirements(
@@ -83,6 +85,7 @@ class CalibrateEvents(
 
         return outputs
 
+    @law.decorator.notify
     @law.decorator.log
     @ensure_proxy
     @law.decorator.localize(input=False)
@@ -154,11 +157,10 @@ class CalibrateEvents(
                 self.chunked_io.queue(sorted_ak_to_parquet, (events, chunk.abspath))
 
         # merge output files
-        with output["columns"].localize("w") as outp:
-            sorted_chunks = [output_chunks[key] for key in sorted(output_chunks)]
-            law.pyarrow.merge_parquet_task(
-                self, sorted_chunks, outp, local=True, writer_opts=self.get_parquet_writer_opts(),
-            )
+        sorted_chunks = [output_chunks[key] for key in sorted(output_chunks)]
+        law.pyarrow.merge_parquet_task(
+            self, sorted_chunks, output["columns"], local=True, writer_opts=self.get_parquet_writer_opts(),
+        )
 
 
 # overwrite class defaults

@@ -6,17 +6,7 @@ Collection of general helpers and utilities.
 
 from __future__ import annotations
 
-__all__ = [
-    "get_root_processes_from_campaign",
-    "get_datasets_from_process",
-    "add_shift_aliases",
-    "get_shifts_from_sources",
-    "expand_shift_sources",
-    "create_category_id",
-    "add_category",
-    "create_category_combinations",
-    "verify_config_processes",
-]
+__all__ = []
 
 import re
 import itertools
@@ -151,7 +141,6 @@ def get_datasets_from_process(
             J --> D
 
     and datasets existing for
-
 
     1. single top - s channel - t
     2. single top - s channel - tbar
@@ -353,11 +342,21 @@ def create_category_id(
     return h
 
 
-def add_category(config: od.Config, **kwargs) -> od.Category:
+def add_category(
+    config: od.Config,
+    parent: od.Config | od.Category | od.Channel | None = None,
+    **kwargs,
+) -> od.Category:
     """
     Creates a :py:class:`order.Category` instance by forwarding all *kwargs* to its constructor,
-    adds it to a :py:class:`order.Config` object *config* and returns it. When *kwargs* do not
-    contain a field *id*, :py:func:`create_category_id` is used to create one.
+    adds it to a *parent* object. such as a :py:class:`order.Config` or an other
+    :py:class:`order.Category`, and returns it. When *kwargs* do not contain a field *id*,
+    :py:func:`create_category_id` is used to create one.
+
+    :param config: :py:class:`order.Config` object for which the category is created.
+    :param parent: Parent object to which the category is added. If *None*, *config* is used.
+    :param kwargs: Keyword arguments forwarded to the category constructor.
+    :return: The newly created category instance.
     """
     if "name" not in kwargs:
         fields = ",".join(map(str, kwargs))
@@ -366,7 +365,10 @@ def add_category(config: od.Config, **kwargs) -> od.Category:
     if "id" not in kwargs:
         kwargs["id"] = create_category_id(config, kwargs["name"])
 
-    return config.add_category(**kwargs)
+    if parent is None:
+        parent = config
+
+    return parent.add_category(**kwargs)
 
 
 def create_category_combinations(
@@ -419,8 +421,24 @@ def create_category_combinations(
             return {"id": "+"}
 
         create_category_combinations(cfg, categories, name_fn, kwargs_fn)
+
+    :param config: :py:class:`order.Config` object for which the categories are created.
+    :param categories: Dictionary that maps group names to sequences of categories.
+    :param name_fn: Callable that receives a dictionary mapping group names to categories and
+        returns the name of the newly created category.
+    :param kwargs_fn: Callable that receives a dictionary mapping group names to categories and
+        returns a dictionary of keyword arguments that are forwarded to the category constructor.
+    :param skip_existing: If *True*, skip the creation of a category when it already exists in
+        *config*.
+    :param skip_fn: Callable that receives a dictionary mapping group names to categories and
+        returns *True* if the combination should be skipped.
+    :raises TypeError: If *name_fn* is not a callable.
+    :raises TypeError: If *kwargs_fn* is not a callable when set.
+    :raises ValueError: If a non-unique category id is detected.
+    :return: Number of newly created categories.
     """
     n_created_categories = 0
+    unique_ids_cache = {cat.id for cat, _, _ in config.walk_categories()}
     n_groups = len(categories)
     group_names = list(categories.keys())
 
@@ -465,6 +483,17 @@ def create_category_combinations(
                 # create the new category
                 cat = od.Category(name=cat_name, **kwargs)
                 n_created_categories += 1
+
+                # ID uniqueness check: raise an error when a non-unique id is detected for a new category
+                if isinstance(kwargs["id"], int):
+                    if kwargs["id"] in unique_ids_cache:
+                        matching_cat = config.get_category(kwargs["id"])
+                        if matching_cat.name != cat_name:
+                            raise ValueError(
+                                f"non-unique category id '{kwargs['id']}' for '{cat_name}' has already been used for "
+                                f"category '{matching_cat.name}'",
+                            )
+                    unique_ids_cache.add(kwargs["id"])
 
                 # find direct parents and connect them
                 for _parent_group_names in itertools.combinations(_group_names, _n_groups - 1):

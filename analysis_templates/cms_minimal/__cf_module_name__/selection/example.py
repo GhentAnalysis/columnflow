@@ -8,7 +8,7 @@ from collections import defaultdict
 
 from columnflow.selection import Selector, SelectionResult, selector
 from columnflow.selection.stats import increment_stats
-from columnflow.selection.util import sorted_indices_from_mask
+from columnflow.columnar_util import sorted_indices_from_mask
 from columnflow.production.processes import process_ids
 from columnflow.production.cms.mc_weight import mc_weight
 from columnflow.util import maybe_import
@@ -26,7 +26,7 @@ ak = maybe_import("awkward")
 
 
 @selector(
-    uses={"Muon.pt", "Muon.eta"},
+    uses={"Muon.{pt,eta,phi,mass}"},
 )
 def muon_selection(
     self: Selector,
@@ -53,7 +53,7 @@ def muon_selection(
 
 
 @selector(
-    uses={"Jet.pt", "Jet.eta"},
+    uses={"Jet.{pt,eta,phi,mass}"},
 )
 def jet_selection(
     self: Selector,
@@ -82,10 +82,20 @@ def jet_selection(
     )
 
 
+@jet_selection.init
+def jet_selection_init(self: Selector) -> None:
+    # register shifts
+    self.shifts |= {
+        shift_inst.name
+        for shift_inst in self.config_inst.shifts
+        if shift_inst.has_tag(("jec", "jer"))
+    }
+
 #
 # exposed selectors
 # (those that can be invoked from the command line)
 #
+
 
 @selector(
     uses={
