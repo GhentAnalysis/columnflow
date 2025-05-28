@@ -4,6 +4,7 @@ Producer that produces a column Jet.btag based on the default_btag Algorithm pro
 
 from __future__ import annotations
 
+import os
 import law
 import order as od
 from typing import Iterable
@@ -286,12 +287,13 @@ def fixed_wp_btag_weights_init(self: Producer) -> None:
             "example: config.x.btag_dataset_groups = {'ttx': ['ttztollnunu_m10_amcatnlo','tt_sl_powheg']}",
         )
 
-    self.has_external_efficiencies = self.dataset_group in self.get_btag_eff(self.config_inst.x.external_files)
+    btag_eff_file = self.get_btag_eff(self.config_inst.x.external_files).get(self.dataset_group, None)
+    self.has_external_efficiencies = btag_eff_file is not None and os.path.exists(btag_eff_file)
 
 @fixed_wp_btag_weights.setup
 def fixed_wp_btag_weights_setup(
     self: Producer,
-    task: law.Task, 
+    task: law.Task,
     reqs: dict,
     inputs: dict,
     reader_targets: law.util.InsertableDict,
@@ -421,7 +423,7 @@ def btag_efficiency_hists_init(self: Producer) -> None:
 @btag_efficiency_hists.setup
 def btag_efficiency_hists_setup(
     self: Producer,
-    task: law.Task, 
+    task: law.Task,
     reqs: dict,
     inputs: dict,
     reader_targets: law.util.InsertableDict,
