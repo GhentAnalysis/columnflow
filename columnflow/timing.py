@@ -61,6 +61,11 @@ def timer(func=None, *, tag=None, min_dt=5, count=False, min_count=10):
     return outer if func is None else outer(func)
 
 
+tzero = time.time()
+time_dct = defaultdict(lambda: 0.)
+time_dct_prev = defaultdict(lambda: 0.)
+
+
 class Timer:
     """
     Class to create timer objects.
@@ -69,22 +74,37 @@ class Timer:
     tmr = Timer("my_timer")  # at t0
     ...
     tmr("checkpoint 1") # at t1
-    OUT: my_timer checkpoint 1 t1 - t0
+    OUT: my_timer checkpoint 1 (t1 - t0) ...
     ...
     tmr("checkpoint 2") # at t2
-    OUT: my_timer checkpoint 2 t2 - t1
+    OUT: my_timer checkpoint 2 (t2 - t1) ...
+
+    Also the accumulated sum of the reported time intervals
+    (per checkpoint tag) is reported, together with the total time lapsed
+    (and the fraction)
 
     """
-    def __init__(self, tag):
-        self.t0 = self.tp = time.time()
-        self.dt = 5
+    def __init__(self, tag, report_interval=1):
+        self.previous_call_time = self.time()
+        self.report_interval = report_interval
         self.tag = "\033[94m" + tag + "\033[0m"
-        print("\033[1msetup timer", tag, "\033[0m")
 
-    def __call__(self, tag=None, force=False):
-        t = time.time()
-        # if (t := time.time()) - self.tp > self.dt:
+    def __call__(self, tag=None, force=False, silent=False):
+        t = self.time()
+        ftag = self.tag + ("" if tag is None else f"\033[96m {tag}\033[0m")
+        time_dct[ftag] += (dt := t - self.previous_call_time)
+        if not silent and (force or (time_dct[ftag] - time_dct_prev[ftag] > self.report_interval)):
+            print(ftag, round(dt, 4), "s,", *self.total_time(tag, t))
+            time_dct_prev[ftag] = time_dct[ftag]
+        self.previous_call_time = t
+        return dt
+
+    def total_time(self, tag=None, t=None):
         tag = self.tag + ("" if tag is None else f"\033[96m {tag}\033[0m")
-        if (t - self.tp > 0.01) or force:
-            print(tag, t - self.tp)
-        self.tp = t
+        t = t or self.time()
+        total_time = t - tzero
+        return f"{time_dct[tag] / 60:.2f}min", f"{total_time / 60:2f}min", f"{time_dct[tag] / total_time * 100:.2f}%"
+
+    @classmethod
+    def time(cls):
+        return time.time()

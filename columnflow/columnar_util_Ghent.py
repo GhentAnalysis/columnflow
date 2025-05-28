@@ -13,6 +13,7 @@ __all__ = [
 
 from columnflow.util import maybe_import
 from columnflow.types import Sequence
+from columnflow.columnar_util import remove_ak_column, has_ak_column
 
 ak = maybe_import("awkward")
 coffea = maybe_import("coffea")
@@ -45,3 +46,14 @@ def safe_concatenate(arrays, *args, **kwargs):
         c2 = safe_concatenate(arrays[n // 2:], *args, **kwargs)
         return ak.concatenate([c1, c2], *args, **kwargs)
     return ak.concatenate(arrays, *args, **kwargs)
+
+
+def remove_obj_overlap(*arrays, objects=("Jet", "Electron", "Muon")):
+    arrays = list(arrays)
+    for obj in objects:
+        for i1, c in enumerate(arrays[1:]):
+            i1 += 1
+            for i2, c0 in enumerate(arrays[:i1]):
+                if has_ak_column(c0, obj) and has_ak_column(c, obj):
+                    arrays[i2] = c0 = remove_ak_column(c0, obj)
+    return arrays

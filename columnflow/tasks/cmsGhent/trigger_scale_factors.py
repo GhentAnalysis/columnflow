@@ -9,7 +9,7 @@ import luigi
 from columnflow.types import Any
 from columnflow.tasks.framework.base import Requirements, ConfigTask
 from columnflow.tasks.framework.mixins import (
-    CalibratorsMixin, SelectorMixin, DatasetsMixin,
+    CalibratorClassesMixin, SelectorClassMixin, DatasetsMixin,
 )
 from columnflow.tasks.framework.plotting import (
     PlotBase, PlotBase2D, PlotBase1D,
@@ -29,6 +29,7 @@ logger = law.logger.get_logger(__name__)
 
 class TriggerConfigMixin(ConfigTask):
     exclude_index = True
+    single_config = True
 
     trigger_config = luigi.Parameter(description="Trigger config to use to measure", default=None)
 
@@ -109,13 +110,13 @@ class TriggerDatasetsMixin(
         return parts
 
     @classmethod
-    def resolve_param_values(cls, params: law.util.InsertableDict[str, Any]) -> law.util.InsertableDict[str, Any]:
+    def resolve_param_values_pre_init(cls, params: dict[str, Any]) -> dict[str, Any]:
         redo_default_datasets = False
         # when empty, use the config default
         if not params.get("datasets", None):
             redo_default_datasets = True
 
-        params = super().resolve_param_values(params)
+        params = super().resolve_param_values_pre_init(params)
         if not redo_default_datasets:
             return params
 
@@ -130,8 +131,8 @@ class TriggerDatasetsMixin(
 class TriggerScaleFactors(
     TriggerDatasetsMixin,
     SelectionEfficiencyHistMixin,
-    SelectorMixin,
-    CalibratorsMixin,
+    CalibratorClassesMixin,
+    SelectorClassMixin,
     law.LocalWorkflow,
     RemoteWorkflow,
 ):
@@ -265,10 +266,12 @@ class OutputBranchWorkflow(
 class PlotTriggerScaleFactorsBase(
     TrigPlotLabelMixin,
     TriggerDatasetsMixin,
-    SelectorMixin,
-    CalibratorsMixin,
+    SelectorClassMixin,
+    CalibratorClassesMixin,
     OutputBranchWorkflow,
 ):
+    resolution_task_cls = TriggerScaleFactors
+
     reqs = Requirements(
         RemoteWorkflow.reqs,
         TriggerScaleFactors=TriggerScaleFactors,
@@ -283,11 +286,8 @@ class PlotTriggerScaleFactorsBase(
     sandbox = dev_sandbox(law.config.get("analysis", "default_columnar_sandbox"))
 
     @classmethod
-    def resolve_param_values(
-        cls,
-        params: law.util.InsertableDict[str, Any],
-    ) -> law.util.InsertableDict[str, Any]:
-        params = super().resolve_param_values(params)
+    def resolve_param_values_pre_init(cls, params: dict[str, Any]) -> dict[str, Any]:
+        params = super().resolve_param_values_pre_init(params)
 
         if (config_inst := params.get("config_inst")) and (datasets := params.get("datasets")):
             if params.get("process") is None:
@@ -504,8 +504,8 @@ class PlotTriggerScaleFactorsHist(
     TrigPlotLabelMixin,
     TriggerDatasetsMixin,
     SelectionEfficiencyHistMixin,
-    SelectorMixin,
-    CalibratorsMixin,
+    SelectorClassMixin,
+    CalibratorClassesMixin,
     law.LocalWorkflow,
     RemoteWorkflow,
     PlotBase1D,
