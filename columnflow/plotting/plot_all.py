@@ -212,6 +212,7 @@ def plot_all(
         (ax, rax) = axs
     else:
         fig, ax = plt.subplots(gridspec_kw=grid_spec)
+        #fig, ax = plt.subplots(gridspec_kw=grid_spec, figsize=(10,8))
         axs = (ax,)
 
     # invoke all plots methods
@@ -354,8 +355,8 @@ def plot_all(
     annotate_kwargs = {
         "text": "",
         "xy": (
-            get_position(*ax.get_xlim(), factor=0.05, logscale=log_x),
-            get_position(*ax.get_ylim(), factor=0.95, logscale=log_y),
+            get_position(*ax.get_xlim(), factor=0.03, logscale=log_x),
+            get_position(*ax.get_ylim(), factor=0.97, logscale=log_y),
         ),
         "xycoords": "data",
         "color": "black",

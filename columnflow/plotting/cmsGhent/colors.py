@@ -1,16 +1,43 @@
+
+import order as od
+import numpy as np
+import colorsys
+
+def change_sat(color, saturation_factor):
+    clr = od.ColorMixin(color=color)
+    hls = colorsys.rgb_to_hls(*clr.color)
+    
+    # Convert back to RGB
+    clr = colorsys.hls_to_rgb(hls[0], hls[1], hls[2]*saturation_factor)
+
+    return clr
+
+def change_shade(color, factor):
+    clr = od.ColorMixin(color=color).color
+    scale = lambda x: x + (1-x)*factor
+    clr = ( scale(clr[0]), scale(clr[1]), scale(clr[2]) )
+    return clr
+    
+
 class DefaultColors:
     def __init__(self):
+        self.white = "#fefefe"
+        self.grey_pure = "#999999"
         self.grey = "#94a4a2"
         self.grey2 = "#717581"
         self.grey3 = "#5D5F66"
         self.grey4 = "#44464A"
         self.grey5 = "#3D3E3F"
+        self.black = "#111111"
 
     def pastel(self):
         return PastelColors()
 
     def rainbow(self):
         return RainbowColors()
+
+    def light_rainbow(self):
+        return LightRainbow()
 
     def cat_six(self):
         return CATColorsSix()
@@ -22,7 +49,7 @@ class DefaultColors:
         return BTVColors()
 
     def __getitem__(self, i):
-        return self.colors[i]
+        return self.colors[i%len(self.colors)]
 
 class BTVColors(DefaultColors):
     def __init__(self):
@@ -130,4 +157,30 @@ class PastelColors(DefaultColors):
             self.violet,
             self.purple,
             self.blue,
+        ]
+
+class LightRainbow(DefaultColors):
+    def __init__(self):
+        super().__init__()
+        self.yellow = "#fbf8cc"
+        self.orange = "#fde4cf"
+        self.salmon = "#ffcfd2"
+        self.pink = "#f1c0e8"
+        self.violet = "#cfbaf0"
+        self.blue = "#a3c4f3"
+        self.blue_light = "#90dbf4"
+        self.blue_light2 = "#8eecf5"
+        self.teal = "#98f5e1"
+        self.green = "#89fbc0"
+        self.colors = [
+            self.yellow,
+            self.orange,
+            self.salmon,
+            self.pink,
+            self.violet,
+            self.blue,
+            self.blue_light,
+            self.blue_light2,
+            self.teal,
+            self.green,
         ]

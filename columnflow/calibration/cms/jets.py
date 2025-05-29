@@ -593,7 +593,8 @@ def jec_setup(self: Calibrator, reqs: dict, inputs: dict, reader_targets: Insert
                 jec_era = "Run" + self.dataset_inst.get_aux("era")
 
         return [
-            f"{jec.campaign}_{jec_era}_{jec.version}_DATA_{name}_{jec.jet_type}"
+            f"{jec.campaign}_{jec.version}_DATA_{name}_{jec.jet_type}" # TODO for 2024 currently no era division
+            #f"{jec.campaign}_{jec_era}_{jec.version}_DATA_{name}_{jec.jet_type}"
             if is_data else
             f"{jec.campaign}_{jec.version}_MC_{name}_{jec.jet_type}"
             for name in names
