@@ -130,10 +130,11 @@ def plot_variable_variants(
     """
     TODO.
     """
+
     hists = remove_residual_axis(hists, "shift")
 
     variable_inst = variable_insts[0]
-    hists = apply_variable_settings(hists, variable_insts, variable_settings)
+    hists = apply_variable_settings(hists, variable_insts, variable_settings)[0]
     if density:
         hists = apply_density(hists, density)
 

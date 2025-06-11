@@ -829,8 +829,8 @@ class PlotCutflowVariables1D(_PlotCutflowVariables1D):
     plot_function_steps = "columnflow.plotting.plot_functions_1d.plot_variable_variants"
 
     per_plot = luigi.ChoiceParameter(
-        choices=("processes", "steps"),
-        default="processes",
+        choices=("steps"),
+        default="steps",
         description="what to show per plot; choices: 'processes' (one plot per selection step, all "
         "processes in one plot); 'steps' (one plot per process, all selection steps in one plot); "
         "default: processes",
