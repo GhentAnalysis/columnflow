@@ -102,9 +102,6 @@ class CreateCutflowHistograms(
         "there, 'raise' is assumed",
     )
 
-    def create_branch_map(self):
-        # dummy branch map
-        return [None]
 
     def workflow_requires(self):
         reqs = super().workflow_requires()
@@ -210,7 +207,7 @@ class CreateCutflowHistograms(
                 expressions[variable_inst.name] = expr
 
         # prepare columns to load
-        load_columns = read_columns | set(mandatory_coffea_columns)
+        load_columns = read_columns | {Route(c) for c in mandatory_coffea_columns}
         load_sel_columns = {Route("steps.*")}
 
         # prepare histograms
