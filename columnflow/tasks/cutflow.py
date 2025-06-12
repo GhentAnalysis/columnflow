@@ -102,7 +102,6 @@ class CreateCutflowHistograms(
         "there, 'raise' is assumed",
     )
 
-
     def workflow_requires(self):
         reqs = super().workflow_requires()
         reqs["lfns"] = self.reqs.GetDatasetLFNs.req(self)
