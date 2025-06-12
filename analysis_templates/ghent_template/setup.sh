@@ -30,6 +30,7 @@ setup___cf_short_name_lc__() {
     #
     # load cf setup helpers
     #
+
     local shell_is_zsh="$( [ -z "${ZSH_VERSION}" ] && echo "false" || echo "true" )"
     local this_file="$( ${shell_is_zsh} && echo "${(%):-%x}" || echo "${BASH_SOURCE[0]}" )"
     local this_dir="$( cd "$( dirname "${this_file}" )" && pwd )"
@@ -46,7 +47,6 @@ setup___cf_short_name_lc__() {
         >&2 echo "re-running the setup requires a new shell"
         return "1"
     fi
-
 
     #
     # prepare local variables
@@ -127,30 +127,15 @@ setup___cf_short_name_lc__() {
     fi
 
     #
-    # git hooks
+    # additional common cf setup steps
     #
 
-    if ! ${CF_REMOTE_ENV}; then
-        cf_setup_git_hooks || return "$?"
-    fi
-
+    cf_setup_post_install || return "$?"
 
     #
-    # law setup
-    #
-
-    export LAW_HOME="${LAW_HOME:-${__cf_short_name_uc___BASE}/.law}"
-    export LAW_CONFIG_FILE="${LAW_CONFIG_FILE:-${__cf_short_name_uc___BASE}/law.cfg}"
-
-    if ! ${CF_REMOTE_ENV} && which law &> /dev/null; then
-        # source law's bash completion scipt
-        source "$( law completion )" ""
-
-        # silently index
-        law index -q
-    fi
-
     # finalize
+    #
+
     export __cf_short_name_uc___SETUP="true"
 }
 

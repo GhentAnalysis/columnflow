@@ -6,14 +6,11 @@ Definition of categories.
 
 import law
 
-from columnflow.util import call_once_on_config
-
 import order as od
 
 logger = law.logger.get_logger(__name__)
 
 
-@call_once_on_config()
 def add_categories_selection(config: od.Config) -> None:
     """
     Adds categories to a *config*, that are typically produced in `SelectEvents`.
@@ -40,7 +37,6 @@ def add_categories_selection(config: od.Config) -> None:
         )
 
 
-@call_once_on_config()
 def add_categories_production(config: od.Config) -> None:
     """
     Adds categories to a *config*, that are typically produced in `ProduceColumns`.
