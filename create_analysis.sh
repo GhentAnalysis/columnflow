@@ -17,7 +17,7 @@ create_analysis() {
     local this_file="$( ${shell_is_zsh} && echo "${(%):-%x}" || echo "${BASH_SOURCE[0]}" )"
     local this_dir="$( cd "$( dirname "${this_file}" )" && pwd )"
     local exec_dir="$( pwd )"
-    local fetch_cf_branch="GhentAnalysis/master-merge-v0.3.0"
+    local fetch_cf_branch="GhentAnalysis/master"
     local fetch_cmsdb_branch="GhentAnalysis/master"
     local fetch_normtag_branch="master"
     local verbose="${CF_CREATE_ANALYSIS_VERBOSE:-false}"
