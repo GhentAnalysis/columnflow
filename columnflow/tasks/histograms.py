@@ -261,6 +261,14 @@ class CreateHistograms(
                         # apply it
                         fill_data[variable_inst.name] = expr(masked_events)
 
+                    '''
+                    if var_key == "bb_mass":
+                        print(var_key)
+                        print(fill_data)
+                        print(fill_data["bb_mass"])
+                        breakpoint()
+                    ''' 
+                    print(var_key)
                     # fill it
                     fill_hist(
                         histograms[var_key],
