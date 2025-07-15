@@ -193,7 +193,7 @@ class BTagEfficiencyPlot(
 
             # custom styling:
             label_values = np.round(h_sys.values() * 100, decimals=1)
-            style_config = {"plot2d_cfg": {"cmap": "PiYG", "labels": label_values}}
+            style_config = {"plot2d_cfg": {"cmap": "Blues", "labels": label_values}}
             # call the plot function
             fig, _ = self.call_plot_func(
                 self.plot_function,

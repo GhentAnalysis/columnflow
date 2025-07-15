@@ -362,7 +362,7 @@ class PlotTriggerScaleFactors2D(
 
         label_values = np.round(hist2d.values(), decimals=2)
         style_config = {
-            "plot2d_cfg": {"cmap": "PiYG", "labels": label_values},
+            "plot2d_cfg": {"cmap": "Blues", "labels": label_values},
             "annotate_cfg": {"bbox": dict(alpha=0.5, facecolor="white")},
         }
 
