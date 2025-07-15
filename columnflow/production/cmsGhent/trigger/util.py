@@ -8,6 +8,7 @@ import order as od
 
 from columnflow.production import Producer
 from columnflow.util import maybe_import
+from columnflow.plotting.plot_util import use_flow_bins
 
 hist = maybe_import("hist")
 Hist = hist.Hist
@@ -17,22 +18,37 @@ logger = law.logger.get_logger(__name__)
 
 
 def reduce_hist(
-    hist: Hist,
+    histogram: Hist,
     reduce: str | Collection[str] | dict[str, sum | int] | Ellipsis = Ellipsis,
     exclude: str | Collection[str] = tuple(),
+    keepdims=True,
 ):
     exclude = law.util.make_list(exclude)
     if reduce is Ellipsis:
-        hist = hist.project(*exclude)
-    elif reduce is not None:
-        if not isinstance(reduce, dict):
-            reduce = law.util.make_list(reduce)
-        hist = hist[{
-            v: (reduce[v] if isinstance(reduce, dict) else sum)
-            for v in reduce
-            if v not in exclude}
-        ]
-    return hist
+        return histogram.project(*exclude)
+    elif reduce is None:
+        return histogram
+
+    if not isinstance(reduce, dict):
+        reduce = law.util.make_list(reduce)
+
+    h_idx = {}
+    for v in reduce:
+        if v in exclude:
+            continue
+        if isinstance(reduce, dict):
+            idx = reduce[v]
+            if keepdims and isinstance(idx, int):
+                idx = [idx]
+            h_idx[v] = idx
+        elif keepdims:
+            n_bins = len(histogram.axes[v])
+            h_idx[v] = hist.rebin(groups=[n_bins])
+            histogram = use_flow_bins(histogram, axis_name=v)
+        else:
+            h_idx[v] = sum
+
+    return histogram[h_idx]
 
 
 def loop_hists(*hists: Hist, exclude_axes: str | Collection[str] = tuple()) -> tuple[dict[str, int], list[Hist]]:
