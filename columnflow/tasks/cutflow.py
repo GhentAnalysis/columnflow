@@ -912,7 +912,6 @@ class PlotCutflowVariables1D(_PlotCutflowVariables1D):
                     if step in h.axes["step"]
                 )
 
-                breakpoint()
                 # call the plot function
                 fig, _ = self.call_plot_func(
                     self.plot_function,
