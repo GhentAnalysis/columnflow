@@ -52,6 +52,7 @@ def plot_variable_stack(
     yscale: str | None = "",
     process_settings: dict | None = None,
     variable_settings: dict | None = None,
+    breakandshow: bool = False,
     **kwargs,
 ) -> plt.Figure:
     variable_inst = variable_insts[0]
@@ -110,6 +111,14 @@ def plot_variable_stack(
     # additional, plot function specific changes
     if shape_norm:
         style_config["ax_cfg"]["ylabel"] = "Normalized entries"
+
+    if breakandshow:
+        print("set `show=False` to continue like normally")
+        show = True
+        while show:
+            plot_all(plot_config, style_config, **kwargs)
+            plt.show()
+            breakpoint()
 
     return plot_all(plot_config, style_config, **kwargs)
 
