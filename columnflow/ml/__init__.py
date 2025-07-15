@@ -412,6 +412,28 @@ class MLModel(Derivable):
         """
         return list(requested_producers)
 
+    def training_params(
+        self: MLModel,
+        analysis_inst: od.Analysis,
+        requested_params: dict[Any],
+    ) -> list[str]:
+        """
+        Given a parameter dict **requested_params** of a *analysis_inst*, this method can alter and/or
+        replace them to define a different set of producers for the evaluation phase of the ML
+        pipeline. This can be helpful in cases where the producers in the evaluation phase
+        and subsequent tasks are intended to diverge.
+
+        Example usage:
+
+        .. literalinclude:: ../../user_guide/examples/ml_code.py
+            :language: python
+            :pyobject: TestModel.evaluation_producers
+
+        :param analysis_inst: Analysis instance to extract the *requested_producers* from
+        :returns: Set with str of the *requested_producers*
+        """
+        return requested_params
+
     def evaluation_producers(
         self: MLModel,
         analysis_inst: od.Analysis,

@@ -1371,6 +1371,7 @@ class MLModelTrainingMixin(
         params["producers"] = law.util.make_tuple(
             ml_model_inst.training_producers(analysis_inst, params["producers"]),
         )
+        params |= ml_model_inst.training_params(analysis_inst, params)
 
         return params
 
