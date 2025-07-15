@@ -211,7 +211,7 @@ def calc_auxiliary_unc(
     auxiliaries: list[str],
     apply_aux_to: Literal["data", "mc", "both"] = "both",
     dev_func: str | Callable[
-        [np.ndarray, Collection[int]],  # an array, indices of auxilaray indices
+        [np.ndarray, tuple[int]],  # an array, indices of auxilaray indices
         np.ndarray | tuple[np.ndarray, np.ndarray],  # symmetric or down, up
     ] = "max_dev_sym",
 ):
