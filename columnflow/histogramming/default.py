@@ -20,6 +20,9 @@ ak = maybe_import("awkward")
 hist = maybe_import("hist")
 
 
+logger = law.logger.get_logger(__name__)
+
+
 @hist_producer()
 def cf_default(self: HistProducer, events: ak.Array, **kwargs) -> ak.Array:
     """
@@ -115,11 +118,13 @@ def all_weights(self: HistProducer, events: ak.Array, **kwargs) -> ak.Array:
     if self.dataset_inst.is_mc and len(events):
         # multiply weights from global config `event_weights` aux entry
         for column in self.config_inst.x.event_weights:
+            logger.info_once(column)
             weight = weight * Route(column).apply(events)
 
         # multiply weights from dataset-specific `event_weights` aux entry
         for column in self.dataset_inst.x("event_weights", []):
             if has_ak_column(events, column):
+                logger.info_once(f"{self.dataset_inst.name} {column}")
                 weight = weight * Route(column).apply(events)
             else:
                 self.logger.warning_once(
