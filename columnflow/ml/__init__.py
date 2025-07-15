@@ -18,7 +18,7 @@ from columnflow.columnar_util import Route
 
 ak = maybe_import("awkward")
 
-breakpoint()
+breakpoint()  # noqa
 
 class MLModel(Derivable):
     """
