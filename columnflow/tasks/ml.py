@@ -688,6 +688,7 @@ class MLEvaluation(
         from columnflow.columnar_util import (
             Route, RouteFilter, sorted_ak_to_parquet, update_ak_array, add_ak_aliases,
         )
+        from columnflow.columnar_util_Ghent import remove_obj_overlap
 
         # prepare inputs and outputs
         reqs = self.requires()
@@ -758,6 +759,7 @@ class MLEvaluation(
                     self.raise_if_overlapping([events] + list(columns))
 
                 # add additional columns
+                events, *columns = remove_obj_overlap(events, *columns)
                 events = update_ak_array(events, *columns)
 
                 # add aliases
