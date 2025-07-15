@@ -32,6 +32,11 @@ jobs:
   breaks:
     runs-on: ubuntu-latest
     steps:
+      - name: Checkout ⬇️
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+          submodules: recursive
       - name: Check for accidental breakpoint() usage ⛔️
         run: |
           echo "🔍 Scanning for active 'breakpoint()' calls not commented out and not marked with '# noqa'..."
