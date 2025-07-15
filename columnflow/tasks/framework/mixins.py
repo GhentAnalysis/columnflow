@@ -2101,24 +2101,26 @@ class DatasetsMixin(ConfigTask):
             cls.datasets_multi = None
 
     @classmethod
+    def resolve_datasets(cls, config_inst: od.Config, datasets: Any) -> tuple[list[str], list[str]]:
+        """
+        helper to resolve processes and datasets for one config
+        """
+        if datasets:
+            datasets_orig = datasets
+            datasets = cls.find_config_objects(
+                names=datasets,
+                container=config_inst,
+                object_cls=od.Dataset,
+                groups_str="dataset_groups",
+            )
+            if not datasets and not cls.allow_empty_datasets:
+                raise ValueError(f"no datasets found matching {datasets_orig}")
+
+        return datasets
+
+    @classmethod
     def resolve_param_values_pre_init(cls, params: dict[str, Any]) -> dict[str, Any]:
         params = super().resolve_param_values_pre_init(params)
-
-        # helper to resolve processes and datasets for one config
-        def resolve(config_inst: od.Config, datasets: Any) -> tuple[list[str], list[str]]:
-            if datasets != law.no_value:
-                datasets_orig = datasets
-                if datasets:
-                    datasets = cls.find_config_objects(
-                        names=datasets,
-                        container=config_inst,
-                        object_cls=od.Dataset,
-                        groups_str="dataset_groups",
-                    )
-                if not datasets and not cls.allow_empty_datasets:
-                    raise ValueError(f"no datasets found matching {datasets_orig}")
-
-            return datasets
 
         # get processes and datasets
         single_config = cls.has_single_config()
@@ -2126,19 +2128,18 @@ class DatasetsMixin(ConfigTask):
 
         # "broadcast" to match number of configs
         config_insts = params.get("config_insts")
-        datasets = cls.broadcast_to_configs(datasets, "datasets", len(config_insts))
 
         # perform resolution per config
         multi_datasets = []
         for config_inst, _datasets in zip(config_insts, datasets):
-            _datasets = resolve(config_inst, _datasets)
+            _datasets = cls.resolve_datasets(config_inst, _datasets)
             multi_datasets.append(tuple(_datasets) if _datasets != law.no_value else None)
 
         params["datasets"] = multi_datasets[0] if single_config else tuple(multi_datasets)
 
         # store instances
         params["dataset_insts"] = {
-            config_inst: list(map(config_inst.get_dataset, datasets))
+            config_inst: datasets and list(map(config_inst.get_dataset, datasets))
             for config_inst, datasets in zip(config_insts, multi_datasets)
         }
         return params

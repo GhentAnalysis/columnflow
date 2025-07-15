@@ -11,6 +11,7 @@ from columnflow.production import producer, Producer
 from columnflow.util import maybe_import, DotDict
 from columnflow.columnar_util import has_ak_column, Route
 from columnflow.hist_util import fill_hist
+from columnflow.reduction.util import create_collections_from_masks
 import columnflow.production.cmsGhent.trigger.util as util
 from columnflow.selection import SelectionResult
 import order as od
@@ -45,17 +46,12 @@ def trigger_efficiency_hists(
     if not ak.any(no_trigger_selection):
         return events
 
-    selected_events = ak.Array({
-        obj: events[obj][object_mask.get(obj, results.objects[obj][obj])]
-        for obj in self.objects
-    } | {
-        "mc_weight": events.mc_weight if self.dataset_inst.is_mc else np.ones(len(events)),
-        "HLT": events.HLT,
-    })[no_trigger_selection]
+    selected_events = create_collections_from_masks(events, {obj: m for obj, m in results.objects.items()})
+    selected_events = selected_events[no_trigger_selection]
 
     fill_data = {
         # broadcast event weight and process-id to jet weight
-        "weight": selected_events.mc_weight,
+        "weight": selected_events.mc_weight if self.dataset_inst.is_mc else np.ones(len(selected_events)),
     }
 
     # loop over variables in which the efficiency is binned
