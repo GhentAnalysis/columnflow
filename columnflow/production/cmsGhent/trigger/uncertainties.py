@@ -1,6 +1,5 @@
 from __future__ import annotations
 from typing import Callable, Sequence, Literal
-from collections.abc import Collection
 
 from columnflow.util import maybe_import
 from columnflow.production.cmsGhent.trigger.Koopman_test import koopman_confint
@@ -257,7 +256,7 @@ def calc_auxiliary_unc(
     if isinstance(dev_func, str):
         dev_func = dev_funcs[dev_func]
 
-    nom_hist = {dt: util.reduce_hist(histograms[dt], reduce=auxiliaries) for dt in histograms}
+    nom_hist = {dt: util.reduce_hist(histograms[dt], reduce=auxiliaries, keepdims=True) for dt in histograms}
     eff = {dt: util.calculate_efficiency(nom_hist[dt], *triggers) for dt in nom_hist}
     sf = eff["data"] / eff["mc"].values()
 
@@ -266,13 +265,14 @@ def calc_auxiliary_unc(
     eff_aux = eff | {dt: util.calculate_efficiency(histograms[dt], *triggers) for dt in apply_aux_to}
     sf_aux = eff_aux["data"] / eff_aux["mc"].values()
 
-    aux_idx = [sf_aux.axes.name.index(vr) for vr in auxiliaries]
-    dev = dev_func(sf_aux.values() - np.expand_dims(sf.values(), axis=aux_idx), aux_idx)
+    aux_idx = tuple([sf_aux.axes.name.index(vr) for vr in auxiliaries])
+    dev = dev_func(sf_aux.values() - sf.values(), aux_idx)
     if not isinstance(dev, tuple):
         dev = (dev, dev)
 
+    sf = sf[{aux: 0 for aux in auxiliaries}]
     return util.syst_hist(
         sf.axes,
         syst_name="aux" + "_".join(auxiliaries),
-        arrays=[sf.values() - dev[0], sf.values() + dev[1]]
+        arrays=[sf.values() - dev[0], sf.values() + dev[1]],
     )
