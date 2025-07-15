@@ -485,21 +485,24 @@ def prepare_style_config(
         },
     }
 
-    # disable minor ticks based on variable_inst
-    # if variable_inst.discrete_x:
-    #     # TODO: options for very large ranges, or non-uniform discrete x
-    #     tx = np.array(variable_inst.bin_edges)
-    #     tx = (tx[1:] + tx[:-1]) / 2
-    #     slices = getattr(variable_inst, "slice", None) or variable_inst.x("slice", None)
-    #     step_size = len(tx) // 10 + 1
-    #     if (
-    #         slices and isinstance(slices, Iterable) and len(slices) >= 2 and
-    #         try_complex(slices[0]) and try_complex(slices[1])
-    #     ):
-    #         sl = slice(*slices[:2], step_size)
-    #     else:
-    #         sl = slice(None, None, step_size)
-    #     style_config["ax_cfg"]["xticks"] = tx[sl]
+    if variable_inst.discrete_x:
+        # TODO: options for very large ranges, or non-uniform discrete x
+        tx = np.array(variable_inst.bin_edges)
+        tx = (tx[1:] + tx[:-1]) / 2
+        slices = getattr(variable_inst, "slice", None) or variable_inst.x("slice", None)
+        step_size = len(tx) // 10 + 1
+        if (
+            slices and isinstance(slices, Iterable) and len(slices) >= 2 and
+            try_complex(slices[0]) and try_complex(slices[1])
+        ):
+            sl = slice(*slices[:2], step_size)
+        else:
+            sl = slice(None, None, step_size)
+        style_config["ax_cfg"]["xticks"] = tx[sl]
+        if x_labels := variable_inst.x_labels:
+            x_labels = x_labels[sl]
+            if len(x_labels) == len(tx):
+                style_config["ax_cfg"]["xticklabels"] = x_labels
 
     axis_type = variable_inst.x("axis_type", "variable")
     if variable_inst.discrete_x or "int" in axis_type:
