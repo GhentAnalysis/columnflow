@@ -346,15 +346,21 @@ def plot_all(
 
     # setup figure and axes
     rax = None
-    grid_spec = {"left": 0.15, "right": 0.95, "top": 0.95, "bottom": 0.1}
-    grid_spec |= style_config.get("gridspec_cfg", {})
+    fig_kwargs = style_config.get("fig_cfg", {})
+    fig_kwargs["gridspec_kw"] = {
+        "left": 0.15,
+        "right": 0.95,
+        "top": 0.95,
+        "bottom": 0.1,
+    } | fig_kwargs.get("gridspec_kw", {})
     if not skip_ratio:
-        grid_spec = {"height_ratios": [3, 1], "hspace": 0, **grid_spec}
-        fig, axs = plt.subplots(2, 1, gridspec_kw=grid_spec, sharex=True)
+        fig_kwargs["gridspec_kw"] = {"height_ratios": [3, 1], "hspace": 0} | fig_kwargs["gridspec_kw"]
+        fig_kwargs.setdefault("sharex", True)
+        fig, axs = plt.subplots(2, 1, **fig_kwargs)
         (ax, rax) = axs
     else:
-        grid_spec.pop("height_ratios", None)
-        fig, ax = plt.subplots(gridspec_kw=grid_spec)
+        fig_kwargs["gridspec_kw"].pop("height_ratios", None)
+        fig, ax = plt.subplots(**fig_kwargs)
         axs = (ax,)
 
     # invoke all plots methods
