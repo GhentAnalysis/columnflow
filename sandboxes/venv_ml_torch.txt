@@ -1,0 +1,10 @@
+# version 1
+
+-r columnar.txt
+
+torch
+onnxruntime
+onnx
+torchinfo
+tensorboard
+
