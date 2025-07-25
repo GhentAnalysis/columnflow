@@ -161,16 +161,20 @@ def add_config(
             # extra columns
         } | four_vec(  # Jets
             {"Jet"},
-            {"btagDeepFlavB", "btagDeepFlavCvB"},
+            {"btagDeepFlavB", "btagDeepFlavCvB", "hadronFlavour"},
         ) | four_vec(  # Leptons
             {"Electron", "Muon", },
             {"deltaEtaSC"},
         )
     )
-
+    
+    # default objects, such as calibrator, selector, reducer, producer, ml model, inference model, etc
     cfg.x.default_calibrator = "skip_jecunc"  # skip jet energy correction up and down variation to save time in running
     cfg.x.default_selector = "default"
+    cfg.x.default_selector_steps = []
+    cfg.x.default_reducer = "cf_default"
     cfg.x.default_producer = "default"
+    cfg.x.default_hist_producer = "cf_default"
     cfg.x.default_ml_model = None
     cfg.x.default_inference_model = "example"
     cfg.x.default_variables = ("n_jet",)

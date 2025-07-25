@@ -8,7 +8,7 @@ from collections import OrderedDict
 
 from columnflow.tasks.framework.base import Requirements
 from columnflow.tasks.framework.mixins import (
-    CalibratorsMixin, VariablesMixin, SelectorMixin, DatasetsMixin,
+    CalibratorClassesMixin, VariablesMixin, SelectorClassMixin, DatasetsMixin,
 )
 from columnflow.tasks.framework.plotting import (
     PlotBase, PlotBase2D,
@@ -27,14 +27,16 @@ class BTagEfficiencyBase:
     flavours = {0: "light", 4: "charm", 5: "bottom"}
     wps = ["L", "M", "T"]
 
+    single_config = True
+
 
 class BTagEfficiency(
     BTagEfficiencyBase,
     SelectionEfficiencyHistMixin,
     CustomDefaultVariablesMixin,
     VariablesMixin,
-    SelectorMixin,
-    CalibratorsMixin,
+    SelectorClassMixin,
+    CalibratorClassesMixin,
     law.LocalWorkflow,
     RemoteWorkflow,
 ):
@@ -91,12 +93,18 @@ class BTagEfficiencyPlot(
     DatasetsMixin,
     CustomDefaultVariablesMixin,
     VariablesMixin,
-    SelectorMixin,
-    CalibratorsMixin,
+    SelectorClassMixin,
+    CalibratorClassesMixin,
     law.LocalWorkflow,
+    RemoteWorkflow,
     PlotBase2D,
 ):
-    reqs = Requirements(BTagEfficiency=BTagEfficiency)
+    resolution_task_cls = BTagEfficiency
+
+    reqs = Requirements(
+        RemoteWorkflow.reqs,
+        BTagEfficiency=BTagEfficiency,
+    )
 
     plot_function = PlotBase.plot_function.copy(
         default="columnflow.plotting.plot_functions_2d.plot_2d",
@@ -152,10 +160,11 @@ class BTagEfficiencyPlot(
         import hist
         import numpy as np
 
-        variable_insts = list(map(self.config_inst.get_variable, self.variables))
-
         # plot efficiency for each hadronFlavour and wp
         efficiency_hist = self.input()["collection"][0]["hist"].load(formatter="pickle")
+
+        variable_insts = list(map(self.config_inst.get_variable, self.variables))
+        variable_insts = sorted(variable_insts, key=efficiency_hist.axes.name.index)
 
         for i, sys in enumerate(["central", "down", "up"]):
             # create a dummy histogram dict for plotting with the first process
@@ -184,7 +193,7 @@ class BTagEfficiencyPlot(
 
             # custom styling:
             label_values = np.round(h_sys.values() * 100, decimals=1)
-            style_config = {"plot2d_cfg": {"cmap": "PiYG", "labels": label_values}}
+            style_config = {"plot2d_cfg": {"cmap": "Blues", "labels": label_values}}
             # call the plot function
             fig, _ = self.call_plot_func(
                 self.plot_function,
@@ -192,6 +201,7 @@ class BTagEfficiencyPlot(
                 config_inst=self.config_inst,
                 category_inst=cat.copy_shallow(),
                 variable_insts=[var_inst.copy_shallow() for var_inst in variable_insts],
+                shift_insts=[self.config_inst.get_shift("nominal")],
                 style_config=style_config,
                 **self.get_plot_parameters(),
             )

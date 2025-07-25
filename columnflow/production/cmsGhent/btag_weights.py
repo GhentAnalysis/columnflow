@@ -4,6 +4,7 @@ Producer that produces a column Jet.btag based on the default_btag Algorithm pro
 
 from __future__ import annotations
 
+import os
 import law
 import order as od
 from typing import Iterable
@@ -11,10 +12,9 @@ from collections import OrderedDict
 
 
 from columnflow.production import Producer, producer
-from columnflow.weight import WeightProducer, weight_producer
 from columnflow.selection import SelectionResult
 
-from columnflow.util import maybe_import, InsertableDict, DotDict
+from columnflow.util import maybe_import, DotDict, four_vec
 from columnflow.columnar_util import set_ak_column, layout_ak_array, Route, has_ak_column, optional_column
 from columnflow.production.cms.btag import BTagSFConfig
 
@@ -26,7 +26,7 @@ correctionlib = maybe_import("correctionlib")
 logger = law.logger.get_logger(__name__)
 
 
-def init_btag(self: Producer | WeightProducer, add_eff_vars=True):
+def init_btag(self: Producer, add_eff_vars=True):
     if not hasattr(self, "get_btag_config"):
         self.btag_config = self.config_inst.x(
             "btag_sf",
@@ -63,7 +63,7 @@ def init_btag(self: Producer | WeightProducer, add_eff_vars=True):
         })
 
 
-def setup_btag(self: Producer | WeightProducer, reqs: dict):
+def setup_btag(self: Producer, task: law.Task, reqs: dict):
     bundle = reqs["external_files"]
     correction_set_btag_wp_corr = correctionlib.CorrectionSet.from_string(
         self.get_btag_sf(bundle.files).load(formatter="gzip").decode("utf-8"),
@@ -74,9 +74,9 @@ def setup_btag(self: Producer | WeightProducer, reqs: dict):
     return correction_set_btag_wp_corr
 
 
-def req_btag(self: Producer | WeightProducer, reqs: dict):
+def req_btag(self: Producer, task: law.Task, reqs: dict):
     from columnflow.tasks.external import BundleExternalFiles
-    reqs["external_files"] = BundleExternalFiles.req(self.task)
+    reqs["external_files"] = BundleExternalFiles.req(task)
 
 
 @producer(
@@ -107,17 +107,17 @@ def jet_btag_init(self: Producer):
 
 
 @jet_btag.setup
-def jet_btag_setup(self: Producer, reqs: dict, *args, **kwargs) -> None:
-    setup_btag(self, reqs)
+def jet_btag_setup(self: Producer, task: law.Task, reqs: dict, *args, **kwargs) -> None:
+    setup_btag(self, task, reqs)
 
 
 @jet_btag.requires
-def jet_btag_requires(self: Producer, reqs: dict) -> None:
-    req_btag(self, reqs)
+def jet_btag_requires(self: Producer, task: law.Task, reqs: dict) -> None:
+    req_btag(self, task, reqs)
 
 
-@weight_producer(
-    uses={"Jet.{pt,eta,hadronFlavour}", jet_btag},
+@producer(
+    uses=four_vec("Jet", "hadronFlavour") | {jet_btag},
     get_btag_config=(lambda self: BTagSFConfig.new(self.config_inst.x.btag_sf)),
     get_btag_sf=lambda self, external_files: external_files.btag_sf_corr,
     get_btag_eff=lambda self, external_files: external_files.get("btag_sf_eff", {}),
@@ -229,14 +229,13 @@ def fixed_wp_btag_weights(
         events = add_weight(flavour_group, "central")
 
         # only calculate up and down variations for nominal shift
-        if self.local_shift_inst.is_nominal:
-            for direction in ["up", "down"]:
-                for corr in self.btag_config.sources:
-                    events = add_weight(
-                        flavour_group=flavour_group,
-                        systematic=corr,
-                        variation=direction,
-                    )
+        for direction in ["up", "down"]:
+            for corr in self.btag_config.sources:
+                events = add_weight(
+                    flavour_group=flavour_group,
+                    systematic=corr,
+                    variation=direction,
+                )
 
     # nominal weights:
     nominal = np.prod([events[f"{self.weight_name}_{fg}"] for fg in self.flavour_groups], axis=0)
@@ -245,28 +244,8 @@ def fixed_wp_btag_weights(
 
 
 @fixed_wp_btag_weights.init
-def fixed_wp_btag_weights_init(
-    self: Producer,
-) -> None:
+def fixed_wp_btag_weights_init(self: Producer) -> None:
     init_btag(self)
-
-    # depending on the requested shift_inst, there are three cases to handle:
-    #   1. when a JEC uncertainty is requested whose propagation to btag weights is known, the
-    #      producer should only produce that specific weight column
-    #   2. when the nominal shift is requested, the central weight and all variations related to the
-    #      method-intrinsic shifts are produced
-    #   3. when any other shift is requested, only create the central weight column
-
-    shift_inst = getattr(self, "local_shift_inst", None)
-    if not shift_inst:
-        return
-
-    if not getattr(self, "dataset_inst", None):
-        return
-
-    # to handle this efficiently in one spot, store jec information
-    self.jec_source = shift_inst.x.jec_source if shift_inst.has_tag("jec") else None
-    btag_sf_jec_source = "" if self.jec_source == "Total" else self.jec_source  # noqa
 
     # save names of method-intrinsic uncertainties
     self.flavour_groups = {
@@ -279,12 +258,11 @@ def fixed_wp_btag_weights_init(
     for name in self.flavour_groups:
         # nominal columns
         self.produces.add(f"{self.weight_name}_{name}")
-        if shift_inst.is_nominal:
-            self.produces.update({
-                f"{self.weight_name}_{name}_" + (direction if not corr else f"{corr}_{direction}")
-                for direction in ["up", "down"]
-                for corr in self.btag_config.sources
-            })
+        self.produces.update({
+            f"{self.weight_name}_{name}_" + (direction if not corr else f"{corr}_{direction}")
+            for direction in ["up", "down"]
+            for corr in self.btag_config.sources
+        })
 
     # determine to which btag_dataset_group the dataset belongs.
     # btag efficiency will be calculated for the btag_dataset_group
@@ -309,17 +287,19 @@ def fixed_wp_btag_weights_init(
             "example: config.x.btag_dataset_groups = {'ttx': ['ttztollnunu_m10_amcatnlo','tt_sl_powheg']}",
         )
 
-    self.has_external_efficiencies = self.dataset_group in self.get_btag_eff(self.config_inst.x.external_files)
+    btag_eff_file = self.get_btag_eff(self.config_inst.x.external_files).get(self.dataset_group, None)
+    self.has_external_efficiencies = btag_eff_file is not None and os.path.exists(btag_eff_file)
 
 
 @fixed_wp_btag_weights.setup
 def fixed_wp_btag_weights_setup(
     self: Producer,
+    task: law.Task,
     reqs: dict,
     inputs: dict,
-    reader_targets: InsertableDict,
+    reader_targets: law.util.InsertableDict,
 ) -> None:
-    correction_set_btag_wp_corr = setup_btag(self, reqs)
+    correction_set_btag_wp_corr = setup_btag(self, task, reqs)
 
     # fix for change in nomenclature of deepJet scale factors for light hadronFlavour jets
     if self.config_inst.x.year <= 2018:
@@ -349,13 +329,13 @@ def fixed_wp_btag_weights_setup(
 
 
 @fixed_wp_btag_weights.requires
-def fixed_wp_btag_weights_requires(self: Producer, reqs: dict) -> None:
-    req_btag(self, reqs)
+def fixed_wp_btag_weights_requires(self: Producer, task: law.Task, reqs: dict) -> None:
+    req_btag(self, task, reqs)
 
     if not self.has_external_efficiencies:
         from columnflow.tasks.cmsGhent.btagefficiency import BTagEfficiency
         reqs["btag_efficiency"] = BTagEfficiency.req(
-            self.task,
+            task,
             datasets=self.datasets,
             variables=self.variables,
         )
@@ -363,7 +343,7 @@ def fixed_wp_btag_weights_requires(self: Producer, reqs: dict) -> None:
         if self.produce_plots:
             from columnflow.tasks.cmsGhent.btagefficiency import BTagEfficiencyPlot
             reqs["btag_efficiency_plots"] = BTagEfficiencyPlot.req(
-                self.task,
+                task,
                 branch=-1,
                 _exclude={"branches"},
                 datasets=self.datasets,
@@ -444,11 +424,12 @@ def btag_efficiency_hists_init(self: Producer) -> None:
 @btag_efficiency_hists.setup
 def btag_efficiency_hists_setup(
     self: Producer,
+    task: law.Task,
     reqs: dict,
     inputs: dict,
-    reader_targets: InsertableDict,
+    reader_targets: law.util.InsertableDict,
 ) -> None:
-    setup_btag(self, reqs)
+    setup_btag(self, task, reqs)
     self.variable_insts.append(od.Variable(
         name="btag_wp",
         expression=f"Jet.{self.btag_config.discriminator}",
@@ -458,5 +439,5 @@ def btag_efficiency_hists_setup(
 
 
 @btag_efficiency_hists.requires
-def btag_efficiency_hists_requires(self: Producer, reqs: dict) -> None:
-    req_btag(self, reqs)
+def btag_efficiency_hists_requires(self: Producer, task: law.Task, reqs: dict) -> None:
+    req_btag(self, task, reqs)

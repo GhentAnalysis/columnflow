@@ -107,6 +107,11 @@ def pdf_weights(
             events = set_ak_column_f32(events, "pdf_weight", ones)
             events = set_ak_column_f32(events, "pdf_weight_up", ones)
             events = set_ak_column_f32(events, "pdf_weight_down", ones)
+
+        events = set_ak_column_f32(events, "alphas_weight", ones)
+        events = set_ak_column_f32(events, "alphas_weight_up", ones)
+        events = set_ak_column_f32(events, "alphas_weight_down", ones)
+
         return events
 
     # complain when the number of weights is unexpected
@@ -213,11 +218,15 @@ def pdf_weights(
         events = fill_at_f32(events, invalid_pdf_weight, "pdf_weight_up", 0)
         events = fill_at_f32(events, invalid_pdf_weight, "pdf_weight_down", 0)
 
+        events = fill_at_f32(events, invalid_pdf_weight, "alphas_weight", 0)
+        events = fill_at_f32(events, invalid_pdf_weight, "alphas_weight_up", 0)
+        events = fill_at_f32(events, invalid_pdf_weight, "alphas_weight_down", 0)
+
     return events
 
 
 @pdf_weights.init
-def pdf_weight_init(self: Producer) -> None:
+def pdf_weight_init(self: Producer, **kwargs) -> None:
     # add produced columns: nominal+all, or nominal+up+down
     self.produces.add("pdf_weight{,s}" if self.store_all_weights else "pdf_weight{,_up,_down}")
     self.produces.add("alphas_weight{,_up,_down}")

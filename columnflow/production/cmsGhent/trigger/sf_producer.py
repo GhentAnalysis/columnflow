@@ -72,19 +72,19 @@ def trigger_scale_factors_init(self: Producer):
 
 
 @trigger_scale_factors.requires
-def trigger_scale_factors_requires(self: Producer, reqs: dict) -> None:
+def trigger_scale_factors_requires(self: Producer, task: law.Task, reqs: dict) -> None:
 
     if self.get_sf_file:
         if "external_files" in reqs:
             return
 
         from columnflow.tasks.external import BundleExternalFiles
-        reqs["external_files"] = BundleExternalFiles.req(self.task)
+        reqs["external_files"] = BundleExternalFiles.req(task)
     else:
         from columnflow.tasks.cmsGhent.trigger_scale_factors import TriggerScaleFactors
 
         reqs["trigger_scalefactor"] = TriggerScaleFactors.req(
-            self.task,
+            task,
             datasets=self.datasets,
             trigger_config=self.trigger_config,
         )
@@ -93,6 +93,7 @@ def trigger_scale_factors_requires(self: Producer, reqs: dict) -> None:
 @trigger_scale_factors.setup
 def trigger_scale_factors_setup(
     self: Producer,
+    task: law.Task,
     reqs: dict,
     inputs: dict,
     reader_targets,
