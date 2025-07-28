@@ -13,7 +13,7 @@ from columnflow.util import maybe_import, four_vec
 from columnflow.columnar_util import set_ak_column, optional_column
 
 from columnflow.selection import Selector, SelectionResult, selector
-from columnflow.selection.util import masked_sorted_indices
+from columnflow.reduction.util import masked_sorted_indices
 
 ak = maybe_import("awkward")
 

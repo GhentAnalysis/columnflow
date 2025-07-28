@@ -15,6 +15,7 @@ import pickle
 import awkward as ak
 import coffea.nanoevents
 import uproot
+import numpy as np  # noqa
 
 from columnflow.util import ipython_shell
 from columnflow.types import Any
@@ -36,11 +37,19 @@ def _load_parquet(fname: str) -> ak.Array:
 
 def _load_nano_root(fname: str) -> ak.Array:
     source = uproot.open(fname)
-    return coffea.nanoevents.NanoEventsFactory.from_root(
-        source,
-        runtime_cache=None,
-        persistent_cache=None,
-    ).events()
+    try:
+        return coffea.nanoevents.NanoEventsFactory.from_root(
+            source,
+            runtime_cache=None,
+            persistent_cache=None,
+        ).events()
+    except:
+        return uproot.open(fname)
+
+
+def _load_h5(fname: str):
+    import h5py
+    return h5py.File(fname, "r")
 
 
 def load(fname: str) -> Any:
@@ -56,6 +65,8 @@ def load(fname: str) -> Any:
         return _load_nano_root(fname)
     if ext == ".json":
         return _load_json(fname)
+    if ext in [".h5", ".hdf5"]:
+        return _load_h5(fname)
     raise NotImplementedError(f"no loader implemented for extension '{ext}'")
 
 
@@ -74,6 +85,7 @@ if __name__ == "__main__":
     import argparse
 
     ap = argparse.ArgumentParser(
+        add_help=False,
         description=(
             "Utility script for quickly loading event arrays, histograms or other supported "
             "objects from files for interactive processing.\n\n"
@@ -85,9 +97,12 @@ if __name__ == "__main__":
         ),
     )
 
-    ap.add_argument("files", metavar="FILE", nargs="+", help="one or more supported files")
+    ap.register("action", "help", argparse._HelpAction)
+    ap.add_argument("files", metavar="FILE", nargs="*", help="one or more supported files")
     ap.add_argument("--events", "-e", action="store_true", help="assume files to contain event info")
+    ap.add_argument("--hists", "-h", action="store_true", help="assume files to contain histograms")
     ap.add_argument("--list", "-l", action="store_true", help="list contents of the loaded file")
+    ap.add_argument("--help", action="help", help="show this help message and exit")
 
     args = ap.parse_args()
 
@@ -99,13 +114,23 @@ if __name__ == "__main__":
     # interpret data
     intepreted = objects
     if args.events:
-        events = objects
-        interpreted = events
-        print("events loaded from objects[0] into variable 'events'")
-
         # preload common packages
         import awkward as ak  # noqa
         import numpy as np   # noqa
+
+        events = interpreted = objects
+        print("events loaded from objects[0] into variable 'events'")
+
+    elif args.hists:
+        # preload common packages
+        import hist  # noqa
+
+        if isinstance(objects, hist.Hist):
+            h = interpreted = objects
+            print("histogram loaded from objects[0] into variable 'h'")
+        else:
+            hists = interpreted = objects
+            print("histograms loaded from objects[0] into variable 'hists'")
 
     # list content
     if args.list:

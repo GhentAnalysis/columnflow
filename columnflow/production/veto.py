@@ -1,8 +1,9 @@
+import law
+from law import LocalFileTarget
 
 from columnflow.production import Producer, producer
-from columnflow.util import maybe_import, InsertableDict
+from columnflow.util import maybe_import
 from columnflow.columnar_util import set_ak_column
-from law import LocalFileTarget
 
 ak = maybe_import("awkward")
 np = maybe_import("numpy")
@@ -15,10 +16,10 @@ np = maybe_import("numpy")
     get_veto_file=(lambda self, external_files: external_files.veto),
 )
 def veto_events(
-        self: Producer,
-        events: ak.Array,
-        file: LocalFileTarget = None,
-        **kwargs,
+    self: Producer,
+    events: ak.Array,
+    file: LocalFileTarget = None,
+    **kwargs,
 ) -> ak.Array:
     """
     Produces a mask vetoing certain events from being processed. Outputs a SelectionResult
@@ -61,16 +62,11 @@ def veto_events(
     return events
 
 
-@veto_events.setup
-def veto_events_setup(
-        self: Producer,
-        reqs: dict,
-        inputs: dict,
-        reader_targets: InsertableDict,
-) -> None:
+@veto_events.post_init
+def veto_events_post_init(self: Producer, task: law.Task, **kwargs) -> None:
     """
     Loads the event veto file from the external files bundle and saves them in the
     py:attr:`veto_list` attribute for simpler access in the actual callable.
     """
-    veto_dict = self.config_inst.aux.get("veto", {})
-    self.veto_list = veto_dict.get(self.dataset_inst.name, [])
+    veto_dict = task.config_inst.aux.get("veto", {})
+    self.veto_list = veto_dict.get(task.dataset_inst.name, [])

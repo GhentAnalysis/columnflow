@@ -35,10 +35,7 @@ class CustomDefaultVariablesMixin(
         return config_inst.x(f"default_{tag}_variables", tuple())
 
     @classmethod
-    def resolve_param_values(
-            cls,
-            params: law.util.InsertableDict[str, Any],
-    ) -> law.util.InsertableDict[str, Any]:
+    def resolve_param_values_pre_init(cls, params: dict[str, Any]) -> dict[str, Any]:
         f"""
         Resolve values *params* and check against possible default values
 
@@ -52,7 +49,7 @@ class CustomDefaultVariablesMixin(
         if not params.get("variables", None):
             redo_default_variables = True
 
-        params = super().resolve_param_values(params)
+        params = super().resolve_param_values_pre_init(params)
 
         config_inst = params.get("config_inst")
         if not config_inst:
@@ -74,7 +71,10 @@ class CustomDefaultVariablesMixin(
 class SelectionEfficiencyHistMixin(
     DatasetsMixin,
 ):
+    single_config = True
     exclude_index = True
+
+    resolution_task_cls = MergeSelectionStats
 
     # upstream requirements
     reqs = Requirements(

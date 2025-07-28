@@ -1,0 +1,2 @@
+[0;49;35mcheck linting ...[0m
+columnflow/tasks/framework/mixins.py:2614:5: E301 expected 1 blank line, found 0

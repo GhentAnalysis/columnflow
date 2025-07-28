@@ -6,8 +6,6 @@ Column production methods related defining categories.
 
 from __future__ import annotations
 
-from collections import defaultdict
-
 import law
 
 from columnflow.categorization import Categorizer
@@ -26,7 +24,7 @@ logger = law.logger.get_logger(__name__)
 @producer(
     produces={"category_ids"},
     # custom function to skip categorizers
-    skip_category=(lambda self, task, category_inst: False),
+    skip_category=(lambda self, category_inst: False),
 )
 def category_ids(
     self: Producer,
@@ -38,6 +36,7 @@ def category_ids(
     Assigns each event an array of category ids.
     """
     category_ids = []
+    mask_cash = {}
 
     for cat_inst, categorizers in self.categorizer_map.items():
         # start with a true mask
@@ -45,8 +44,9 @@ def category_ids(
 
         # loop through selectors
         for categorizer in categorizers:
-            events, mask = self[categorizer](events, **kwargs)
-            cat_mask = cat_mask & mask
+            if categorizer not in mask_cash:
+                events, mask_cash[categorizer] = self[categorizer](events, **kwargs)
+            cat_mask = cat_mask & mask_cash[categorizer]
 
         # covert to nullable array with the category ids or none, then apply ak.singletons
         ids = ak.where(cat_mask, np.float64(cat_inst.id), np.float64(-1))
@@ -64,17 +64,14 @@ def category_ids(
 
 
 @category_ids.init
-def category_ids_init(self: Producer) -> None:
-    if not self.inst_dict.get("task"):
-        return
-
+def category_ids_init(self: Producer, **kwargs) -> None:
     # store a mapping from leaf category to categorizer classes for faster lookup
-    self.categorizer_map = defaultdict(list)
+    self.categorizer_map = {}
 
     # add all categorizers obtained from leaf category selection expressions to the used columns
     for cat_inst in self.config_inst.get_leaf_categories():
         # check if skipped
-        if self.skip_category(self.inst_dict["task"], cat_inst):
+        if self.skip_category(cat_inst):
             continue
 
         # treat all selections as lists of categorizers
@@ -100,7 +97,4 @@ def category_ids_init(self: Producer) -> None:
             self.uses.add(categorizer)
             self.produces.add(categorizer)
 
-            self.categorizer_map[cat_inst].append(categorizer)
-
-    # cast to normal dict to prevent silent failures on KeyError
-    self.categorizer_map = dict(self.categorizer_map)
+            self.categorizer_map.setdefault(cat_inst, []).append(categorizer)

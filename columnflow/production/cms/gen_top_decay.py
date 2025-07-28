@@ -5,6 +5,8 @@ Producers that determine the generator-level particles related to a top quark de
 """
 from typing import Tuple
 
+from __future__ import annotations
+
 from columnflow.production import Producer, producer
 from columnflow.selection import Selector, SelectionResult, selector
 from columnflow.util import maybe_import, four_vec
@@ -101,13 +103,9 @@ def gen_top_decay_products(self: Selector, events: ak.Array, **kwargs) -> Tuple[
     )
 
 @gen_top_decay_products.skip
-def gen_top_decay_products_skip(self: Producer) -> bool:
+def gen_top_decay_products_skip(self: Producer, **kwargs) -> bool:
     """
     Custom skip function that checks whether the dataset is a MC simulation containing top
     quarks in the first place.
     """
-    # never skip when there is not dataset
-    if not getattr(self, "dataset_inst", None):
-        return False
-
     return self.dataset_inst.is_data or not self.dataset_inst.has_tag("has_top")

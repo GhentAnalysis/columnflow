@@ -9,7 +9,7 @@ import luigi
 from columnflow.types import Any
 from columnflow.tasks.framework.base import Requirements, ConfigTask
 from columnflow.tasks.framework.mixins import (
-    CalibratorsMixin, SelectorMixin, DatasetsMixin,
+    CalibratorClassesMixin, SelectorClassMixin, DatasetsMixin,
 )
 from columnflow.tasks.framework.plotting import (
     PlotBase, PlotBase2D, PlotBase1D,
@@ -29,6 +29,7 @@ logger = law.logger.get_logger(__name__)
 
 class TriggerConfigMixin(ConfigTask):
     exclude_index = True
+    single_config = True
 
     trigger_config = luigi.Parameter(description="Trigger config to use to measure", default=None)
 
@@ -109,29 +110,25 @@ class TriggerDatasetsMixin(
         return parts
 
     @classmethod
-    def resolve_param_values(cls, params: law.util.InsertableDict[str, Any]) -> law.util.InsertableDict[str, Any]:
-        redo_default_datasets = False
-        # when empty, use the config default
-        if not params.get("datasets", None):
-            redo_default_datasets = True
-
-        params = super().resolve_param_values(params)
-        if not redo_default_datasets:
+    def resolve_param_values_pre_init(cls, params: dict[str, Any]) -> dict[str, Any]:
+        params = super().resolve_param_values_pre_init(params)
+        if params.get("datasets", []):
             return params
 
         if not (config_inst := params.get("config_inst")):
             return params
 
         tcfg: TriggerSFConfig = cls.get_trigger_config(config_inst, params.get("trigger_config"))
-        params["datasets"] = tcfg.datasets
+        params["datasets"] = cls.resolve_datasets(config_inst, tcfg.datasets)
+
         return params
 
 
 class TriggerScaleFactors(
     TriggerDatasetsMixin,
     SelectionEfficiencyHistMixin,
-    SelectorMixin,
-    CalibratorsMixin,
+    CalibratorClassesMixin,
+    SelectorClassMixin,
     law.LocalWorkflow,
     RemoteWorkflow,
 ):
@@ -203,10 +200,11 @@ class TriggerScaleFactors(
                 variance = {dr: 0 for dr in [od.Shift.DOWN, od.Shift.UP]}
                 for err in hst.axes["systematic"]:
                     for dr in variance:
-                        if dr in variance:
+                        if dr in err:
                             variance[dr] += (get_syst(err) - ct) ** 2
 
-                var_hst = util.syst_hist(hst.axes, arrays=[ct - variance[od.Shift.DOWN], ct + variance[od.Shift.UP]])
+                errors = {dr: np.sqrt(v) for dr, v in variance.items()}
+                var_hst = util.syst_hist(hst.axes, arrays=[ct - errors[od.Shift.DOWN], ct + errors[od.Shift.UP]])
                 scale_factors[sf_type] = hst + var_hst
 
         # save sf histograms
@@ -265,10 +263,12 @@ class OutputBranchWorkflow(
 class PlotTriggerScaleFactorsBase(
     TrigPlotLabelMixin,
     TriggerDatasetsMixin,
-    SelectorMixin,
-    CalibratorsMixin,
+    CalibratorClassesMixin,
+    SelectorClassMixin,
     OutputBranchWorkflow,
 ):
+    resolution_task_cls = TriggerScaleFactors
+
     reqs = Requirements(
         RemoteWorkflow.reqs,
         TriggerScaleFactors=TriggerScaleFactors,
@@ -283,11 +283,8 @@ class PlotTriggerScaleFactorsBase(
     sandbox = dev_sandbox(law.config.get("analysis", "default_columnar_sandbox"))
 
     @classmethod
-    def resolve_param_values(
-        cls,
-        params: law.util.InsertableDict[str, Any],
-    ) -> law.util.InsertableDict[str, Any]:
-        params = super().resolve_param_values(params)
+    def resolve_param_values_pre_init(cls, params: dict[str, Any]) -> dict[str, Any]:
+        params = super().resolve_param_values_pre_init(params)
 
         if (config_inst := params.get("config_inst")) and (datasets := params.get("datasets")):
             if params.get("process") is None:
@@ -362,7 +359,7 @@ class PlotTriggerScaleFactors2D(
 
         label_values = np.round(hist2d.values(), decimals=2)
         style_config = {
-            "plot2d_cfg": {"cmap": "PiYG", "labels": label_values},
+            "plot2d_cfg": {"cmap": "Blues", "labels": label_values},
             "annotate_cfg": {"bbox": dict(alpha=0.5, facecolor="white")},
         }
 
@@ -374,6 +371,7 @@ class PlotTriggerScaleFactors2D(
             category_inst=p_cat,
             variable_insts=[self.trigger_config_inst.get_variable(vr).copy_shallow() for vr in [vr1, vr2]],
             style_config=style_config,
+            shift_insts=[self.config_inst.get_shift("nominal")],
             **self.get_plot_parameters(),
         )
         for p in self.output():
@@ -421,10 +419,15 @@ class PlotTriggerScaleFactors1D(
             sf_nom = scale_factors["_".join(main_vrs)]
             extra_var = self.trigger_config_inst.get_variable([vr for vr in vrs if vr not in main_vrs][0])
             labels = extra_var.x_labels or sf_hist.axes[extra_var.name]
+            assert len(labels) == len(sf_hist.axes[extra_var.name]), (
+                f"{extra_var.name} {len(labels)} labels {labels} "
+                f"does not match {sf_hist.axes[extra_var.name]}"
+            )
             hists = {"nominal": sf_nom} | {
                 lab: sf_hist[{extra_var.name: k}]
                 for k, lab in enumerate(labels)
             }
+            vrs = [vr for vr in vrs if vr != extra_var.name]
 
         if syst:
             syst = syst.rstrip("_") + "_"
@@ -437,12 +440,14 @@ class PlotTriggerScaleFactors1D(
         kwargs = self.get_plot_parameters()
         if not kwargs.setdefault("skip_ratio"):
             kwargs["skip_ratio"] = len(hists) == 1
+
         fig, axes = self.call_plot_func(
             self.plot_function,
             hists=hists,
             config_inst=self.config_inst,
             category_inst=self.baseline_cat(),
             variable_insts=[self.trigger_config_inst.get_variable(v) for v in vrs],
+            shift_insts=[self.config_inst.get_shift("nominal")],
             **kwargs,
         )
 
@@ -485,7 +490,7 @@ class PlotTriggerEfficiencies1D(
             # convert down and up variations to up and down errors
             hists[k] = [hs[0]] + [np.abs(h - hs[0]) for h in hs[1:]]
 
-        kwargs = dict(skip_ratio=len(hists) == 1) | self.get_plot_parameters()
+        kwargs = self.get_plot_parameters() | dict(skip_ratio=len(hists) == 1)
         fig, axes = self.call_plot_func(
             self.plot_function,
             hists=hists,
@@ -504,8 +509,8 @@ class PlotTriggerScaleFactorsHist(
     TrigPlotLabelMixin,
     TriggerDatasetsMixin,
     SelectionEfficiencyHistMixin,
-    SelectorMixin,
-    CalibratorsMixin,
+    SelectorClassMixin,
+    CalibratorClassesMixin,
     law.LocalWorkflow,
     RemoteWorkflow,
     PlotBase1D,
