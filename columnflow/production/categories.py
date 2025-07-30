@@ -49,8 +49,7 @@ def category_ids(
             cat_mask = cat_mask & mask_cash[categorizer]
 
         # covert to nullable array with the category ids or none, then apply ak.singletons
-        ids = ak.where(cat_mask, np.float64(cat_inst.id), np.float64(-1))
-        #ids = ak.where(cat_mask, np.float64(cat_inst.id), np.float64(np.nan))
+        ids = ak.where(cat_mask, np.float64(cat_inst.id), np.float64(np.nan))
         category_ids.append(ak.singletons(ak.nan_to_none(ids)))
 
     # combine
