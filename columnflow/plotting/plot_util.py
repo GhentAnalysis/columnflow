@@ -510,6 +510,8 @@ def prepare_style_config(
         style_config["ax_cfg"]["xminorticks"] = []
     if variable_inst.discrete_y:
         style_config["ax_cfg"]["yminorticks"] = []
+        if hasattr(variable_inst, "x_labels"):  # use the labels if available
+            style_config["ax_cfg"]["xticklabels"] = variable_inst.x_labels
 
     return style_config
 
