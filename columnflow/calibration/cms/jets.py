@@ -230,6 +230,7 @@ def get_jec_config_default(self: Calibrator) -> DotDict:
     uses={
         optional("fixedGridRhoFastjetAll"),
         optional("Rho.fixedGridRhoFastjetAll"),
+        optional("run"),
         attach_coffea_behavior,
     },
     # name of the jet collection to calibrate
@@ -328,7 +329,7 @@ def jec(
     events = set_ak_column_f32(events, f"{jet_name}.pt_raw", events[jet_name].pt * (1 - events[jet_name].rawFactor))
     events = set_ak_column_f32(events, f"{jet_name}.mass_raw", events[jet_name].mass * (1 - events[jet_name].rawFactor))
 
-    def correct_jets(*, pt, eta, phi, area, rho, evaluator_key="jec"):
+    def correct_jets(*, pt, eta, phi, area, rho, run, evaluator_key="jec"):
         # variable naming convention
         variable_map = {
             "JetA": area,
@@ -336,6 +337,7 @@ def jec(
             "JetPhi": phi,
             "JetPt": pt,
             "JetPhi": phi,
+            "run": run,
             "Rho": ak.values_astype(rho, np.float32),
         }
 
@@ -360,6 +362,7 @@ def jec(
         if "fixedGridRhoFastjetAll" in events.fields
         else events.Rho.fixedGridRhoFastjetAll
     )
+    run = events.run
 
     # correct jets with only a subset of correction levels
     # (for calculating TypeI MET correction)
@@ -371,6 +374,7 @@ def jec(
             phi=events[jet_name].phi,
             area=events[jet_name].area,
             rho=rho,
+            run=run,
             evaluator_key="jec_subset_type1_met",
         )
 
@@ -393,6 +397,7 @@ def jec(
         phi=events[jet_name].phi,
         area=events[jet_name].area,
         rho=rho,
+        run=run,
         evaluator_key="jec",
     )
 
@@ -599,7 +604,6 @@ def jec_setup(
             # if no special JEC era is specified, infer based on 'era'
             if jec_era is None:
                 jec_era = "Run" + self.dataset_inst.get_aux("era")
-
         return [
             f"{jec.campaign}_{jec.version}_DATA_{name}_{jec.jet_type}" # TODO for 2024 currently no era division
             #f"{jec.campaign}_{jec_era}_{jec.version}_DATA_{name}_{jec.jet_type}"
@@ -935,9 +939,16 @@ def jer(self: Calibrator, events: ak.Array, **kwargs) -> ak.Array:
 
     # met propagation
     if self.propagate_met:
+        # check met finiteness
+        inf_met = ~np.isfinite(events[met_name].pt)
+        def protect(arr):
+            return ak.where(inf_met, 0., arr)
+        if ak.any(inf_met):
+            print(f"Found infinite met")
+
         # save unsmeared quantities
-        events = set_ak_column_f32(events, f"{met_name}.pt_unsmeared", events[met_name].pt)
-        events = set_ak_column_f32(events, f"{met_name}.phi_unsmeared", events[met_name].phi)
+        events = set_ak_column_f32(events, f"{met_name}.pt_unsmeared", protect(events[met_name].pt))
+        events = set_ak_column_f32(events, f"{met_name}.phi_unsmeared", protect(events[met_name].phi))
 
         # propagate per variation
         for postfix in self.postfixes:
@@ -956,8 +967,8 @@ def jer(self: Calibrator, events: ak.Array, **kwargs) -> ak.Array:
                 events[met_name][f"pt{postfix}"],
                 events[met_name][f"phi{postfix}"],
             )
-            events = set_ak_column_f32(events, f"{met_name}.pt{postfix}", met_pt)
-            events = set_ak_column_f32(events, f"{met_name}.phi{postfix}", met_phi)
+            events = set_ak_column_f32(events, f"{met_name}.pt{postfix}", protect(met_pt))
+            events = set_ak_column_f32(events, f"{met_name}.phi{postfix}", protect(met_phi))
 
     return events
 
