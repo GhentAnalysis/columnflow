@@ -68,6 +68,7 @@ def cf_default_post_process_hist(self: HistProducer, h: hist.Histogram, task: la
     Post-process the histogram, converting integer to string axis for consistent lookup across configs where ids might
     be different.
     """
+
     axis_names = {ax.name for ax in h.axes}
 
     # translate axes
@@ -75,6 +76,9 @@ def cf_default_post_process_hist(self: HistProducer, h: hist.Histogram, task: la
         category_map = {cat.id: cat.name for cat in self.config_inst.get_leaf_categories()}
         h = translate_hist_intcat_to_strcat(h, "category", category_map)
     if "process" in axis_names:
+        for proc_id in h.axes["process"]:
+            if not proc_id in self.config_inst.processes.ids():
+                raise ValueError(f"Invalid process ID {proc_id}")
         process_map = {proc_id: self.config_inst.get_process(proc_id).name for proc_id in h.axes["process"]}
         h = translate_hist_intcat_to_strcat(h, "process", process_map)
     if "shift" in axis_names:
