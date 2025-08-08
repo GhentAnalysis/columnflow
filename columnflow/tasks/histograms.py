@@ -290,14 +290,17 @@ class CreateHistograms(_CreateHistograms):
                     for variable_inst in variable_insts:
                         # prepare the expression
                         expr = variable_inst.expression
-                        if isinstance(expr, str):
-                            route = Route(expr)
-                            def expr(events, *args, **kwargs):
-                                if len(events) == 0 and not has_ak_column(events, route):
-                                    return empty_i32 if variable_inst.discrete_x else empty_f32
-                                return route.apply(events, null_value=variable_inst.null_value)
-                        # apply it
-                        fill_data[variable_inst.name] = expr(masked_events)
+                        try:
+                            if isinstance(expr, str):
+                                route = Route(expr)
+                                def expr(events, *args, **kwargs):
+                                    if len(events) == 0 and not has_ak_column(events, route):
+                                        return empty_i32 if variable_inst.discrete_x else empty_f32
+                                    return route.apply(events, null_value=variable_inst.null_value)
+                            # apply it
+                            fill_data[variable_inst.name] = expr(masked_events)
+                        except:
+                            raise ValueError(f"Error in histogramming variable {variable_inst.name} with expression {expr}")
 
                     # let the hist producer fill it
                     self.hist_producer_inst.run_fill_hist(histograms[var_key], fill_data, task=self)
