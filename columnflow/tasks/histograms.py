@@ -214,6 +214,8 @@ class CreateHistograms(_CreateHistograms):
         if self.ml_model_insts:
             file_targets.extend([inp["mlcolumns"] for inp in inputs["ml"]])
 
+
+
         # prepare inputs for localization
         with law.localize_file_targets([*file_targets, *reader_targets.values()], mode="r") as inps:
             for (events, *columns), pos in self.iter_chunked_io(

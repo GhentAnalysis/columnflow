@@ -119,6 +119,10 @@ class CreateDatacards(SerializeInferenceModelBase):
                     # store the varied hists
                     shift_source = param_obj.config_data[config_inst.name].shift_source
                     for d in ["up", "down"]:
+                        shift = config_inst.get_shift(f"{shift_source}_{d}").name
+                        if shift not in h_proc.axes["shift"]:
+                            self.logger.warn(f"did not find {shift}")
+                            continue
                         shift_hists[(param_obj.name, d)] = h_proc[{
                             "shift": hist.loc(config_inst.get_shift(f"{shift_source}_{d}").name),
                         }]

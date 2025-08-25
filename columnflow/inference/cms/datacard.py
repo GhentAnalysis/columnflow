@@ -17,6 +17,7 @@ from columnflow.util import DotDict, maybe_import, real_path, ensure_dir, safe_d
 from columnflow.types import Sequence, Any, Union, Hashable
 
 hist = maybe_import("hist")
+np = maybe_import("numpy")
 
 
 logger = law.logger.get_logger(__name__)
@@ -389,46 +390,58 @@ class DatacardWriter(object):
             if cat_obj.flow_strategy == FlowStrategy.ignore:
                 return
 
-            # get objects and flow contents
-            ax = h.axes[0]
             view = h.view(flow=True)
-            underflow = (view.value[0], view.variance[0]) if ax.traits.underflow else (0.0, 0.0)
-            overflow = (view.value[-1], view.variance[-1]) if ax.traits.overflow else (0.0, 0.0)
+            for i, ax in enumerate(h.axes):
+                # get objects and flow contents
 
-            # nothing to do if flow bins are emoty
-            if not underflow[0] and not overflow[0]:
-                return
+                get_idx = lambda idx: tuple(idx if ai == i else slice(None) for ai in range(view.ndim))
+                uf_idx = get_idx(0)
+                of_idx = get_idx(-1)
 
-            # warn in case of flow content
-            if cat_obj.flow_strategy == FlowStrategy.warn:
-                if underflow[0]:
-                    logger.warning(
-                        f"underflow content detected in category '{cat_obj.name}' for histogram "
-                        f"'{name}' ({underflow[0] / view.value.sum() * 100:.1f}% of integral)",
-                    )
-                if overflow[0]:
-                    logger.warning(
-                        f"overflow content detected in category '{cat_obj.name}' for histogram "
-                        f"'{name}' ({overflow[0] / view.value.sum() * 100:.1f}% of integral)",
-                    )
-                return
+                underflow = (view.value[uf_idx].copy(), view.variance[uf_idx]) if ax.traits.underflow else (0.0, 0.0)
+                overflow = (view.value[of_idx].copy(), view.variance[of_idx]) if ax.traits.overflow else (0.0, 0.0)
+                has_underflow = np.any(underflow[0])
+                has_overflow = np.any(overflow[0])
 
-            # here, we can already remove overflow values
-            if underflow[0]:
-                view.value[0] = 0.0
-                view.variance[0] = 0.0
-            if overflow[0]:
-                view.value[-1] = 0.0
-                view.variance[-1] = 0.0
 
-            # finally handle move
-            if cat_obj.flow_strategy == FlowStrategy.move:
-                if underflow[0]:
-                    view.value[1] += underflow[0]
-                    view.variance[1] += underflow[1]
-                if overflow[0]:
-                    view.value[-2] += overflow[0]
-                    view.variance[-2] += overflow[1]
+                # nothing to do if flow bins are emoty
+                if not has_underflow and not has_overflow:
+                    do_break = False
+                    continue
+
+                # warn in case of flow content
+                if cat_obj.flow_strategy == FlowStrategy.warn:
+                    if has_underflow:
+                        logger.warning(
+                            f"underflow content detected in category '{cat_obj.name}' for histogram "
+                            f"'{name}' along axis {ax.name} ({underflow[0] / view.value.sum() * 100:.1f}% of integral)",
+                        )
+                    if has_overflow:
+                        logger.warning(
+                            f"overflow content detected in category '{cat_obj.name}' for histogram "
+                            f"'{name}' along axis {ax.name} ({overflow[0] / view.value.sum() * 100:.1f}% of integral)",
+                        )
+                    do_break = False
+                    continue
+
+                # here, we can already remove overflow values
+                if has_underflow:
+                    zero = np.zeros_like(view.value[uf_idx])
+                    view.value[uf_idx] = zero
+                    view.variance[uf_idx] = zero
+                if has_overflow:
+                    zero = np.zeros_like(view.value[of_idx])
+                    view.value[of_idx] = zero
+                    view.variance[of_idx] = zero
+
+                # finally handle move
+                if cat_obj.flow_strategy == FlowStrategy.move:
+                    if has_underflow:
+                        view.value[get_idx(1)] += underflow[0]
+                        view.variance[get_idx(1)] += underflow[1]
+                    if has_overflow:
+                        view.value[get_idx(-2)] += overflow[0]
+                        view.variance[get_idx(-2)] += overflow[1]
 
         # helper to fill empty bins in-place
         def fill_empty(cat_obj, h):

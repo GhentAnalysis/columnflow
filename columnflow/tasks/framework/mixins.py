@@ -1245,7 +1245,10 @@ class MLModelMixinBase(ConfigTask):
         """
         ml_model_inst: MLModel = MLModel.get_cls(ml_model)(analysis_inst, **kwargs)
         if requested_configs:
-            configs = ml_model_inst.training_configs(list(requested_configs))
+            if cls.__name__ == "MLTraining":
+                configs = ml_model_inst.training_configs(list(requested_configs))
+            else:
+                configs = list(requested_configs)
             if configs:
                 ml_model_inst._setup(configs)
 
