@@ -36,7 +36,7 @@ import law
 
 from columnflow.util import maybe_import
 from columnflow.plotting.plot_all import (
-    draw_hist, draw_errorbars, draw_stack, draw_error_bands,
+    draw_stat_error_bands, draw_hist, draw_errorbars, draw_stack, draw_syst_error_bands, draw_profile,
 )
 from columnflow.plotting.plot_util import (
     prepare_stack_plot_config,
@@ -44,9 +44,11 @@ from columnflow.plotting.plot_util import (
     remove_residual_axis,
     apply_variable_settings,
     apply_process_settings,
+    apply_ax_kwargs,
     get_cms_label,
     get_position,
 )
+
 
 hist = maybe_import("hist")
 np = maybe_import("numpy")
@@ -74,25 +76,27 @@ def get_new_colors(original_color, n_new_colors=2):
     return [change_saturation(hls, sat) for sat in new_sat]
 
 
-def unroll_2d_hists(hists):
+def unroll_2d_hists(hists, y_variable_inst):
     unrolled_hists = []
     first = True
     for process in hists:
         hist = hists[process]
+
+        y_variable_index = hist.axes.name.index(y_variable_inst.name)
         if first:
             # add the aux binning to the unrolled hist list
             # todo should also access the custom bin labels here
-            n_aux = hist.shape[1]
+            n_aux = hist.shape[y_variable_index]
             for iaux in range(n_aux):
                 unrolled_hists.append(OrderedDict())
 
             # get the aux variable for return
-            aux_bins = hist.axes[1]
+            aux_bins = hist.axes[y_variable_index]
             first = False
 
         # loop over aux bins and slice histogram into 1D hists
         for iaux in range(n_aux):
-            sliced_hist = hist[:, iaux]
+            sliced_hist = hist[{aux_bins.name: iaux}]
             sliced_hist.name = hist.axes[0].name
             sliced_hist.label = hist.axes[0].label
             unrolled_hists[iaux][process] = sliced_hist
@@ -190,7 +194,7 @@ def plot_unrolled(
         split_processes = kwargs.get("split_processes", "").split("+")
         aux_dimension, hists = unroll_3d_hists(hists, split_processes, variable_insts[2], density)
     elif len(variable_insts) == 2:
-        aux_dimension, hists = unroll_2d_hists(hists)
+        aux_dimension, hists = unroll_2d_hists(hists, y_variable_inst)
     else:
         raise AssertionError(
             "columnflow.plotting.cmsGhent.unrolled.plot_unrolled need 2d or 3d variables, "
@@ -204,10 +208,13 @@ def plot_unrolled(
     style_config = law.util.merge_dicts(default_style_config, style_config, deep=True)
     skip_ratio = kwargs.get("skip_ratio", False)
 
-    # available plot methods mapped to their names
+    # invoke all plots methods
     plot_methods = {
         func.__name__: func
-        for func in [draw_error_bands, draw_stack, draw_hist, draw_errorbars]
+        for func in [
+            draw_stat_error_bands, draw_syst_error_bands, draw_stack, draw_hist, draw_profile,
+            draw_errorbars,
+        ]
     }
 
     # use CMS plotting style
@@ -259,7 +266,7 @@ def plot_unrolled(
             h = cfg["hist"]
             kw = cfg.get("kwargs", {})
             plot_methods[method](ax, h, **kw)
-            if not skip_ratio:
+            if (not skip_ratio) & (method != "draw_stack"):
                 # take ratio_method if the ratio plot requires a different plotting method
                 method = cfg.get("ratio_method", method)
                 rkw = cfg.get("ratio_kwargs", {})
@@ -316,7 +323,8 @@ def plot_unrolled(
         if not ax == axes[0]:
             this_kwargs["ylabel"] = None
 
-        ax.set(**this_kwargs)
+        # apply axis kwargs
+        apply_ax_kwargs(ax, this_kwargs)
 
         if minorxticks is not None:
             ax.set_xticks(minorxticks, minor=True)
@@ -345,7 +353,7 @@ def plot_unrolled(
             if not rax == raxes[0]:
                 this_kwargs["ylabel"] = None
 
-            rax.set(**this_kwargs)
+            apply_ax_kwargs(rax, this_kwargs)
 
         fig.align_ylabels()
 
