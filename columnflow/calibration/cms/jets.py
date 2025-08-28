@@ -328,7 +328,10 @@ def jec(
     events = set_ak_column_f32(events, f"{jet_name}.pt_raw", events[jet_name].pt * (1 - events[jet_name].rawFactor))
     events = set_ak_column_f32(events, f"{jet_name}.mass_raw", events[jet_name].mass * (1 - events[jet_name].rawFactor))
 
-    def correct_jets(*, pt, eta, phi, area, rho, evaluator_key="jec"):
+    # run number for each jet required in 2023 L2L3Residual jec corrections for data
+    jet_run = ak.broadcast_arrays(events.run, events[jet_name].pt_raw)[0]
+
+    def correct_jets(*, pt, eta, phi, area, rho, run, evaluator_key="jec"):
         # variable naming convention
         variable_map = {
             "JetA": area,
@@ -336,6 +339,7 @@ def jec(
             "JetPt": pt,
             "JetPhi": phi,
             "Rho": ak.values_astype(rho, np.float32),
+            "run": run,
         }
 
         # apply all correctors sequentially, updating the pt each time
@@ -364,12 +368,14 @@ def jec(
     # (for calculating TypeI MET correction)
     if self.propagate_met:
         # get correction factors
+
         jec_factors_subset_type1_met = correct_jets(
             pt=events[jet_name].pt_raw,
             eta=events[jet_name].eta,
             phi=events[jet_name].phi,
             area=events[jet_name].area,
             rho=rho,
+            run=jet_run,
             evaluator_key="jec_subset_type1_met",
         )
 
@@ -392,6 +398,7 @@ def jec(
         phi=events[jet_name].phi,
         area=events[jet_name].area,
         rho=rho,
+        run=jet_run,
         evaluator_key="jec",
     )
 
@@ -598,6 +605,13 @@ def jec_setup(
             # if no special JEC era is specified, infer based on 'era'
             if jec_era is None:
                 jec_era = "Run" + self.dataset_inst.get_aux("era")
+            elif jec_era == "":
+                return [
+                    f"{jec.campaign}_{jec.version}_DATA_{name}_{jec.jet_type}"
+                    if is_data else
+                    f"{jec.campaign}_{jec.version}_MC_{name}_{jec.jet_type}"
+                    for name in names
+                ]
 
         return [
             f"{jec.campaign}_{jec_era}_{jec.version}_DATA_{name}_{jec.jet_type}"
