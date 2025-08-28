@@ -719,7 +719,7 @@ EOF
             return "${ret}"
         fi
 
-        # initialze submodules
+        # initialize submodules
         if [ -e "${CF_BASE}/.git" ]; then
             local m
             for m in $( ls -1q "${CF_BASE}/modules" ); do
