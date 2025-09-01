@@ -12,7 +12,7 @@ from columnflow.types import Any
 from columnflow.calibration import Calibrator, calibrator
 from columnflow.calibration.util import ak_random, propagate_met, sum_transverse
 from columnflow.production.util import attach_coffea_behavior
-from columnflow.util import maybe_import, InsertableDict, DotDict
+from columnflow.util import maybe_import, DotDict, load_correction_set
 from columnflow.columnar_util import set_ak_column, layout_ak_array, optional_column as optional
 
 np = maybe_import("numpy")
@@ -328,7 +328,10 @@ def jec(
     events = set_ak_column_f32(events, f"{jet_name}.pt_raw", events[jet_name].pt * (1 - events[jet_name].rawFactor))
     events = set_ak_column_f32(events, f"{jet_name}.mass_raw", events[jet_name].mass * (1 - events[jet_name].rawFactor))
 
-    def correct_jets(*, pt, eta, phi, area, rho, evaluator_key="jec"):
+    # run number for each jet required in 2023 L2L3Residual jec corrections for data
+    jet_run = ak.broadcast_arrays(events.run, events[jet_name].pt_raw)[0]
+
+    def correct_jets(*, pt, eta, phi, area, rho, run, evaluator_key="jec"):
         # variable naming convention
         variable_map = {
             "JetA": area,
@@ -336,6 +339,7 @@ def jec(
             "JetPt": pt,
             "JetPhi": phi,
             "Rho": ak.values_astype(rho, np.float32),
+            "run": run,
         }
 
         # apply all correctors sequentially, updating the pt each time
@@ -364,12 +368,14 @@ def jec(
     # (for calculating TypeI MET correction)
     if self.propagate_met:
         # get correction factors
+
         jec_factors_subset_type1_met = correct_jets(
             pt=events[jet_name].pt_raw,
             eta=events[jet_name].eta,
             phi=events[jet_name].phi,
             area=events[jet_name].area,
             rho=rho,
+            run=jet_run,
             evaluator_key="jec_subset_type1_met",
         )
 
@@ -392,6 +398,7 @@ def jec(
         phi=events[jet_name].phi,
         area=events[jet_name].area,
         rho=rho,
+        run=jet_run,
         evaluator_key="jec",
     )
 
@@ -476,7 +483,7 @@ def jec(
 
 
 @jec.init
-def jec_init(self: Calibrator) -> None:
+def jec_init(self: Calibrator, **kwargs) -> None:
     jec_cfg = self.get_jec_config()
 
     sources = self.uncertainty_sources
@@ -513,16 +520,28 @@ def jec_init(self: Calibrator) -> None:
 
 
 @jec.requires
-def jec_requires(self: Calibrator, reqs: dict) -> None:
+def jec_requires(
+    self: Calibrator,
+    task: law.Task,
+    reqs: dict[str, DotDict[str, Any]],
+    **kwargs,
+) -> None:
     if "external_files" in reqs:
         return
 
     from columnflow.tasks.external import BundleExternalFiles
-    reqs["external_files"] = BundleExternalFiles.req(self.task)
+    reqs["external_files"] = BundleExternalFiles.req(task)
 
 
 @jec.setup
-def jec_setup(self: Calibrator, reqs: dict, inputs: dict, reader_targets: InsertableDict) -> None:
+def jec_setup(
+    self: Calibrator,
+    task: law.Task,
+    reqs: dict[str, DotDict[str, Any]],
+    inputs: dict[str, Any],
+    reader_targets: law.util.InsertableDict,
+    **kwargs,
+) -> None:
     """
     Load the correct jec files using the :py:func:`from_string` method of the
     :external+correctionlib:py:class:`correctionlib.highlevel.CorrectionSet`
@@ -573,13 +592,9 @@ def jec_setup(self: Calibrator, reqs: dict, inputs: dict, reader_targets: Insert
     :param inputs: Additional inputs, currently not used
     :param reader_targets: TODO: add documentation
     """
-    bundle = reqs["external_files"]
-
     # import the correction sets from the external file
-    import correctionlib
-    correction_set = correctionlib.CorrectionSet.from_string(
-        self.get_jec_file(bundle.files).load(formatter="gzip").decode("utf-8"),
-    )
+    jec_file = self.get_jec_file(reqs["external_files"].files)
+    correction_set = load_correction_set(jec_file)
 
     # compute JEC keys from config information
     jec_cfg = self.get_jec_config()
@@ -590,6 +605,13 @@ def jec_setup(self: Calibrator, reqs: dict, inputs: dict, reader_targets: Insert
             # if no special JEC era is specified, infer based on 'era'
             if jec_era is None:
                 jec_era = "Run" + self.dataset_inst.get_aux("era")
+            elif jec_era == "":
+                return [
+                    f"{jec.campaign}_{jec.version}_DATA_{name}_{jec.jet_type}"
+                    if is_data else
+                    f"{jec.campaign}_{jec.version}_MC_{name}_{jec.jet_type}"
+                    for name in names
+                ]
 
         return [
             f"{jec.campaign}_{jec_era}_{jec.version}_DATA_{name}_{jec.jet_type}"
@@ -700,6 +722,8 @@ def get_jer_config_default(self: Calibrator) -> DotDict:
     jec_uncertainty_sources=None,
     # whether gen jet matching should be performed relative to the nominal jet pt, or the jec varied values
     gen_jet_matching_nominal=False,
+    # regions where stochastic smearing is applied
+    stochastic_smearing_mask=lambda self, jets: ak.ones_like(jets.pt, dtype=np.bool),
 )
 def jer(self: Calibrator, events: ak.Array, **kwargs) -> ak.Array:
     """
@@ -839,7 +863,11 @@ def jer(self: Calibrator, events: ak.Array, **kwargs) -> ak.Array:
     add_smear = np.sqrt(ak.where(jersf2_m1 < 0, 0, jersf2_m1))
 
     # compute smearing factors (stochastic method)
-    smear_factors_stochastic = 1.0 + random_normal * jerpt * add_smear
+    smear_factors_stochastic = ak.where(
+        self.stochastic_smearing_mask(events[jet_name]),
+        1.0 + random_normal * jerpt * add_smear,
+        1.0,
+    )
 
     # -- scaling method (using gen match)
 
@@ -946,8 +974,14 @@ def jer(self: Calibrator, events: ak.Array, **kwargs) -> ak.Array:
     return events
 
 
+jer_horn_handling = jer.derive("jer_horn_handling", cls_dict={
+    # source: https://cms-jerc.web.cern.ch/Recommendations/#note-25eta30
+    "stochastic_smearing_mask": lambda self, jets: (abs(jets.eta) < 2.5) | (abs(jets.eta) > 3.0),
+})
+
+
 @jer.init
-def jer_init(self: Calibrator) -> None:
+def jer_init(self: Calibrator, **kwargs) -> None:
     # add jec_cfg for applying nominal smearing to jec variations
     jec_cfg = self.get_jec_config()
     jec_sources = self.jec_uncertainty_sources
@@ -994,16 +1028,28 @@ def jer_init(self: Calibrator) -> None:
 
 
 @jer.requires
-def jer_requires(self: Calibrator, reqs: dict) -> None:
+def jer_requires(
+    self: Calibrator,
+    task: law.Task,
+    reqs: dict[str, DotDict[str, Any]],
+    **kwargs,
+) -> None:
     if "external_files" in reqs:
         return
 
     from columnflow.tasks.external import BundleExternalFiles
-    reqs["external_files"] = BundleExternalFiles.req(self.task)
+    reqs["external_files"] = BundleExternalFiles.req(task)
 
 
 @jer.setup
-def jer_setup(self: Calibrator, reqs: dict, inputs: dict, reader_targets: InsertableDict) -> None:
+def jer_setup(
+    self: Calibrator,
+    task: law.Task,
+    reqs: dict[str, DotDict[str, Any]],
+    inputs: dict[str, Any],
+    reader_targets: law.util.InsertableDict,
+    **kwargs,
+) -> None:
     """
     Load the correct jer files using the :py:func:`from_string` method of the
     :external+correctionlib:py:class:`correctionlib.highlevel.CorrectionSet` function and apply the
@@ -1036,13 +1082,9 @@ def jer_setup(self: Calibrator, reqs: dict, inputs: dict, reader_targets: Insert
     :param inputs: Additional inputs, currently not used.
     :param reader_targets: TODO: add documentation.
     """
-    bundle = reqs["external_files"]
-
     # import the correction sets from the external file
-    import correctionlib
-    correction_set = correctionlib.CorrectionSet.from_string(
-        self.get_jer_file(bundle.files).load(formatter="gzip").decode("utf-8"),
-    )
+    jer_file = self.get_jer_file(reqs["external_files"].files)
+    correction_set = load_correction_set(jer_file)
 
     # compute JER keys from config information
     jer_cfg = self.get_jer_config()
@@ -1061,6 +1103,7 @@ def jer_setup(self: Calibrator, reqs: dict, inputs: dict, reader_targets: Insert
     if self.deterministic_seed_index >= 0:
         idx = self.deterministic_seed_index
         bit_generator = np.random.SFC64
+
         def deterministic_normal(loc, scale, seed):
             return np.asarray([
                 np.random.Generator(bit_generator(_seed)).normal(_loc, _scale, size=idx + 1)[-1]
@@ -1110,8 +1153,8 @@ def jets(self: Calibrator, events: ak.Array, **kwargs) -> ak.Array:
     return events
 
 
-@jets.init
-def jets_init(self: Calibrator) -> None:
+@jets.pre_init
+def jets_pre_init(self: Calibrator, **kwargs) -> None:
     # forward argument to the producers
     self.deps_kwargs[jec]["jet_name"] = self.jet_name
     self.deps_kwargs[jer]["jet_name"] = self.jet_name

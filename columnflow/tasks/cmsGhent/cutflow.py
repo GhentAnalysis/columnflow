@@ -3,12 +3,11 @@ from collections import defaultdict, OrderedDict
 from scinum import Number
 
 
-from columnflow.tasks.cutflow import (
-    RemoteWorkflow, Requirements, MergeCutflowHistograms,
-)
+from columnflow.tasks.cutflow import RemoteWorkflow, Requirements, MergeCutflowHistograms, SelectorStepsMixin
+from columnflow.tasks.framework.base import ShiftTask
 # from columnflow.tasks.framework.decorators import view_output_plots
 from columnflow.tasks.framework.mixins import (
-    CalibratorsMixin, SelectorStepsMixin, CategoriesMixin, DatasetsProcessesMixin,
+    CalibratorClassesMixin, SelectorClassMixin, CategoriesMixin, DatasetsProcessesMixin,
 )
 
 import luigi
@@ -21,9 +20,11 @@ np = maybe_import("numpy")
 
 class CreateCutflowTable(
     DatasetsProcessesMixin,
-    CategoriesMixin,
     SelectorStepsMixin,
-    CalibratorsMixin,
+    ShiftTask,
+    CalibratorClassesMixin,
+    SelectorClassMixin,
+    CategoriesMixin,
     law.LocalWorkflow,
     RemoteWorkflow,
 ):
