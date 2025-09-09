@@ -41,7 +41,7 @@ def init_btag(self: Producer, add_eff_vars=True):
         self.btag_config = self.get_btag_config()
 
     # update used columns
-    self.uses.add(f"Jet.{self.btag_config.discriminator }")
+    self.uses.add(f"Jet.{self.btag_config.discriminator}")
 
     if add_eff_vars:
         if "default_btag_variables" not in self.config_inst.aux:
