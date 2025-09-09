@@ -188,7 +188,7 @@ class egamma_scale_corrector(Calibrator):
         """
         self.uses |= {
             # nano columns
-            f"{self.source_field}.{{seedGain,pt,superclusterEta,r9}}",
+            f"{self.source_field}.{{seedGain,pt,eta,phi,superclusterEta,r9}}",
             "run",
             optional_column(f"{self.source_field}.rawPt"),
         }
@@ -351,6 +351,7 @@ class egamma_resolution_corrector(Calibrator):
         # prepare arguments
         variable_map = {
             "AbsScEta": np.abs(sceta),
+            "ScEta": sceta,  # 2024 version
             "eta": sceta,
             "r9": r9,
             "pt": pt,
@@ -435,7 +436,7 @@ class egamma_resolution_corrector(Calibrator):
         """
         self.uses |= {
             # nano columns
-            f"{self.source_field}.{{pt,superclusterEta,r9}}",
+            f"{self.source_field}.{{pt,eta,phi,superclusterEta,r9}}",
             optional_column(f"{self.source_field}.rawPt"),
         }
         self.produces |= {
