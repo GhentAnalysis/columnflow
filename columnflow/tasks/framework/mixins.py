@@ -2456,7 +2456,7 @@ class ShiftSourcesMixin(ConfigTask):
                 raise ValueError(f"no shifts found matching {params['shift_sources']}")
 
             # store them
-            params["shift_sources"] = tuple(sources)
+            params["shift_sources"] = tuple(sorted(sources))
 
         return params
 
