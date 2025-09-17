@@ -55,6 +55,7 @@ def trigger_scale_factors(
 
             # apply it
             inputs.append(expr(selected_events))
+
         for vr in sf:
             sf[vr][event_mask] = self.sf_corrector.evaluate(vr, *inputs)
     for vr in sf:
