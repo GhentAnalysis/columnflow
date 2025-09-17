@@ -131,7 +131,6 @@ class SelectionEfficiencyHistMixin(
         read the histograms calculated in MergeSelectionStats task, properly normalize,
         and apply flow and merged bin settings from the given variables.
         """
-        import numpy as np
         from columnflow.plotting.plot_util import use_flow_bins
 
         if name is None:
@@ -146,12 +145,19 @@ class SelectionEfficiencyHistMixin(
 
             h_in = inp["collection"][0]["hists"].load(formatter="pickle")[name]
             for variable_inst in variable_insts:
-                v_idx = h_in.axes.name.index(variable_inst.name)
-                for mi, mj in variable_inst.x("merge_bins", []):
-                    merged_bins = h_in[{variable_inst.name: slice(mi, mj + 1, sum)}]
-                    new_arr = np.moveaxis(h_in.view(), v_idx, 0)
-                    new_arr[mi:mj + 1] = merged_bins.view()[np.newaxis]
-                    h_in.view()[:] = np.moveaxis(new_arr, 0, v_idx)
+                if (merge_bins := variable_inst.x("merge_bins", None)):
+                    if isinstance(merge_bins, int):
+                        rebin = hist.rebin(merge_bins)
+                    else:
+                        rebin = hist.rebin(groups=list(merge_bins))
+                    h_in = h_in[{variable_inst.name: rebin}]
+
+                # v_idx = h_in.axes.name.index(variable_inst.name)
+                # for mi, mj in variable_inst.x("merge_bins", []):
+                #     merged_bins = h_in[{variable_inst.name: slice(mi, mj + 1, sum)}]
+                #     new_arr = np.moveaxis(h_in.view(), v_idx, 0)
+                #     new_arr[mi:mj + 1] = merged_bins.view()[np.newaxis]
+                #     h_in.view()[:] = np.moveaxis(new_arr, 0, v_idx)
 
                 if any(flows := [
                     getattr(variable_inst, f + "flow", variable_inst.x(f + "flow", False))

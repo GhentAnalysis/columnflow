@@ -412,7 +412,7 @@ class PlotTriggerScaleFactors1D(
         is_nominal = vrs == main_vrs
 
         scale_factors = self.input()["collection"][0]["sf"].load(formatter="pickle")
-        sf_hist = scale_factors["_".join(vrs)]
+        sf_hist = sf_nom = scale_factors["_".join(vrs)]
         if len(vrs) == 1 or is_nominal:
             hists = {self.process_inst: sf_hist}
         else:
@@ -441,12 +441,19 @@ class PlotTriggerScaleFactors1D(
         if not kwargs.setdefault("skip_ratio"):
             kwargs["skip_ratio"] = len(hists) == 1
 
+        vr_insts = []
+        for v in vrs:
+            v_inst = self.trigger_config_inst.get_variable(v)
+            # take into account possible rebinning
+            v_inst.binning = list(sf_nom.axes[v_inst.name].edges)
+            vr_insts.append(v_inst)
+
         fig, axes = self.call_plot_func(
             self.plot_function,
             hists=hists,
             config_inst=self.config_inst,
             category_inst=self.baseline_cat(),
-            variable_insts=[self.trigger_config_inst.get_variable(v) for v in vrs],
+            variable_insts=vr_insts,
             shift_insts=[self.config_inst.get_shift("nominal")],
             **kwargs,
         )
