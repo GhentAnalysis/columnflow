@@ -80,6 +80,10 @@ class CreateDatacards(SerializeInferenceModelBase):
                     process_inst = config_inst.get_process(proc_obj.config_data[config_inst.name].process)
                 else:
                     # skip process objects that rely on data from a different config
+                    if not proc_obj.config_data:
+                        self.logger.warning(
+                            f"{proc_obj.name} has not config data and will always be skipped",
+                        )
                     continue
 
                 # extract the histogram for the process
