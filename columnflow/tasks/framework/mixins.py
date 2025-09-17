@@ -1496,6 +1496,25 @@ class PreparationProducerMixin(ArrayFunctionInstanceMixin, MLModelMixin):
 
         return params
 
+    @classmethod
+    def get_known_shifts(
+        cls,
+        params: dict[str, Any],
+        shifts: TaskShifts,
+    ) -> None:
+        """
+        Updates the set of known *shifts* implemented by *this* and upstream tasks.
+
+        :param params: Dictionary of task parameters.
+        :param shifts: TaskShifts object to adjust.
+        """
+        # get the producer, update it and add its shifts
+        if (producer_inst := params.get("preparation_producer_inst", None)):
+            producer_shifts = producer_inst.all_shifts
+            shifts.local.update(producer_shifts)
+
+        super().get_known_shifts(params, shifts)
+
 
 class MLModelDataMixin(PreparationProducerMixin):
 
