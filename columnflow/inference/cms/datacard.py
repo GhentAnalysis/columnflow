@@ -402,11 +402,8 @@ class DatacardWriter(object):
                 overflow = (view.value[of_idx].copy(), view.variance[of_idx]) if ax.traits.overflow else (0.0, 0.0)
                 has_underflow = np.any(underflow[0])
                 has_overflow = np.any(overflow[0])
-
-
                 # nothing to do if flow bins are emoty
                 if not has_underflow and not has_overflow:
-                    do_break = False
                     continue
 
                 # warn in case of flow content
@@ -421,7 +418,6 @@ class DatacardWriter(object):
                             f"overflow content detected in category '{cat_obj.name}' for histogram "
                             f"'{name}' along axis {ax.name} ({overflow[0] / view.value.sum() * 100:.1f}% of integral)",
                         )
-                    do_break = False
                     continue
 
                 # here, we can already remove overflow values
