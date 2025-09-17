@@ -51,7 +51,7 @@ class ProduceColumns(_ProduceColumns):
 
         # add producer dependent requirements
         reqs["producer"] = law.util.make_unique(law.util.flatten(
-            self.producer_inst.run_requires(task=self),
+            self.producer_inst.run_requires(task=self, workflow=True),
         ))
 
         return reqs

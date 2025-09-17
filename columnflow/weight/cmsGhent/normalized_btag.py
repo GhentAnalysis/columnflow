@@ -66,7 +66,7 @@ def normalized_btag_weights_init(self: Producer) -> None:
 
 
 @normalized_btag_weights.requires
-def normalized_btag_weights_requires(self: Producer, reqs: dict) -> None:
+def normalized_btag_weights_requires(self: Producer, reqs: dict, **kwargs) -> None:
     from columnflow.tasks.selection import MergeSelectionStats
     reqs["selection_stats"] = MergeSelectionStats.req(
         self.task,

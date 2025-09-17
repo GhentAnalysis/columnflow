@@ -73,7 +73,7 @@ def trigger_scale_factors_init(self: Producer):
 
 
 @trigger_scale_factors.requires
-def trigger_scale_factors_requires(self: Producer, task: law.Task, reqs: dict) -> None:
+def trigger_scale_factors_requires(self: Producer, task: law.Task, reqs: dict, **kwargs) -> None:
 
     if self.get_sf_file:
         if "external_files" in reqs:

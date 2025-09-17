@@ -2717,6 +2717,7 @@ class TaskArrayFunction(ArrayFunction, metaclass=TaskArrayFunctionMeta):
         task: law.Task,
         reqs: dict[str, DotDict[str, Any]] | None = None,
         _cache: set | None = None,
+        workflow=False,
     ) -> dict[str, DotDict[str, Any]]:
         """
         Recursively runs the :py:meth:`requires_func` of this instance and all dependencies. *reqs*
@@ -2733,14 +2734,14 @@ class TaskArrayFunction(ArrayFunction, metaclass=TaskArrayFunctionMeta):
         # run the requirements of all dependent objects
         for dep in self.get_dependencies():
             if isinstance(dep, TaskArrayFunction):
-                dep.run_requires(task, reqs=reqs, _cache=_cache)
+                dep.run_requires(task, reqs=reqs, _cache=_cache, workflow=workflow)
 
         # run this instance's requires function
         if self not in _cache and callable(self.requires_func):
             _cache.add(self)
             if self.cls_name not in reqs:
                 reqs[self.cls_name] = DotDict()
-            self.requires_func(task=task, reqs=reqs[self.cls_name])
+            self.requires_func(task=task, reqs=reqs[self.cls_name], workflow=workflow)
 
         return reqs
 

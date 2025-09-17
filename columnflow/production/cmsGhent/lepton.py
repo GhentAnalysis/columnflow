@@ -200,7 +200,7 @@ def lepton_weights_init(self: Producer) -> None:
 
 
 @lepton_weights.requires
-def lepton_weights_requires(self: Producer, task: law.Task, reqs: dict) -> None:
+def lepton_weights_requires(self: Producer, task: law.Task, reqs: dict, **kwargs) -> None:
     if "external_files" in reqs or self.lepton_config is None:
         return
 
