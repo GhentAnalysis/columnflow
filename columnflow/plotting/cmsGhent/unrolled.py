@@ -256,7 +256,7 @@ def plot_unrolled(
             h = cfg["hist"]
             kw = cfg.get("kwargs", {})
             plot_methods[method](ax, h, **kw)
-            if not skip_ratio:
+            if (not skip_ratio ) & (method != "draw_stack"):
                 # take ratio_method if the ratio plot requires a different plotting method
                 method = cfg.get("ratio_method", method)
                 rkw = cfg.get("ratio_kwargs", {})
@@ -438,7 +438,7 @@ def plot_unrolled(
     if aux_labels := y_variable_inst.x_labels:
         if len(aux_labels) == len(axes):
             for i, aux_label in enumerate(aux_labels):
-                region = f"Ancillary region {i + 1}:"
+                region = f"Region {i + 1}:"
                 label = region + "\n " + aux_label
                 this_annotation = annotate_kwargs.copy()
                 this_annotation["text"] = label
