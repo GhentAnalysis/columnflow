@@ -1,0 +1,8 @@
+# version 11
+
+# use packages from columnar sandbox as baseline
+-r columnar.txt
+
+# add numpy and onnxruntime with exact version requirement
+onnxruntime=1.15.1
+numpy==1.26.4
