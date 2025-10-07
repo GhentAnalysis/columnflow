@@ -22,7 +22,7 @@ def norm(X, mean, std, scale):
 
 
 @calibrator(
-    uses=four_vec("GenPart", "pdgId"),
+    uses=four_vec("GenPart", {"pdgId", "statusFlags"}),
     produces={"ttbar_minnlo_weight"},
     sandbox="bash::$CF_BASE/sandboxes/venv_onnxruntime.sh",
     input_norm={
@@ -78,14 +78,14 @@ def ttbar_minnlo_reweighting_producer(self: Calibrator, events: ak.Array, **kwar
             top = sum_top
         else:
             top = events.GenPart[events.GenPart.pdgId == pdgId]
-            top = top[top.hasFlags("isLastCopy")]
+            top = top[top.hasFlags("isLastCopy")][:, 0]
             top = TetraVec(top)
             # sum top quarks
             sum_top = top if sum_top is None else (sum_top + top)
 
         # inputs
         top_inp = [
-            norm(top[inp], *norms[pdgId])
+            norm(getattr(top, inp), *norms[pdgId])
             for inp, norms in self.input_norm.items()
         ] + [np.full(len(top), pdgId / 10)]
         input.append(np.array(top_inp))
@@ -105,7 +105,12 @@ def ttbar_minnlo_reweighting_producer(self: Calibrator, events: ak.Array, **kwar
 
 
 @ttbar_minnlo_reweighting_producer.requires
-def ttbar_minnlo_reweighting_producer_requires(self: Calibrator, task: law.Task, reqs: dict) -> None:
+def ttbar_minnlo_reweighting_producer_requires(
+    self: Calibrator,
+    task: law.Task,
+    reqs: dict,
+    **kwargs,
+) -> None:
     if "external_files" in reqs:
         return
     reqs["external_files"] = BundleExternalFiles.req(task)
