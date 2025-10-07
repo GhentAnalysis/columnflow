@@ -26,6 +26,7 @@ maybe_import("coffea.nanoevents.methods.nanoaod")
 def hdamp_reweighting_producer(self: Calibrator, events: ak.Array, **kwargs) -> ak.Array:
     """
     Produces the hdamp reweighting scores.
+    Based on https://twiki.cern.ch/twiki/pub/CMS/MLReweighting/ImplementationCMSSW.pdf
     Requires an external file in the config under ``hdamp``:
 
     .. code-block:: python
@@ -63,12 +64,12 @@ def hdamp_reweighting_producer(self: Calibrator, events: ak.Array, **kwargs) -> 
             np.log10(top.pt),
             top.rapidity,
             top.phi,
-            top.mass / self.maxM
+            top.mass / self.maxM,
         ] + [
             np.full(len(top), cst)
             for cst in [
                 {6: 0.1, -6: 0.2}[pdgId],
-                self.default_hdamp
+                self.default_hdamp,
             ]
         ])
         input.append(top_inp)

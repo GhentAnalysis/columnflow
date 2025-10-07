@@ -49,11 +49,11 @@ def norm(X, mean, std, scale):
             -6: (171.93691192651536, 6.9500586980501575, "linear"),
         },
     },
-    sample_rb=0.855,
 )
 def ttbar_minnlo_reweighting_producer(self: Calibrator, events: ak.Array, **kwargs) -> ak.Array:
     """
     Produces the HVQ to MiNNLO reweighting values.
+    Based on https://twiki.cern.ch/twiki/pub/CMS/MLReweighting/CMSSW_script_afterShower.py.txt
     Requires an external file in the config under ``ttbar_minnlo``:
 
     .. code-block:: python
@@ -99,7 +99,7 @@ def ttbar_minnlo_reweighting_producer(self: Calibrator, events: ak.Array, **kwar
     label_name = self.model.get_outputs()[0].name
     input_name = self.model.get_inputs()[0].name
     pred = self.model.run([label_name], {input_name: input.astype(np.float32)})[0]
-    events = set_ak_column(events, f"ttbar_minnlo_weight", pred[:, 1] / pred[:, 0])
+    events = set_ak_column(events, "ttbar_minnlo_weight", pred[:, 1] / pred[:, 0])
 
     return events
 
