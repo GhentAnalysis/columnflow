@@ -37,6 +37,9 @@ def hdamp_reweighting_producer(self: Calibrator, events: ak.Array, **kwargs) -> 
             },
         })
 
+    The onnx files can be found on this twiki:
+    https://twiki.cern.ch/twiki/bin/view/CMS/MLReweighting
+
     Requires adding the environment venv_onnx which includes onnx to the analysis or config. E.g.
 
     analysis_inst.x.bash_sandboxes = [
@@ -87,7 +90,12 @@ def hdamp_reweighting_producer(self: Calibrator, events: ak.Array, **kwargs) -> 
 
 
 @hdamp_reweighting_producer.requires
-def hdamp_reweighting_producer_requires(self: Calibrator, task: law.Task, reqs: dict) -> None:
+def hdamp_reweighting_producer_requires(
+    self: Calibrator,
+    task: law.Task,
+    reqs: dict,
+    **kwargs,
+) -> None:
     if "external_files" in reqs:
         return
     reqs["external_files"] = BundleExternalFiles.req(task)
