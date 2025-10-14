@@ -13,7 +13,7 @@ from columnflow.util import maybe_import, four_vec
 from columnflow.columnar_util import set_ak_column, optional_column
 # from columnflow.production.util import attach_coffea_behavior
 from columnflow.selection import Selector, SelectionResult, selector
-from columnflow.reduction.util import masked_sorted_indices
+from columnflow.columnar_util import sorted_indices_from_mask
 
 ak = maybe_import("awkward")
 
@@ -83,7 +83,7 @@ def lepton_mva_object(
         steps={},
         objects={
             lep:
-                {lep: masked_sorted_indices(events[lep][working_point[lep]], events[lep].pt)}
+                {lep: sorted_indices_from_mask(events[lep][working_point[lep]], events[lep].pt)}
             for lep in ["Muon", "Electron"]
         },
     )
