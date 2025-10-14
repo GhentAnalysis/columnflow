@@ -187,6 +187,12 @@ class CreateCutflowHistograms(_CreateCutflowHistograms):
             for cat in self.config_inst.get_leaf_categories()
         }
 
+        # get IDs and names of all leaf categories
+        leaf_category_map = {
+            cat.id: cat.name
+            for cat in self.config_inst.get_leaf_categories()
+        }
+
         # create a temp dir for saving intermediate files
         tmp_dir = law.LocalDirectoryTarget(is_tmp=True)
         tmp_dir.touch()

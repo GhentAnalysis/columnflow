@@ -18,7 +18,6 @@ from columnflow.tasks.framework.base import Requirements, ShiftTask
 from columnflow.tasks.framework.mixins import (
     CalibratorClassesMixin, SelectorClassMixin, ReducerClassMixin, ProducerClassesMixin, HistProducerClassMixin,
     CategoriesMixin, ShiftSourcesMixin, HistHookMixin, MLModelsMixin,
-    # ParamsCacheMixin,
 )
 from columnflow.tasks.framework.plotting import (
     PlotBase, PlotBase1D, PlotBase2D, ProcessPlotSettingMixin, VariablePlotSettingMixin,
@@ -32,7 +31,6 @@ from columnflow.config_util import get_shift_from_configs
 
 
 class _PlotVariablesBase(
-    # ParamsCacheMixin
     CalibratorClassesMixin,
     SelectorClassMixin,
     ReducerClassMixin,
@@ -52,9 +50,19 @@ class _PlotVariablesBase(
 
 
 class PlotVariablesBase(_PlotVariablesBase):
+
+    bypass_branch_requirements = luigi.BoolParameter(
+        default=False,
+        description="whether to skip branch requirements and only use that of the workflow; default: False",
+    )
+
     single_config = False
 
     sandbox = dev_sandbox(law.config.get("analysis", "default_columnar_sandbox"))
+
+    exclude_params_repr = {"bypass_branch_requirements"}
+    exclude_params_index = {"bypass_branch_requirements"}
+    exclude_params_repr = {"bypass_branch_requirements"}
 
     exclude_index = True
 
@@ -75,6 +83,13 @@ class PlotVariablesBase(_PlotVariablesBase):
         reqs["merged_hists"] = self.requires_from_branch()
         return reqs
 
+    def local_workflow_pre_run(self):
+        # when branches are cached, reinitiate the branch tasks with dropped branch level requirements since this
+        # method is called from a context where the identical workflow level requirements are already resolved
+        if self.cache_branch_map:
+            self._branch_tasks = None
+            self.get_branch_tasks(bypass_branch_requirements=True)
+
     @abstractmethod
     def get_plot_shifts(self):
         return
@@ -94,7 +109,7 @@ class PlotVariablesBase(_PlotVariablesBase):
             dictionaries containing the dataset-process mapping and the shifts to be considered, and a dictionary
             mapping process names to the shifts to be considered.
         """
-        reqs = self.requires()
+        reqs = self.requires() or self.as_workflow().requires().merged_hists
 
         config_process_map = {config_inst: {} for config_inst in self.config_insts}
         process_shift_map = defaultdict(set)
@@ -161,12 +176,13 @@ class PlotVariablesBase(_PlotVariablesBase):
         plot_shift_names = set(shift_inst.name for shift_inst in plot_shifts)
 
         # get assignment of processes to datasets and shifts
-        config_process_map, _ = self.get_config_process_map()
+        config_process_map, process_shift_map = self.get_config_process_map()
 
         # histogram data per process copy
         hists: dict[od.Config, dict[od.Process, hist.Hist]] = {}
         with self.publish_step(f"plotting {self.branch_data.variable} in {self.branch_data.category}"):
-            for i, (config, dataset_dict) in enumerate(self.input().items()):
+            inputs = self.input() or self.workflow_input().merged_hists
+            for i, (config, dataset_dict) in enumerate(inputs.items()):
                 config_inst = self.config_insts[i]
                 category_inst = config_inst.get_category(self.branch_data.category)
                 leaf_category_insts = category_inst.get_leaf_categories() or [category_inst]
@@ -194,7 +210,10 @@ class PlotVariablesBase(_PlotVariablesBase):
                         h = h[{"process": sum}]
 
                         # create expected shift bins and fill them with the nominal histogram
-                        add_missing_shifts(h, plot_shift_names, str_axis="shift", nominal_bin="nominal")
+                        # change Ghent: replace all expected shifts with nominal.
+                        # not preffered by columnflow: https://github.com/columnflow/columnflow/pull/692
+                        expected_shifts = plot_shift_names # & process_shift_map[process_inst.name]
+                        add_missing_shifts(h, expected_shifts, str_axis="shift", nominal_bin="nominal")
 
                         # add the histogram
                         if process_inst in hists_config:
@@ -219,7 +238,10 @@ class PlotVariablesBase(_PlotVariablesBase):
                     )
 
             # update histograms using custom hooks
-            hists = self.invoke_hist_hooks(hists)
+            hists = self.invoke_hist_hooks(
+                hists,
+                hook_kwargs={"category_name": self.branch_data.category, "variable_name": self.branch_data.variable},
+            )
 
             # merge configs
             if len(self.config_insts) != 1:
@@ -243,6 +265,17 @@ class PlotVariablesBase(_PlotVariablesBase):
             _hists = OrderedDict()
             for process_inst in hists.keys():
                 h = hists[process_inst]
+                # determine expected shifts from the intersection of requested shifts and those known for the process
+                process_shifts = (
+                    process_shift_map[process_inst.name]
+                    if process_inst.name in process_shift_map
+                    else {"nominal"}
+                )
+                # change Ghent: replace all expected shifts with nominal.
+                # not preffered by columnflow: https://github.com/columnflow/columnflow/pull/692
+                expected_shifts = plot_shift_names # & process_shifts
+                if not expected_shifts:
+                    raise Exception(f"no shifts to plot found for process {process_inst.name}")
                 # selections
                 h = h[{
                     "category": [
@@ -252,7 +285,7 @@ class PlotVariablesBase(_PlotVariablesBase):
                     ],
                     "shift": [
                         hist.loc(s_name)
-                        for s_name in plot_shift_names
+                        for s_name in expected_shifts
                         if s_name in h.axes["shift"]
                     ],
                 }]
@@ -300,6 +333,7 @@ class PlotVariablesBaseSingleShift(
 ):
     # use the MergeHistograms task to trigger upstream TaskArrayFunction initialization
     resolution_task_cls = MergeHistograms
+
     exclude_index = True
 
     reqs = Requirements(
@@ -314,28 +348,27 @@ class PlotVariablesBaseSingleShift(
             for cat_name in sorted(self.categories)
         ]
 
-    def workflow_requires(self):
-        reqs = super().workflow_requires()
-        return reqs
-
     def requires(self):
-        req = {}
+        reqs = {}
 
-        for i, config_inst in enumerate(self.config_insts):
-            sub_datasets = self.datasets[i]
-            req[config_inst.name] = {}
-            for d in sub_datasets:
-                if d in config_inst.datasets.names():
-                    req[config_inst.name][d] = self.reqs.MergeHistograms.req(
-                        self,
-                        config=config_inst.name,
-                        shift=self.global_shift_insts[config_inst].name,
-                        dataset=d,
-                        branch=-1,
-                        _exclude={"branches"},
-                        _prefer_cli={"variables"},
-                    )
-        return req
+        if self.is_branch() and self.bypass_branch_requirements:
+            return reqs
+
+        for config_inst, datasets in zip(self.config_insts, self.datasets):
+            reqs[config_inst.name] = {}
+            for d in datasets:
+                if d not in config_inst.datasets:
+                    continue
+                reqs[config_inst.name][d] = self.reqs.MergeHistograms.req_different_branching(
+                    self,
+                    config=config_inst.name,
+                    shift=self.global_shift_insts[config_inst].name,
+                    dataset=d,
+                    branch=-1,
+                    _prefer_cli={"variables"},
+                )
+
+        return reqs
 
     def plot_parts(self) -> law.util.InsertableDict:
         parts = super().plot_parts()
@@ -474,26 +507,32 @@ class PlotVariablesBaseMultiShifts(
         return [DotDict(zip(keys, vals)) for vals in itertools.product(*seqs)]
 
     def requires(self):
-        req_cls = lambda dataset_name: (
+        reqs = {}
+
+        if self.is_branch() and self.bypass_branch_requirements:
+            return reqs
+
+        req_cls = lambda dataset_name, config_inst: (
             self.reqs.MergeShiftedHistograms
-            if self.config_inst.get_dataset(dataset_name).is_mc
+            if config_inst.get_dataset(dataset_name).is_mc
             else self.reqs.MergeHistograms
         )
 
-        req = {}
-        for i, config_inst in enumerate(self.config_insts):
-            req[config_inst.name] = {}
-            for dataset_name in self.datasets[i]:
-                if dataset_name in config_inst.datasets:
-                    req[config_inst.name][dataset_name] = req_cls(dataset_name).req(
-                        self,
-                        config=config_inst.name,
-                        dataset=dataset_name,
-                        branch=-1,
-                        _exclude={"branches"},
-                        _prefer_cli={"variables"},
-                    )
-        return req
+        for config_inst, datasets in zip(self.config_insts, self.datasets):
+            reqs[config_inst.name] = {}
+            for d in datasets:
+                if d not in config_inst.datasets:
+                    continue
+                reqs[config_inst.name][d] = req_cls(d, config_inst).req(
+                    self,
+                    config=config_inst.name,
+                    dataset=d,
+                    branch=-1,
+                    _exclude={"branches"},
+                    _prefer_cli={"variables"},
+                )
+
+        return reqs
 
     def plot_parts(self) -> law.util.InsertableDict:
         parts = super().plot_parts()
@@ -565,8 +604,8 @@ class PlotShiftedVariablesPerShift1D(
 
 
 class PlotShiftedVariablesPerConfig1D(
-    law.WrapperTask,
     PlotShiftedVariables1D,
+    law.WrapperTask,
 ):
     # force this one to be a local workflow
     workflow = "local"
