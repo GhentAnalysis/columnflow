@@ -1,6 +1,8 @@
 import law
 from collections import OrderedDict
 from columnflow.util import maybe_import
+from unittest.mock import patch
+from functools import partial
 
 plt = maybe_import("matplotlib.pyplot")
 np = maybe_import("numpy")
