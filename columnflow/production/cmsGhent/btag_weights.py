@@ -20,8 +20,6 @@ from columnflow.production.cms.btag import BTagSFConfig
 
 ak = maybe_import("awkward")
 np = maybe_import("numpy")
-hist = maybe_import("hist")
-correctionlib = maybe_import("correctionlib")
 
 logger = law.logger.get_logger(__name__)
 
@@ -64,6 +62,8 @@ def init_btag(self: Producer, add_eff_vars=True):
 
 
 def setup_btag(self: Producer, task: law.Task, reqs: dict):
+    import correctionlib
+
     bundle = reqs["external_files"]
     correction_set_btag_wp_corr = correctionlib.CorrectionSet.from_string(
         self.get_btag_sf(bundle.files).load(formatter="gzip").decode("utf-8"),
@@ -299,6 +299,8 @@ def fixed_wp_btag_weights_setup(
     inputs: dict,
     reader_targets: law.util.InsertableDict,
 ) -> None:
+    import correctionlib
+
     correction_set_btag_wp_corr = setup_btag(self, task, reqs)
 
     # fix for change in nomenclature of deepJet scale factors for light hadronFlavour jets
@@ -366,6 +368,7 @@ def btag_efficiency_hists(
     hists: DotDict | dict = None,
     **kwargs,
 ) -> ak.Array:
+    import hist
 
     if hists is None:
         return events

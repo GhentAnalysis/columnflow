@@ -1,15 +1,11 @@
+import order as od
 import law
 from collections import OrderedDict
 from columnflow.util import maybe_import
 from unittest.mock import patch
 from functools import partial
 
-plt = maybe_import("matplotlib.pyplot")
 np = maybe_import("numpy")
-od = maybe_import("order")
-mtrans = maybe_import("matplotlib.transforms")
-mplhep = maybe_import("mplhep")
-hist = maybe_import("hist")
 
 from columnflow.plotting.plot_util import (
     apply_variable_settings,
@@ -24,6 +20,7 @@ def merge_migration_bins(h):
     """
     binning both axes in equal bins
     """
+    import hist
 
     x_edges = h.axes[0].edges
     y_edges = h.axes[1].edges
@@ -98,6 +95,12 @@ def plot_migration_matrices(
     keep_bins_in_bkg: bool = False,
     **kwargs,
 ):
+    import mplhep
+    import matplotlib.transforms as mtrans
+    import matplotlib.pyplot as plt
+
+
+
     plt.style.use(mplhep.style.CMS)
     fig, axes = plt.subplots(
         2, 3,
