@@ -13,10 +13,7 @@ import law
 from columnflow.types import Any
 
 from columnflow.tasks.framework.base import Requirements, AnalysisTask, wrapper_factory
-from columnflow.tasks.framework.mixins import (
-    CalibratorsMixin, SelectorMixin, ChunkedIOMixin, ProducerMixin,
-    # ParamsCacheMixin,
-)
+from columnflow.tasks.framework.mixins import CalibratorsMixin, SelectorMixin, ChunkedIOMixin, ProducerMixin
 from columnflow.tasks.framework.remote import RemoteWorkflow
 from columnflow.tasks.framework.decorators import on_failure
 from columnflow.tasks.external import GetDatasetLFNs
@@ -24,7 +21,6 @@ from columnflow.tasks.calibration import CalibrateEvents
 from columnflow.util import maybe_import, ensure_proxy, dev_sandbox, safe_div, DotDict
 from columnflow.tasks.framework.parameters import DerivableInstParameter
 from columnflow.production import Producer
-
 
 np = maybe_import("numpy")
 ak = maybe_import("awkward")
@@ -287,14 +283,24 @@ class SelectEvents(_SelectEvents):
         sorted_chunks = [result_chunks[key] for key in sorted(result_chunks)]
         writer_opts_masks = self.get_parquet_writer_opts(repeating_values=True)
         law.pyarrow.merge_parquet_task(
-            self, sorted_chunks, outputs["results"], local=True, writer_opts=writer_opts_masks,
+            task=self,
+            inputs=sorted_chunks,
+            output=outputs["results"],
+            local=True,
+            writer_opts=writer_opts_masks,
+            target_row_group_size=self.merging_row_group_size,
         )
 
         # merge the column files
         if write_columns:
             sorted_chunks = [column_chunks[key] for key in sorted(column_chunks)]
             law.pyarrow.merge_parquet_task(
-                self, sorted_chunks, outputs["columns"], local=True, writer_opts=self.get_parquet_writer_opts(),
+                task=self,
+                inputs=sorted_chunks,
+                output=outputs["columns"],
+                local=True,
+                writer_opts=self.get_parquet_writer_opts(),
+                target_row_group_size=self.merging_row_group_size,
             )
 
         # save stats

@@ -4,20 +4,24 @@
 Jet energy corrections and jet resolution smearing.
 """
 
+from __future__ import annotations
+
 import functools
 
 import law
 
-from columnflow.types import Any
 from columnflow.calibration import Calibrator, calibrator
 from columnflow.calibration.util import ak_random, propagate_met, sum_transverse
 from columnflow.production.util import attach_coffea_behavior
-from columnflow.util import maybe_import, DotDict, load_correction_set
+from columnflow.util import UNSET, maybe_import, DotDict, load_correction_set
 from columnflow.columnar_util import set_ak_column, layout_ak_array, optional_column as optional
+from columnflow.types import TYPE_CHECKING, Any
 
 np = maybe_import("numpy")
 ak = maybe_import("awkward")
-correctionlib = maybe_import("correctionlib")
+if TYPE_CHECKING:
+    correctionlib = maybe_import("correctionlib")
+
 
 logger = law.logger.get_logger(__name__)
 
@@ -228,6 +232,7 @@ def get_jec_config_default(self: Calibrator) -> DotDict:
 
 @calibrator(
     uses={
+        "run",
         optional("fixedGridRhoFastjetAll"),
         optional("Rho.fixedGridRhoFastjetAll"),
         attach_coffea_behavior,
@@ -328,7 +333,10 @@ def jec(
     events = set_ak_column_f32(events, f"{jet_name}.pt_raw", events[jet_name].pt * (1 - events[jet_name].rawFactor))
     events = set_ak_column_f32(events, f"{jet_name}.mass_raw", events[jet_name].mass * (1 - events[jet_name].rawFactor))
 
-    def correct_jets(*, pt, eta, phi, area, rho, evaluator_key="jec"):
+    # run number for each jet required in 2023 L2L3Residual jec corrections for data
+    jet_run = ak.broadcast_arrays(events.run, events[jet_name].pt_raw)[0]
+
+    def correct_jets(*, pt, eta, phi, area, rho, run, evaluator_key="jec"):
         # variable naming convention
         variable_map = {
             "JetA": area,
@@ -336,6 +344,7 @@ def jec(
             "JetPt": pt,
             "JetPhi": phi,
             "Rho": ak.values_astype(rho, np.float32),
+            "run": run,
         }
 
         # apply all correctors sequentially, updating the pt each time
@@ -364,12 +373,14 @@ def jec(
     # (for calculating TypeI MET correction)
     if self.propagate_met:
         # get correction factors
+
         jec_factors_subset_type1_met = correct_jets(
             pt=events[jet_name].pt_raw,
             eta=events[jet_name].eta,
             phi=events[jet_name].phi,
             area=events[jet_name].area,
             rho=rho,
+            run=jet_run,
             evaluator_key="jec_subset_type1_met",
         )
 
@@ -392,6 +403,7 @@ def jec(
         phi=events[jet_name].phi,
         area=events[jet_name].area,
         rho=rho,
+        run=jet_run,
         evaluator_key="jec",
     )
 
@@ -577,6 +589,8 @@ def jec_setup(
                     "CorrelationGroupFlavor",
                     "CorrelationGroupUncorrelated",
                 ],
+                # whether the JECs for data should be era-specific
+                "data_per_era": True,
             },
         })
 
@@ -593,18 +607,36 @@ def jec_setup(
     jec_cfg = self.get_jec_config()
 
     def make_jme_keys(names, jec=jec_cfg, is_data=self.dataset_inst.is_data):
-        if is_data:
+        if is_data and jec.get("data_per_era", True):
+            if "data_per_era" not in jec:
+                logger.warning_once(
+                    f"{id(self)}_depr_jec_config_data_per_era",
+                    "config aux 'jec' does not contain key 'data_per_era'. "
+                    "This may be due to an outdated config. Continuing under the assumption that "
+                    "JEC keys for data are era-specific. "
+                    "This assumption will be removed in future versions of "
+                    "columnflow, so please adapt the config according to the "
+                    "documentation to remove this warning and ensure future "
+                    "compatibility of the code.",
+                )
             jec_era = self.dataset_inst.get_aux("jec_era", None)
             # if no special JEC era is specified, infer based on 'era'
             if jec_era is None:
-                jec_era = "Run" + self.dataset_inst.get_aux("era")
+                era = self.dataset_inst.get_aux("era", None)
+                if era is None:
+                    raise ValueError(
+                        "JEC data key is requested to be era dependent, but neither jec_era or era "
+                        f"auxiliary is set for dataset {self.dataset_inst.name}.",
+                    )
+                jec_era = "Run" + era
 
-        return [
-            f"{jec.campaign}_{jec_era}_{jec.version}_DATA_{name}_{jec.jet_type}"
-            if is_data else
-            f"{jec.campaign}_{jec.version}_MC_{name}_{jec.jet_type}"
-            for name in names
-        ]
+            jme_key = f"{jec.campaign}_{jec_era}_{jec.version}_DATA_{{name}}_{jec.jet_type}"
+        elif is_data:
+            jme_key = f"{jec.campaign}_{jec.version}_DATA_{{name}}_{jec.jet_type}"
+        else:  # MC
+            jme_key = f"{jec.campaign}_{jec.version}_MC_{{name}}_{jec.jet_type}"
+
+        return [jme_key.format(name=name) for name in names]
 
     jec_keys = make_jme_keys(jec_cfg.levels)
     jec_keys_subset_type1_met = make_jme_keys(jec_cfg.levels_for_type1_met)
@@ -709,7 +741,7 @@ def get_jer_config_default(self: Calibrator) -> DotDict:
     # whether gen jet matching should be performed relative to the nominal jet pt, or the jec varied values
     gen_jet_matching_nominal=False,
     # regions where stochastic smearing is applied
-    stochastic_smearing_mask=lambda self, jets: ak.ones_like(jets.pt, dtype=np.bool),
+    stochastic_smearing_mask=lambda self, jets: ak.ones_like(jets.pt, dtype=bool),
 )
 def jer(self: Calibrator, events: ak.Array, **kwargs) -> ak.Array:
     """
@@ -806,17 +838,17 @@ def jer(self: Calibrator, events: ak.Array, **kwargs) -> ak.Array:
 
     # extract nominal pt resolution
     inputs = [variable_map[inp.name] for inp in self.evaluators["jer"].inputs]
-    jerpt = {jer_nom: ak_evaluate(self.evaluators["jer"], *inputs)}
+    jer = {jer_nom: ak_evaluate(self.evaluators["jer"], *inputs)}
 
     # for simplifications below, use the same values for jer variations
-    jerpt[jer_up] = jerpt[jer_nom]
-    jerpt[jer_down] = jerpt[jer_nom]
+    jer[jer_up] = jer[jer_nom]
+    jer[jer_down] = jer[jer_nom]
 
     # extract pt resolutions evaluted for jec uncertainties
     for jec_var in self.jec_variations:
         _variable_map = variable_map | {"JetPt": events[jet_name][f"pt_{jec_var}"]}
         inputs = [_variable_map[inp.name] for inp in self.evaluators["jer"].inputs]
-        jerpt[jec_var] = ak_evaluate(self.evaluators["jer"], *inputs)
+        jer[jec_var] = ak_evaluate(self.evaluators["jer"], *inputs)
 
     # extract scale factors
     jersf = {}
@@ -833,8 +865,8 @@ def jer(self: Calibrator, events: ak.Array, **kwargs) -> ak.Array:
 
     # array with all JER scale factor variations as an additional axis
     # (note: axis needs to be regular for broadcasting to work correctly)
-    jerpt = ak.concatenate(
-        [jerpt[v][..., None] for v in self.jer_variations + self.jec_variations],
+    jer = ak.concatenate(
+        [jer[v][..., None] for v in self.jer_variations + self.jec_variations],
         axis=-1,
     )
     jersf = ak.concatenate(
@@ -851,7 +883,7 @@ def jer(self: Calibrator, events: ak.Array, **kwargs) -> ak.Array:
     # compute smearing factors (stochastic method)
     smear_factors_stochastic = ak.where(
         self.stochastic_smearing_mask(events[jet_name]),
-        1.0 + random_normal * jerpt * add_smear,
+        1.0 + random_normal * jer * add_smear,
         1.0,
     )
 
@@ -883,7 +915,7 @@ def jer(self: Calibrator, events: ak.Array, **kwargs) -> ak.Array:
 
     # test if matched gen jets are within 3 * resolution
     # (no check for Delta-R matching criterion; we assume this was done during nanoAOD production to get the genJetIdx)
-    is_matched_pt = np.abs(pt_relative_diff) < 3 * jerpt
+    is_matched_pt = np.abs(pt_relative_diff) < 3 * jer
     is_matched_pt = ak.fill_none(is_matched_pt, False)  # masked values = no gen match
 
     # compute smearing factors (scaling method)
@@ -1108,8 +1140,6 @@ jer_ak8 = jer.derive("jer_ak8", cls_dict={"jet_name": "FatJet", "gen_jet_name": 
 #
 
 @calibrator(
-    uses={jec, jer},
-    produces={jec, jer},
     # name of the jet collection to smear
     jet_name="Jet",
     # name of the associated gen jet collection (for JER smearing)
@@ -1130,32 +1160,35 @@ def jets(self: Calibrator, events: ak.Array, **kwargs) -> ak.Array:
     :param events: awkward array containing events to process
     """
     # apply jet energy corrections
-    events = self[jec](events, **kwargs)
+    events = self[self.jec_cls](events, **kwargs)
 
     # apply jer smearing on MC only
     if self.dataset_inst.is_mc:
-        events = self[jer](events, **kwargs)
+        events = self[self.jer_cls](events, **kwargs)
 
     return events
 
 
-@jets.pre_init
-def jets_pre_init(self: Calibrator, **kwargs) -> None:
-    # forward argument to the producers
-    self.deps_kwargs[jec]["jet_name"] = self.jet_name
-    self.deps_kwargs[jer]["jet_name"] = self.jet_name
-    self.deps_kwargs[jer]["gen_jet_name"] = self.gen_jet_name
-    if self.propagate_met is not None:
-        self.deps_kwargs[jec]["propagate_met"] = self.propagate_met
-        self.deps_kwargs[jer]["propagate_met"] = self.propagate_met
-    if self.get_jec_file is not None:
-        self.deps_kwargs[jec]["get_jec_file"] = self.get_jec_file
-    if self.get_jec_config is not None:
-        self.deps_kwargs[jec]["get_jec_config"] = self.get_jec_config
-    if self.get_jer_file is not None:
-        self.deps_kwargs[jer]["get_jer_file"] = self.get_jer_file
-    if self.get_jer_config is not None:
-        self.deps_kwargs[jer]["get_jer_config"] = self.get_jer_config
+@jets.init
+def jets_init(self: Calibrator, **kwargs) -> None:
+    # create custom jec and jer calibrators, using the jet name as the identifying value
+    def get_attrs(attrs):
+        cls_dict = {}
+        for attr in attrs:
+            if (value := getattr(self, attr, UNSET)) is not UNSET:
+                cls_dict[attr] = value
+        return cls_dict
+
+    jec_attrs = ["jet_name", "gen_jet_name", "propagate_met", "get_jec_file", "get_jec_config"]
+    self.jec_cls = jec.derive(f"jec_{self.jet_name}", cls_dict=get_attrs(jec_attrs))
+    self.uses.add(self.jec_cls)
+    self.produces.add(self.jec_cls)
+
+    if self.dataset_inst.is_mc:
+        jer_attrs = ["jet_name", "gen_jet_name", "propagate_met", "get_jer_file", "get_jer_config"]
+        self.jer_cls = jer.derive(f"jer_{self.jet_name}", cls_dict=get_attrs(jer_attrs))
+        self.uses.add(self.jer_cls)
+        self.produces.add(self.jer_cls)
 
 
 # explicit calibrators for standard jet collections

@@ -16,8 +16,10 @@ from __cf_short_name_lc__.config.categories import add_categories_production
 
 np = maybe_import("numpy")
 ak = maybe_import("awkward")
-coffea = maybe_import("coffea")
-maybe_import("coffea.nanoevents.methods.nanoaod")
+
+# do not import coffea globally! Do this inside the function
+# coffea = maybe_import("coffea")
+# maybe_import("coffea.nanoevents.methods.nanoaod")
 
 
 @producer(

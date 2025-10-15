@@ -9,10 +9,13 @@ import order as od
 from columnflow.production import Producer
 from columnflow.util import maybe_import
 from columnflow.plotting.plot_util import use_flow_bins
+from columnflow.types import TYPE_CHECKING
 
-hist = maybe_import("hist")
-Hist = hist.Hist
 np = maybe_import("numpy")
+ak = maybe_import("awkward")
+if TYPE_CHECKING:
+    hist = maybe_import("hist")
+    Hist = hist.Hist
 
 logger = law.logger.get_logger(__name__)
 
@@ -23,6 +26,8 @@ def reduce_hist(
     exclude: str | Collection[str] = tuple(),
     keepdims=True,
 ):
+    import hist
+
     exclude = law.util.make_list(exclude)
     if reduce is Ellipsis:
         return histogram.project(*exclude)
@@ -74,6 +79,8 @@ def syst_hist(
     syst_name: str = "",
     arrays: np.ndarray | tuple[np.ndarray, np.ndarray] = None,
 ) -> Hist:
+    import hist
+
     if syst_name == "central":
         variations = [syst_name]
     else:

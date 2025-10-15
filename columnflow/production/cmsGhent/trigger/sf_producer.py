@@ -12,10 +12,8 @@ from columnflow.util import maybe_import
 from columnflow.columnar_util import set_ak_column, has_ak_column, Route
 import columnflow.production.cmsGhent.trigger.util as util
 
-
 np = maybe_import("numpy")
 ak = maybe_import("awkward")
-hist = maybe_import("hist")
 
 logger = law.logger.get_logger(__name__)
 

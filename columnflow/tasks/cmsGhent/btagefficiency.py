@@ -17,8 +17,11 @@ from columnflow.tasks.cmsGhent.selection_hists import SelectionEfficiencyHistMix
 
 from columnflow.tasks.framework.remote import RemoteWorkflow
 from columnflow.util import dev_sandbox, dict_add_strict, DotDict, maybe_import
+from columnflow.types import TYPE_CHECKING
 
-hist = maybe_import("hist")
+
+if TYPE_CHECKING:
+    hist = maybe_import("hist")
 
 
 class BTagEfficiencyBase:
