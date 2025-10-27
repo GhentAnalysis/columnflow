@@ -212,7 +212,7 @@ class PlotVariablesBase(_PlotVariablesBase):
                         # create expected shift bins and fill them with the nominal histogram
                         # change Ghent: replace all expected shifts with nominal.
                         # not preffered by columnflow: https://github.com/columnflow/columnflow/pull/692
-                        expected_shifts = plot_shift_names # & process_shift_map[process_inst.name]
+                        expected_shifts = plot_shift_names  # & process_shift_map[process_inst.name]
                         add_missing_shifts(h, expected_shifts, str_axis="shift", nominal_bin="nominal")
 
                         # add the histogram
@@ -266,14 +266,15 @@ class PlotVariablesBase(_PlotVariablesBase):
             for process_inst in hists.keys():
                 h = hists[process_inst]
                 # determine expected shifts from the intersection of requested shifts and those known for the process
-                process_shifts = (
-                    process_shift_map[process_inst.name]
-                    if process_inst.name in process_shift_map
-                    else {"nominal"}
-                )
+                # process_shifts = (
+                #     process_shift_map[process_inst.name]
+                #     if process_inst.name in process_shift_map
+                #     else {"nominal"}
+                # )
+
                 # change Ghent: replace all expected shifts with nominal.
                 # not preffered by columnflow: https://github.com/columnflow/columnflow/pull/692
-                expected_shifts = plot_shift_names # & process_shifts
+                expected_shifts = plot_shift_names  # & process_shifts
                 if not expected_shifts:
                     raise Exception(f"no shifts to plot found for process {process_inst.name}")
                 # selections

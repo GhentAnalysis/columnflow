@@ -1,7 +1,7 @@
 from __future__ import annotations
 import order as od
 from columnflow.util import maybe_import
-from columnflow.types import TYPE_CHECKING, Sequence
+from columnflow.types import TYPE_CHECKING
 
 np = maybe_import("numpy")
 if TYPE_CHECKING:

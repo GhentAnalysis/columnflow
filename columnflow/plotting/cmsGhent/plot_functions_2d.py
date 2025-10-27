@@ -99,8 +99,6 @@ def plot_migration_matrices(
     import matplotlib.transforms as mtrans
     import matplotlib.pyplot as plt
 
-
-
     plt.style.use(mplhep.style.CMS)
     fig, axes = plt.subplots(
         2, 3,
@@ -157,7 +155,7 @@ def plot_migration_matrices(
     default_style_config["annotate_cfg"]["bbox"] = dict(alpha=0.5, facecolor="white")
 
     style_config = law.util.merge_dicts(default_style_config, style_config, deep=True)
-    
+
     #
     # make main central migration plot
     #
@@ -187,7 +185,7 @@ def plot_migration_matrices(
     # called internally by mplhep to draw the extension symbols
     with patch.object(plt, "colorbar", partial(plt.colorbar, **plot_config.get("cbar_kwargs", {}))):
         plot_config["hist"].plot2d(ax=central_ax, **plot_config.get("kwargs", {}))
-    
+
     if label_numbers:
         for i, x in enumerate(migrations_eq_ax.axes[0].centers):
             for j, y in enumerate(migrations_eq_ax.axes[1].centers):
