@@ -107,6 +107,19 @@ class ReduceEvents(_ReduceEvents):
             )),
         }
 
+    def check_parquet(self, inputs):
+        from columnflow.columnar_util_Ghent import remove_corrupted_parquet
+        error = remove_corrupted_parquet("SelectEvents", inputs["selection"])
+
+        for k, calibrator_inst in enumerate(self.calibrator_insts or []):
+            error = remove_corrupted_parquet(
+                "CalibarateEvents --calibrator " + calibrator_inst.cls_name,
+                inputs["calibrations"][k]
+            ) or error
+
+        if error:
+            exit()
+
     def output(self):
         return {"events": self.target(f"events_{self.branch}.parquet")}
 
@@ -124,6 +137,8 @@ class ReduceEvents(_ReduceEvents):
 
         # prepare inputs and outputs
         inputs = self.input()
+        self.check_parquet(inputs)
+
         lfn_task = self.requires()["lfns"]
         output = self.output()
         output_chunks = {}

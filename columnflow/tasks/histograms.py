@@ -135,6 +135,25 @@ class CreateHistograms(_CreateHistograms):
 
         return reqs
 
+    def check_parquet(self, inputs):
+        from columnflow.columnar_util_Ghent import remove_corrupted_parquet
+        error = remove_corrupted_parquet("ProvideReducedEvents", inputs["events"])
+
+        for k, producer_inst in enumerate(self.producer_insts or []):
+            error = remove_corrupted_parquet(
+                "ProduceColumns --producer " + producer_inst.cls_name,
+                inputs["producers"][k]
+            ) or error
+
+        for k, ml_model_inst in enumerate(self.ml_model_insts or []):
+            error = remove_corrupted_parquet(
+                "MLEvaluation --ml_model " + ml_model_inst.cls_name,
+                inputs["ml"][k]
+            ) or error
+
+        if error:
+            exit()
+
     workflow_condition = ReducedEventsUser.workflow_condition.copy()
 
     @workflow_condition.output
@@ -156,6 +175,7 @@ class CreateHistograms(_CreateHistograms):
 
         # prepare inputs
         inputs = self.input()
+        self.check_parquet(inputs)
 
         # get IDs and names of all leaf categories
         leaf_category_map = {
