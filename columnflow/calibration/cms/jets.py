@@ -738,6 +738,8 @@ def get_jer_config_default(self: Calibrator) -> DotDict:
     get_jec_config=get_jec_config_default,
     # jec uncertainty sources to propagate jer to, defaults to config when empty
     jec_uncertainty_sources=None,
+    # MET uncertainty sources to propagate jer to, defaults to None when empty
+    met_uncertainty_sources=None,
     # whether gen jet matching should be performed relative to the nominal jet pt, or the jec varied values
     gen_jet_matching_nominal=False,
     # regions where stochastic smearing is applied
@@ -946,7 +948,7 @@ def jer(self: Calibrator, events: ak.Array, **kwargs) -> ak.Array:
     if self.propagate_met:
         jetsum_pt_before = {}
         jetsum_phi_before = {}
-        for postfix in self.postfixes:
+        for postfix in self.jet_postfixes:
             jetsum_pt_before[postfix], jetsum_phi_before[postfix] = sum_transverse(
                 events[jet_name][f"pt{postfix}"],
                 events[jet_name].phi,
@@ -954,7 +956,7 @@ def jer(self: Calibrator, events: ak.Array, **kwargs) -> ak.Array:
 
     # apply the smearing
     # (note: this requires that postfixes and smear_factors have the same order, but this should be the case)
-    for i, postfix in enumerate(self.postfixes):
+    for i, postfix in enumerate(self.jet_postfixes):
         pt_name = f"pt{postfix}"
         m_name = f"mass{postfix}"
         events = set_ak_column_f32(events, f"{jet_name}.{pt_name}", events[jet_name][pt_name] * smear_factors[..., i])
@@ -970,26 +972,32 @@ def jer(self: Calibrator, events: ak.Array, **kwargs) -> ak.Array:
         events = set_ak_column_f32(events, f"{met_name}.phi_unsmeared", events[met_name].phi)
 
         # propagate per variation
-        for postfix in self.postfixes:
+        for postfix in self.met_postfixes:
             # get pt and phi of all jets after correcting
+
+            if hasattr(events[jet_name], f"pt{postfix}"):
+                jet_postfix = postfix
+            else:
+                jet_postfix = ""
+
+            # jet variation exists, use it
             jetsum_pt_after, jetsum_phi_after = sum_transverse(
-                events[jet_name][f"pt{postfix}"],
+                events[jet_name][f"pt{jet_postfix}"],
                 events[jet_name].phi,
             )
 
             # propagate changes to MET
             met_pt, met_phi = propagate_met(
-                jetsum_pt_before[postfix],
-                jetsum_phi_before[postfix],
+                jetsum_pt_before[jet_postfix],
+                jetsum_phi_before[jet_postfix],
                 jetsum_pt_after,
                 jetsum_phi_after,
                 events[met_name][f"pt{postfix}"],
                 events[met_name][f"phi{postfix}"],
             )
+
             events = set_ak_column_f32(events, f"{met_name}.pt{postfix}", met_pt)
             events = set_ak_column_f32(events, f"{met_name}.phi{postfix}", met_phi)
-
-    return events
 
 
 jer_horn_handling = jer.derive("jer_horn_handling", cls_dict={
@@ -1019,7 +1027,7 @@ def jer_init(self: Calibrator, **kwargs) -> None:
 
     # prepare jer variations and postfixes
     self.jer_variations = ["nom", "up", "down"]
-    self.postfixes = ["", "_jer_up", "_jer_down"] + [f"_{jec_var}" for jec_var in self.jec_variations]
+    self.jet_postfixes = ["", "_jer_up", "_jer_down"] + [f"_{jec_var}" for jec_var in self.jec_variations]
 
     # register used jet columns
     self.uses.add(f"{self.jet_name}.{{pt,eta,phi,mass,{self.gen_jet_idx_column}}}")
@@ -1039,10 +1047,22 @@ def jer_init(self: Calibrator, **kwargs) -> None:
         if jec_sources:
             self.uses |= met_jec_columns
 
+        met_sources = self.met_uncertainty_sources or []
+        self.met_variations = sum(([f"{unc}_up", f"{unc}_down"] for unc in met_sources), [])
+        self.met_postfixes = ["", "_jer_up", "_jer_down"] + \
+            [f"_{jec_var}" for jec_var in self.jec_variations] + \
+            [f"_{met_source}" for met_source in self.met_variations]
+
+        if met_sources:
+            self.uses |= {f"{self.met_name}.{{pt,phi}}_{met_source}" for met_source in self.met_variations}
+
         # register produced MET columns
         self.produces.add(f"{self.met_name}.{{pt,phi}}{{,_jer_up,_jer_down,_unsmeared}}")
         if jec_sources:
             self.produces |= met_jec_columns
+
+        if met_sources:
+            self.produces |= {f"{self.met_name}.{{pt,phi}}_{met_source}" for met_source in self.met_variations}
 
 
 @jer.requires
