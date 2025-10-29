@@ -528,15 +528,19 @@ class MergeShiftedHistograms(_MergeShiftedHistograms):
 
         # add nominal and both directions per shift source
         for shift in ["nominal"] + self.shifts:
-            reqs[shift] = self.reqs.MergeHistograms.req(self, shift=shift, _prefer_cli={"variables"})
+            task = self.reqs.MergeHistograms.req(self, shift=shift, _prefer_cli={"variables"})
+            if task.shift == shift:
+                reqs[shift] = task
 
         return reqs
 
     def requires(self):
-        return {
-            shift: self.reqs.MergeHistograms.req(self, shift=shift, _prefer_cli={"variables"})
-            for shift in ["nominal"] + self.shifts
-        }
+        reqs = {}
+        for shift in ["nominal"] + self.shifts:
+            task = self.reqs.MergeHistograms.req(self, shift=shift, _prefer_cli={"variables"})
+            if task.shift == shift:
+                reqs[shift] = task
+        return reqs
 
     def output(self):
         return {
