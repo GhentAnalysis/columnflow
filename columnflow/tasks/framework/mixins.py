@@ -2120,7 +2120,6 @@ class DatasetsMixin(ConfigTask):
         if isinstance(cls.single_config, bool) and getattr(cls, "datasets_multi", None) is not None:
             if not cls.has_single_config():
                 cls.datasets = cls.datasets_multi
-                cls.processes = cls.processes_multi
             cls.datasets_multi = None
 
     @classmethod
@@ -2151,6 +2150,7 @@ class DatasetsMixin(ConfigTask):
 
         # "broadcast" to match number of configs
         config_insts = params.get("config_insts")
+        datasets = cls.broadcast_to_configs(datasets, "datasets", len(config_insts))
 
         # perform resolution per config
         multi_datasets = []
