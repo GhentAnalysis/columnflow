@@ -13,8 +13,6 @@ import json
 import pickle
 
 import awkward as ak
-import coffea.nanoevents
-import uproot
 import numpy as np  # noqa
 
 from columnflow.util import ipython_shell
@@ -60,6 +58,7 @@ def _load_nano_root(fname: str, treepath: str | None = None, **kwargs) -> ak.Arr
         ).events()
     except:
         return uproot.open(fname)
+
 
 def _load_h5(fname: str, **kwargs):
     import h5py

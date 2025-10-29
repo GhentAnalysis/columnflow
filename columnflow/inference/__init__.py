@@ -601,60 +601,6 @@ class InferenceModel(Derivable, metaclass=InferenceModelMeta):
             ("shift_source", str(shift_source) if shift_source else None),
         ])
 
-    @classmethod
-    def category_config_spec(
-        cls,
-        category: str | None = None,
-        variable: str | None = None,
-        data_datasets: Sequence[str] | None = None,
-    ) -> DotDict:
-        """
-        Returns a dictionary representing configuration specific data, forwarding all arguments.
-
-        :param category: The name of the source category in the config to use.
-        :param variable: The name of the variable in the config to use.
-        :param data_datasets: List of names or patterns of datasets in the config to use for real data.
-        :returns: A dictionary representing category specific settings.
-        """
-        return DotDict([
-            ("category", str(category) if category else None),
-            ("variable", str(variable) if variable else None),
-            ("data_datasets", list(map(str, data_datasets or []))),
-        ])
-
-    @classmethod
-    def process_config_spec(
-        cls,
-        process: str | None = None,
-        mc_datasets: Sequence[str] | None = None,
-    ) -> DotDict:
-        """
-        Returns a dictionary representing configuration specific data, forwarding all arguments.
-
-        :param process: The name of the process in the config to use.
-        :param mc_datasets: List of names or patterns of datasets in the config to use for mc.
-        :returns: A dictionary representing process specific settings.
-        """
-        return DotDict([
-            ("process", str(process) if process else None),
-            ("mc_datasets", list(map(str, mc_datasets or []))),
-        ])
-
-    @classmethod
-    def parameter_config_spec(
-        cls,
-        shift_source: str | None = None,
-    ) -> DotDict:
-        """
-        Returns a dictionary representing configuration specific data, forwarding all arguments.
-
-        :param shift_source: The name of a systematic shift source in the config.
-        :returns: A dictionary representing parameter specific settings.
-        """
-        return DotDict([
-            ("shift_source", str(shift_source) if shift_source else None),
-        ])
-
     def __init__(self, config_insts: list[od.Config]) -> None:
         super().__init__()
 
