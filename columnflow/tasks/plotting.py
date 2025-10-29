@@ -476,7 +476,7 @@ class PlotVariablesBaseMultiShifts(
         if not self.combine_shifts:
             seqs.append(self.shift_sources)
             keys.append("shift_source")
-        return [DotDict(zip(keys, vals)) for vals in itertools.product(*seqs)]
+        return [DotDict(zip(keys, vals)) for vals in itertools.product(*map(sorted, seqs))]
 
     def requires(self):
         req_cls = lambda dataset_name: (
