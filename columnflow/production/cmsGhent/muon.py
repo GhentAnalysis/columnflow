@@ -136,7 +136,7 @@ def muon_weights(
 
 
 @muon_weights.requires
-def muon_weights_requires(self: Producer, task: law.Task, reqs: dict) -> None:
+def muon_weights_requires(self: Producer, task: law.Task, reqs: dict, **kwargs) -> None:
     if "external_files" in reqs:
         return
 

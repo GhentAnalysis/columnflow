@@ -5,6 +5,8 @@ Producer that produces a trigger scalefactors
 
 from __future__ import annotations
 
+from functools import wraps
+
 import law
 import order as od
 from dataclasses import dataclass, field, replace
@@ -104,6 +106,7 @@ class TriggerSFConfig:
         The decorator does not return the wrapped function.
         """
 
+        @wraps(func)
         def decorator(func: Callable[[ak.Array], dict[ak.Array]]):
             self.event_mask_func = func
             self.event_mask_uses = self.event_mask_uses | uses
@@ -117,6 +120,7 @@ class TriggerSFConfig:
         collect_mc_data=True,
         stat=False,
         skip=False,
+        unc_name=None,
         **unc_kwargs,
     ):
         if variables is None:
@@ -124,6 +128,7 @@ class TriggerSFConfig:
 
         def decorator(func: Callable):
 
+            @wraps(func)
             def decorated_func(
                 histograms: dict[od.Dataset, hist.Hist],
                 *args,
@@ -145,6 +150,7 @@ class TriggerSFConfig:
             if stat:
                 self._stat_func = lambda hs, *args, **kwargs: func(hs, self.tag, self.ref_tag, *args, **kwargs)
             self.uncertainties.append(decorated_func)
+            decorated_func.unc_name = unc_name
             return func
 
         return decorator(func) if func else decorator

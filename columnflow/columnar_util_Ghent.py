@@ -6,6 +6,7 @@ Helpers and utilities for working with columnar libraries (Ghent cms group)
 
 from __future__ import annotations
 from typing import Literal
+import law
 
 __all__ = [
     "TetraVec", "safe_concatenate",
@@ -16,6 +17,8 @@ from columnflow.types import Sequence
 from columnflow.columnar_util import remove_ak_column, has_ak_column
 
 ak = maybe_import("awkward")
+
+logger = law.logger.get_logger(__name__)
 
 
 def TetraVec(arr: ak.Array, keep: Sequence | str | Literal[-1] = -1) -> ak.Array:
@@ -58,3 +61,35 @@ def remove_obj_overlap(*arrays, objects=("Jet", "Electron", "Muon")):
                 if has_ak_column(c0, obj) and has_ak_column(c, obj):
                     arrays[i2] = c0 = remove_ak_column(c0, obj)
     return arrays
+
+def check_task_parquet_inputs(inputs, mode="check"):
+    import pyarrow
+
+    error = None
+    if isinstance(inputs, (dict, tuple, list)):
+        inputs = list(inputs.values()) if isinstance(inputs, dict) else inputs
+        for k_inputs in inputs:
+            error = check_task_parquet_inputs(k_inputs, mode=mode) or error
+        return error
+    elif (
+        mode == "check"
+        and isinstance(inputs, law.LocalFileTarget)
+        and inputs.abspath.endswith("parquet")
+        and inputs.exists()
+    ):
+        try:
+            ak.metadata_from_parquet(inputs.abspath)
+        except pyarrow.ArrowInvalid as e:
+            # os.remove(inputs.abspath)
+            return e
+    elif mode == "remove":
+        logger.error(f"removing {inputs}")
+        inputs.remove()
+
+
+def remove_corrupted_parquet(name, inputs):
+    error = check_task_parquet_inputs(inputs)
+    if error:
+        logger.error(f"removing {name} inputs")
+        check_task_parquet_inputs(inputs, mode="remove")
+    return error

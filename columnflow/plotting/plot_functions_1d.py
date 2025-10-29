@@ -121,7 +121,7 @@ def plot_variable_stack(
         while show:
             plot_all(plot_config, style_config, **kwargs)
             plt.show()
-            breakpoint()
+            breakpoint() # noqa
 
     return plot_all(plot_config, style_config, **kwargs)
 

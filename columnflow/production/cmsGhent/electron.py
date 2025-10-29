@@ -142,7 +142,7 @@ def electron_weights(
 
 
 @electron_weights.requires
-def electron_weights_requires(self: Producer, task: law.Task, reqs: dict) -> None:
+def electron_weights_requires(self: Producer, task: law.Task, reqs: dict, **kwargs) -> None:
     if "external_files" in reqs:
         return
 

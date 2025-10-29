@@ -51,7 +51,7 @@ class ProduceColumns(_ProduceColumns):
 
         # add producer dependent requirements
         reqs["producer"] = law.util.make_unique(law.util.flatten(
-            self.producer_inst.run_requires(task=self),
+            self.producer_inst.run_requires(task=self, workflow=True),
         ))
 
         return reqs
@@ -63,6 +63,12 @@ class ProduceColumns(_ProduceColumns):
                 self.producer_inst.run_requires(task=self),
             )),
         }
+
+    def check_parquet(self, inputs):
+        from columnflow.columnar_util_Ghent import remove_corrupted_parquet
+        error = remove_corrupted_parquet("ProvideReducedEvents", inputs["events"])
+        if error:
+            exit()
 
     workflow_condition = ReducedEventsUser.workflow_condition.copy()
 
@@ -89,6 +95,7 @@ class ProduceColumns(_ProduceColumns):
 
         # prepare inputs and outputs
         inputs = self.input()
+        self.check_parquet(inputs)
         output = self.output()
         output_chunks = {}
 

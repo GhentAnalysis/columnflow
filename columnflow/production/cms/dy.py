@@ -210,7 +210,7 @@ def dy_weights_init(self: Producer) -> None:
 
 
 @dy_weights.requires
-def dy_weights_requires(self: Producer, task: law.Task, reqs: dict) -> None:
+def dy_weights_requires(self: Producer, task: law.Task, reqs: dict, **kwargs) -> None:
     """
     Adds the requirements needed the underlying task to derive the Drell-Yan weights into *reqs*.
     """
@@ -442,7 +442,7 @@ def recoil_corrected_met_init(self: Producer) -> None:
 
 
 @recoil_corrected_met.requires
-def recoil_corrected_met_requires(self: Producer, task: law.Task, reqs: dict) -> None:
+def recoil_corrected_met_requires(self: Producer, task: law.Task, reqs: dict, **kwargs) -> None:
     # Ensure that external files are bundled.
     if "external_files" in reqs:
         return

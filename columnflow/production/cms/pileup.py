@@ -17,10 +17,6 @@ np = maybe_import("numpy")
 ak = maybe_import("awkward")
 
 
-# helper
-set_ak_column_f32 = functools.partial(set_ak_column, value_type=np.float32)
-fill_at_f32 = functools.partial(fill_at, value_type=np.float32)
-
 logger = law.logger.get_logger(__name__)
 
 
@@ -37,6 +33,8 @@ def pu_weight(
     events: ak.Array,
     outlier_threshold: float = 10,
     outlier_action: str = "remove",
+    *,
+    value_type=None,
     **kwargs,
 ) -> ak.Array:
     """
@@ -73,7 +71,7 @@ def pu_weight(
         occurances = ak.sum(outlier_mask)
         frac = occurances / len(outlier_mask) * 100
 
-        events = set_ak_column_f32(events, column_name, pu_weight, value_type=np.float32)
+        events = set_ak_column(events, column_name, pu_weight, value_type=value_type)
 
         msg = (
             f"in dataset {self.dataset_inst.name}, there are {occurances} ({frac:.2f}%) "
@@ -96,9 +94,9 @@ def pu_weight(
 
         msg += f"; the columns {column_name} (nominal/up/down) have been set to 0 for these events"
 
-        events = fill_at_f32(events, any_outlier_mask, "mc_weight", 0)
+        events = fill_at(events, any_outlier_mask, "mc_weight", 0, value_type=value_type)
         for column_name in ("pu_weight", "pu_weight_minbias_xs_up", "pu_weight_minbias_xs_down"):
-            events = fill_at_f32(events, any_outlier_mask, column_name, 0)
+            events = fill_at(events, any_outlier_mask, column_name, 0, value_type=value_type)
 
     return events
 
@@ -156,7 +154,7 @@ def pu_weight_setup(
     # only run on mc
     mc_only=True,
 )
-def pu_weights_from_columnflow(self: Producer, events: ak.Array, **kwargs) -> ak.Array:
+def pu_weights_from_columnflow(self: Producer, events: ak.Array, *, value_type=None, **kwargs) -> ak.Array:
     """
     Based on the number of primary vertices, assigns each event pileup weights using the profile
     of pileup ratios at the py:attr:`pu_weights` attribute provided by the requires and setup
@@ -168,9 +166,10 @@ def pu_weights_from_columnflow(self: Producer, events: ak.Array, **kwargs) -> ak
     indices[indices > max_bin] = max_bin
 
     # save the weights
-    events = set_ak_column_f32(events, "pu_weight", self.pu_weights.nominal[indices])
-    events = set_ak_column_f32(events, "pu_weight_minbias_xs_up", self.pu_weights.minbias_xs_up[indices])
-    events = set_ak_column_f32(events, "pu_weight_minbias_xs_down", self.pu_weights.minbias_xs_down[indices])
+    set_ak_column_f = functools.partial(set_ak_column, value_type=value_type)
+    events = set_ak_column_f(events, "pu_weight", self.pu_weights.nominal[indices])
+    events = set_ak_column_f(events, "pu_weight_minbias_xs_up", self.pu_weights.minbias_xs_up[indices])
+    events = set_ak_column_f(events, "pu_weight_minbias_xs_down", self.pu_weights.minbias_xs_down[indices])
 
     return events
 

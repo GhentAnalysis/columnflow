@@ -1307,7 +1307,10 @@ class MLModelMixinBase(ConfigTask):
         """
         ml_model_inst: MLModel = MLModel.get_cls(ml_model)(analysis_inst, **kwargs)
         if requested_configs:
-            configs = ml_model_inst.training_configs(list(requested_configs))
+            if cls.__name__ == "MLTraining":
+                configs = ml_model_inst.training_configs(list(requested_configs))
+            else:
+                configs = list(requested_configs)
             if configs:
                 ml_model_inst._setup(configs)
 
@@ -1573,6 +1576,25 @@ class PreparationProducerMixin(ArrayFunctionInstanceMixin, MLModelMixin):
         params = super().resolve_instances(params, shifts)
 
         return params
+
+    @classmethod
+    def get_known_shifts(
+        cls,
+        params: dict[str, Any],
+        shifts: TaskShifts,
+    ) -> None:
+        """
+        Updates the set of known *shifts* implemented by *this* and upstream tasks.
+
+        :param params: Dictionary of task parameters.
+        :param shifts: TaskShifts object to adjust.
+        """
+        # get the producer, update it and add its shifts
+        if (producer_inst := params.get("preparation_producer_inst", None)):
+            producer_shifts = producer_inst.all_shifts
+            shifts.local.update(producer_shifts)
+
+        super().get_known_shifts(params, shifts)
 
 
 class MLModelDataMixin(PreparationProducerMixin):
@@ -2214,7 +2236,6 @@ class DatasetsMixin(ConfigTask):
         if isinstance(cls.single_config, bool) and getattr(cls, "datasets_multi", None) is not None:
             if not cls.has_single_config():
                 cls.datasets = cls.datasets_multi
-                cls.processes = cls.processes_multi
             cls.datasets_multi = None
 
     @classmethod
@@ -2245,6 +2266,7 @@ class DatasetsMixin(ConfigTask):
 
         # "broadcast" to match number of configs
         config_insts = params.get("config_insts")
+        datasets = cls.broadcast_to_configs(datasets, "datasets", len(config_insts))
 
         # perform resolution per config
         multi_datasets = []
@@ -2557,7 +2579,7 @@ class ShiftSourcesMixin(ConfigTask):
                 sources = [
                     source for source in sources
                     if (
-                        f"{source}_up" in params["known_shifts"].upstream and
+                        f"{source}_up" in params["known_shifts"].upstream or
                         f"{source}_down" in params["known_shifts"].upstream
                     )
                 ]
@@ -2567,7 +2589,7 @@ class ShiftSourcesMixin(ConfigTask):
                 raise ValueError(f"no shifts found matching {params['shift_sources']}")
 
             # store them
-            params["shift_sources"] = tuple(sources)
+            params["shift_sources"] = tuple(sorted(sources))
 
         return params
 

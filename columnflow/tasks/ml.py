@@ -562,8 +562,9 @@ class MLTraining(
         inputs = self.input()
         outputs = self.output()
 
-        # call the training function
-        self.ml_model_inst.train(self, inputs, outputs)
+        with law.localize_file_targets(inputs, mode="r") as inps:
+            # call the training function
+            self.ml_model_inst.train(self, inps, outputs)
 
 
 class MLEvaluation(

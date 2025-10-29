@@ -120,6 +120,18 @@ class SelectEvents(_SelectEvents):
 
         return reqs
 
+    def check_parquet(self, inputs):
+        from columnflow.columnar_util_Ghent import remove_corrupted_parquet
+        error = None
+        for k, calibrator_inst in enumerate(self.calibrator_insts or []):
+            error = remove_corrupted_parquet(
+                "CalibarateEvents --calibrator " + calibrator_inst.cls_name,
+                inputs["calibrations"][k]
+            ) or error
+
+        if error:
+            exit()
+
     def output(self):
         outputs = {
             "results": self.target(f"results_{self.branch}.parquet"),
@@ -152,6 +164,8 @@ class SelectEvents(_SelectEvents):
         # prepare inputs and outputs
         lfn_task = self.requires()["lfns"]
         inputs = self.input()
+        self.check_parquet(inputs)
+
         outputs = self.output()
         result_chunks = {}
         column_chunks = {}

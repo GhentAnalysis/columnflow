@@ -26,6 +26,7 @@ maybe_import("coffea.nanoevents.methods.nanoaod")
 def hdamp_reweighting_producer(self: Calibrator, events: ak.Array, **kwargs) -> ak.Array:
     """
     Produces the hdamp reweighting scores.
+    Based on https://twiki.cern.ch/twiki/pub/CMS/MLReweighting/ImplementationCMSSW.pdf
     Requires an external file in the config under ``hdamp``:
 
     .. code-block:: python
@@ -36,6 +37,9 @@ def hdamp_reweighting_producer(self: Calibrator, events: ak.Array, **kwargs) -> 
                 "down": f"YOURDIRECTORY/mymodel12_hdamp_down_13TeV.onnx",
             },
         })
+
+    The onnx files can be found on this twiki:
+    https://twiki.cern.ch/twiki/bin/view/CMS/MLReweighting
 
     Requires adding the environment venv_onnx which includes onnx to the analysis or config. E.g.
 
@@ -60,12 +64,12 @@ def hdamp_reweighting_producer(self: Calibrator, events: ak.Array, **kwargs) -> 
             np.log10(top.pt),
             top.rapidity,
             top.phi,
-            top.mass / self.maxM
+            top.mass / self.maxM,
         ] + [
             np.full(len(top), cst)
             for cst in [
                 {6: 0.1, -6: 0.2}[pdgId],
-                self.default_hdamp
+                self.default_hdamp,
             ]
         ])
         input.append(top_inp)
@@ -87,7 +91,12 @@ def hdamp_reweighting_producer(self: Calibrator, events: ak.Array, **kwargs) -> 
 
 
 @hdamp_reweighting_producer.requires
-def hdamp_reweighting_producer_requires(self: Calibrator, task: law.Task, reqs: dict) -> None:
+def hdamp_reweighting_producer_requires(
+    self: Calibrator,
+    task: law.Task,
+    reqs: dict,
+    **kwargs,
+) -> None:
     if "external_files" in reqs:
         return
     reqs["external_files"] = BundleExternalFiles.req(task)

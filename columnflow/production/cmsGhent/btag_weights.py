@@ -112,7 +112,7 @@ def jet_btag_setup(self: Producer, task: law.Task, reqs: dict, *args, **kwargs) 
 
 
 @jet_btag.requires
-def jet_btag_requires(self: Producer, task: law.Task, reqs: dict) -> None:
+def jet_btag_requires(self: Producer, task: law.Task, reqs: dict, **kwargs) -> None:
     req_btag(self, task, reqs)
 
 
@@ -331,7 +331,7 @@ def fixed_wp_btag_weights_setup(
 
 
 @fixed_wp_btag_weights.requires
-def fixed_wp_btag_weights_requires(self: Producer, task: law.Task, reqs: dict) -> None:
+def fixed_wp_btag_weights_requires(self: Producer, task: law.Task, reqs: dict, **kwargs) -> None:
     req_btag(self, task, reqs)
 
     if not self.has_external_efficiencies:
@@ -442,5 +442,5 @@ def btag_efficiency_hists_setup(
 
 
 @btag_efficiency_hists.requires
-def btag_efficiency_hists_requires(self: Producer, task: law.Task, reqs: dict) -> None:
+def btag_efficiency_hists_requires(self: Producer, task: law.Task, reqs: dict, **kwargs) -> None:
     req_btag(self, task, reqs)

@@ -304,5 +304,4 @@ def add_missing_shifts(
                 for ax in h.axes
             ]
             h.fill(*dummy_fill, weight=0)
-            # TODO: this might skip overflow and underflow bins
-            h[{str_axis: hist.loc(missing_shift)}] = nominal.view()
+            h[{str_axis: hist.loc(missing_shift)}] = nominal.view(flow=True)

@@ -133,6 +133,25 @@ class CreateHistograms(_CreateHistograms):
 
         return reqs
 
+    def check_parquet(self, inputs):
+        from columnflow.columnar_util_Ghent import remove_corrupted_parquet
+        error = remove_corrupted_parquet("ProvideReducedEvents", inputs["events"])
+
+        for k, producer_inst in enumerate(self.producer_insts or []):
+            error = remove_corrupted_parquet(
+                "ProduceColumns --producer " + producer_inst.cls_name,
+                inputs["producers"][k]
+            ) or error
+
+        for k, ml_model_inst in enumerate(self.ml_model_insts or []):
+            error = remove_corrupted_parquet(
+                "MLEvaluation --ml_model " + ml_model_inst.cls_name,
+                inputs["ml"][k]
+            ) or error
+
+        if error:
+            exit()
+
     workflow_condition = ReducedEventsUser.workflow_condition.copy()
 
     @workflow_condition.output
@@ -154,6 +173,7 @@ class CreateHistograms(_CreateHistograms):
 
         # prepare inputs
         inputs = self.input()
+        self.check_parquet(inputs)
 
         # get IDs and names of all leaf categories
         leaf_category_map = {
@@ -211,7 +231,6 @@ class CreateHistograms(_CreateHistograms):
             file_targets.extend([inp["columns"] for inp in inputs["producers"]])
         if self.ml_model_insts:
             file_targets.extend([inp["mlcolumns"] for inp in inputs["ml"]])
-
         # prepare inputs for localization
         with law.localize_file_targets([*file_targets, *reader_targets.values()], mode="r") as inps:
             for (events, *columns), pos in self.iter_chunked_io(
@@ -507,18 +526,22 @@ class MergeShiftedHistograms(_MergeShiftedHistograms):
     def workflow_requires(self):
         reqs = super().workflow_requires()
 
+        # add nominal and both directions per shift source
         if not self.pilot:
-            # add nominal and both directions per shift source
             for shift in ["nominal"] + self.shifts:
-                reqs[shift] = self.reqs.MergeHistograms.req(self, shift=shift, _prefer_cli={"variables"})
+                task = self.reqs.MergeHistograms.req(self, shift=shift, _prefer_cli={"variables"})
+                if task.shift == shift:
+                    reqs[shift] = task
 
         return reqs
 
     def requires(self):
-        return {
-            shift: self.reqs.MergeHistograms.req(self, shift=shift, _prefer_cli={"variables"})
-            for shift in ["nominal"] + self.shifts
-        }
+        reqs = {}
+        for shift in ["nominal"] + self.shifts:
+            task = self.reqs.MergeHistograms.req(self, shift=shift, _prefer_cli={"variables"})
+            if task.shift == shift:
+                reqs[shift] = task
+        return reqs
 
     def output(self):
         return {

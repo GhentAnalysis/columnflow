@@ -37,6 +37,6 @@ def mc_weight(self: Producer, events: ak.Array, **kwargs) -> ak.Array:
         mc_weight = events.LHEWeight.originalXWGTUP
 
     # store the column
-    events = set_ak_column(events, "mc_weight", mc_weight, value_type=np.float32)
+    events = set_ak_column(events, "mc_weight", mc_weight, value_type=np.float64)
 
     return events

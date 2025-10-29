@@ -131,6 +131,9 @@ class CreateDatacards(SerializeInferenceModelBase):
                     for proc_obj in proc_objs:
                         # skip the process objects if it does not contribute to this config_inst
                         if config_inst.name not in proc_obj.config_data:
+                            self.logger.warning(
+                                f"{proc_obj.name} has not config data and will always be skipped",
+                            )
                             continue
 
                         # get all process instances (keys in _input_hists) to be combined
@@ -189,6 +192,9 @@ class CreateDatacards(SerializeInferenceModelBase):
                             if not need_shapes:
                                 continue
                             # store the varied hists
+                            if config_inst.name not in param_obj.config_data:
+                                continue
+
                             shift_source = (
                                 param_obj.config_data[config_inst.name].shift_source
                                 if config_inst.name in param_obj.config_data
