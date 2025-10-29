@@ -326,7 +326,11 @@ class MergeReductionStats(_MergeReductionStats):
             if params["merged_size"] in {None, law.NO_FLOAT}:
                 merged_size = 512.0
                 if "config_inst" in params:
-                    merged_size = params["config_inst"].x("reduced_file_size", merged_size)
+                    merged_size_cfg = params["config_inst"].x("reduced_file_size", merged_size)
+                    if isinstance(merged_size_cfg, dict):
+                        merged_size = merged_size_cfg[params["dataset"]]
+                    else:
+                        merged_size = merged_size_cfg
                 params["merged_size"] = float(merged_size)
             elif params["merged_size"] == 0:
                 params["n_inputs"] = 0
