@@ -2446,7 +2446,7 @@ class ShiftSourcesMixin(ConfigTask):
                 sources = [
                     source for source in sources
                     if (
-                        f"{source}_up" in params["known_shifts"].upstream and
+                        f"{source}_up" in params["known_shifts"].upstream or
                         f"{source}_down" in params["known_shifts"].upstream
                     )
                 ]
