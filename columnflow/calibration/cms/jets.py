@@ -975,10 +975,7 @@ def jer(self: Calibrator, events: ak.Array, **kwargs) -> ak.Array:
         for postfix in self.met_postfixes:
             # get pt and phi of all jets after correcting
 
-            if hasattr(events[jet_name], f"pt{postfix}"):
-                jet_postfix = postfix
-            else:
-                jet_postfix = ""
+            jet_postfix = postfix if hasattr(events[jet_name], f"pt{postfix}") else ""
 
             # jet variation exists, use it
             jetsum_pt_after, jetsum_phi_after = sum_transverse(
