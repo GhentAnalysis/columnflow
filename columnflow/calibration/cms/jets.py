@@ -995,6 +995,8 @@ def jer(self: Calibrator, events: ak.Array, **kwargs) -> ak.Array:
 
             events = set_ak_column_f32(events, f"{met_name}.pt{postfix}", met_pt)
             events = set_ak_column_f32(events, f"{met_name}.phi{postfix}", met_phi)
+            
+    return events
 
 
 jer_horn_handling = jer.derive("jer_horn_handling", cls_dict={
