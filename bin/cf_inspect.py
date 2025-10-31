@@ -13,6 +13,7 @@ import json
 import pickle
 
 import awkward as ak
+import numpy as np  # noqa
 
 from columnflow.util import ipython_shell
 from columnflow.types import Any
@@ -47,14 +48,21 @@ def _load_nano_root(fname: str, treepath: str | None = None, **kwargs) -> ak.Arr
                 break
         else:
             raise ValueError(f"no default treepath determined in {fname}")
+    try:
+        return coffea.nanoevents.NanoEventsFactory.from_root(
+            source,
+            treepath=treepath,
+            delayed=False,
+            runtime_cache=None,
+            persistent_cache=None,
+        ).events()
+    except:
+        return uproot.open(fname)
 
-    return coffea.nanoevents.NanoEventsFactory.from_root(
-        source,
-        treepath=treepath,
-        delayed=False,
-        runtime_cache=None,
-        persistent_cache=None,
-    ).events()
+
+def _load_h5(fname: str, **kwargs):
+    import h5py
+    return h5py.File(fname, "r")
 
 
 def load(fname: str, **kwargs) -> Any:
@@ -70,6 +78,8 @@ def load(fname: str, **kwargs) -> Any:
         return _load_nano_root(fname, **kwargs)
     if ext == ".json":
         return _load_json(fname, **kwargs)
+    if ext in [".h5", ".hdf5"]:
+        return _load_h5(fname, **kwargs)
     raise NotImplementedError(f"no loader implemented for extension '{ext}'")
 
 
@@ -101,7 +111,7 @@ if __name__ == "__main__":
     )
 
     ap.register("action", "help", argparse._HelpAction)
-    ap.add_argument("files", metavar="FILE", nargs="+", help="one or more supported files")
+    ap.add_argument("files", metavar="FILE", nargs="*", help="one or more supported files")
     ap.add_argument("--events", "-e", action="store_true", help="assume files to contain event info")
     ap.add_argument("--hists", "-h", action="store_true", help="assume files to contain histograms")
     ap.add_argument("--treepath", "-t", type=str, help="name of the tree in ROOT files")

@@ -410,6 +410,9 @@ def normalization_weights_setup(
             This weight is defined as the product of the luminosity, the cross section, divided by the sum of event
             weights per process.
         - py: attr: `known_process_ids`: A set of all process ids that are known by the lookup table.
+        - py: attr: `process_weight_table`: A sparse array serving as a lookup table for the calculated process weights.
+            This weight is defined as the product of the luminosity, the cross section, divided by the sum of event
+            weights per process.
     """
     import scipy.sparse
 

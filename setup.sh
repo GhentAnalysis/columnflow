@@ -643,6 +643,7 @@ cf_setup_software_stack() {
                 fi
                 # make the setup file relocatable
                 sed -i -r "s|${CF_CONDA_BASE}|\$\{MAMBA_ROOT_PREFIX\}|" "micromamba.sh" || return "$?"
+                sed -i -r "6 s|/ada_mnt/ada||" "micromamba.sh" || return "$?"
                 mv "micromamba.sh" "${CF_CONDA_BASE}/etc/profile.d/micromamba.sh"
                 cat << EOF > "${CF_CONDA_BASE}/.mambarc"
 changeps1: false
@@ -752,7 +753,7 @@ EOF
             source_venv "${CF_INTERACTIVE_VENV_FILE}" "$( basename "${CF_INTERACTIVE_VENV_FILE%.*}" )" false || return "$?"
         fi
 
-        # initialze submodules
+        # initialize submodules
         if [ -e "${CF_BASE}/.git" ]; then
             local m
             for m in $( ls -1q "${CF_BASE}/modules" ); do

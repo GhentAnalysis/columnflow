@@ -20,6 +20,7 @@ from columnflow.tasks.external import GetDatasetLFNs
 from columnflow.tasks.calibration import CalibrateEvents
 from columnflow.util import maybe_import, ensure_proxy, dev_sandbox, safe_div, DotDict
 from columnflow.tasks.framework.parameters import DerivableInstParameter
+from columnflow.production import Producer
 
 np = maybe_import("numpy")
 ak = maybe_import("awkward")
@@ -64,6 +65,12 @@ class SelectEvents(_SelectEvents):
     invokes_selector = True
     missing_column_alias_strategy = "original"
     create_selection_hists = default_create_selection_hists
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+
+        # store the normalization weight producer for MC
+        self.veto_producer: Producer = Producer.get_cls("veto_events")()
 
     def workflow_requires(self):
         reqs = super().workflow_requires()
@@ -161,6 +168,9 @@ class SelectEvents(_SelectEvents):
         )
         n_ext = len(reader_targets)
 
+        # veto post init
+        self.veto_producer.run_post_init(task=self)
+
         # show an early warning in case the selector does not produce some mandatory columns
         produced_columns = self.selector_inst.produced_columns
         for c in self.reqs.get("CreateHistograms", CreateHistograms).mandatory_columns:
@@ -180,6 +190,7 @@ class SelectEvents(_SelectEvents):
         # define columns that need to be read
         read_columns = set(map(Route, mandatory_coffea_columns))
         read_columns |= self.selector_inst.used_columns
+        read_columns |= self.veto_producer.used_columns
         read_columns |= set(map(Route, aliases.values()))
 
         # define columns that will be written
@@ -214,6 +225,9 @@ class SelectEvents(_SelectEvents):
                 # insert additional columns
                 events = update_ak_array(events, *cols)
 
+                # add veto
+                events = self.veto_producer(events, file=input_file)
+
                 # add aliases
                 events = add_ak_aliases(
                     events,
@@ -237,7 +251,8 @@ class SelectEvents(_SelectEvents):
 
                 # optional check for finite values
                 if self.check_finite_output:
-                    self.raise_if_not_finite(results_array)
+                    # ignore vetoed events when checking for finite values
+                    self.raise_if_not_finite(results_array[~events.veto])
 
                 # save results as parquet via a thread in the same pool
                 chunk = tmp_dir.child(f"res_{lfn_index}_{pos.index}.parquet", type="f")
@@ -246,11 +261,16 @@ class SelectEvents(_SelectEvents):
 
                 # remove columns
                 if write_columns:
+
+                    # store veto in variable before filtering
+                    veto = events.veto
+
                     events = route_filter(events)
 
                     # optional check for finite values
                     if self.check_finite_output:
-                        self.raise_if_not_finite(events)
+                        # ignore vetoed events when checking for finite values
+                        self.raise_if_not_finite(events[~veto])
 
                     # save additional columns as parquet via a thread in the same pool
                     chunk = tmp_dir.child(f"cols_{lfn_index}_{pos.index}.parquet", type="f")

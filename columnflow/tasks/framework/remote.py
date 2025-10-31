@@ -74,6 +74,7 @@ class BundleRepo(AnalysisTask, law.git.BundleGitRepository, law.tasks.TransferLo
     def run(self):
         # create the bundle
         bundle = law.LocalFileTarget(is_tmp="tgz")
+        print(bundle)
         self.bundle(bundle)
 
         # log the size
