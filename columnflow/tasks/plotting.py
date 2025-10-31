@@ -266,15 +266,12 @@ class PlotVariablesBase(_PlotVariablesBase):
             for process_inst in hists.keys():
                 h = hists[process_inst]
                 # determine expected shifts from the intersection of requested shifts and those known for the process
-                # process_shifts = (
-                #     process_shift_map[process_inst.name]
-                #     if process_inst.name in process_shift_map
-                #     else {"nominal"}
-                # )
-
-                # change Ghent: replace all expected shifts with nominal.
-                # not preffered by columnflow: https://github.com/columnflow/columnflow/pull/692
-                expected_shifts = plot_shift_names  # & process_shifts
+                process_shifts = (
+                    process_shift_map[process_inst.name]
+                    if process_inst.name in process_shift_map
+                    else {"nominal"}
+                )
+                expected_shifts = (process_shifts & plot_shift_names) or (process_shifts & {"nominal"})
                 if not expected_shifts:
                     raise Exception(f"no shifts to plot found for process {process_inst.name}")
                 # selections

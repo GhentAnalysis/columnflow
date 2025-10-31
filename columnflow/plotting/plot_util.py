@@ -18,8 +18,8 @@ import law
 import order as od
 import scinum as sn
 
-from columnflow.util import maybe_import, try_int, try_complex, UNSET
-from columnflow.hist_util import copy_axis
+from columnflow.util import maybe_import, try_int, try_complex, safe_div, UNSET
+from columnflow.hist_util import copy_axis, sum_hists
 from columnflow.types import TYPE_CHECKING, Iterable, Any, Callable, Sequence, Hashable
 
 np = maybe_import("numpy")
@@ -225,7 +225,7 @@ def apply_process_scaling(hists: dict[Hashable, hist.Hist]) -> dict[Hashable, hi
         if scale_factor == "stack":
             # compute the scale factor and round
             h_no_shift = remove_residual_axis_single(h, "shift", select_value="nominal")
-            scale_factor = round_dynamic(get_stack_integral() / h_no_shift.sum().value) or 1
+            scale_factor = round_dynamic(safe_div(get_stack_integral(), h_no_shift.sum().value)) or 1
         if try_int(scale_factor):
             scale_factor = int(scale_factor)
             hists[proc_inst] = h * scale_factor
@@ -571,9 +571,9 @@ def prepare_stack_plot_config(
 
     h_data, h_mc, h_mc_stack = None, None, None
     if data_hists:
-        h_data = sum(data_hists[1:], data_hists[0].copy())
+        h_data = sum_hists(data_hists)
     if mc_hists:
-        h_mc = sum(mc_hists[1:], mc_hists[0].copy())
+        h_mc = sum_hists(mc_hists)
         h_mc_stack = hist.Stack(*mc_hists)
 
     # setup plotting configs
