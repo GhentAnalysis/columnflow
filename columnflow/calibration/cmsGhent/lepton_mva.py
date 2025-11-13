@@ -13,8 +13,6 @@ from columnflow.tasks.external import BundleExternalFiles
 
 np = maybe_import("numpy")
 ak = maybe_import("awkward")
-coffea = maybe_import("coffea")
-maybe_import("coffea.nanoevents.methods.nanoaod")
 
 
 @producer(

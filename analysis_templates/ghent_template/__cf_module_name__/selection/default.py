@@ -28,15 +28,21 @@ from __cf_short_name_lc__.selection.objects import object_selection
 from __cf_short_name_lc__.selection.stats import __cf_short_name_lc___increment_stats
 from __cf_short_name_lc__.selection.trigger import trigger_selection
 
+# only numpy and awkward are okay to import globally
 np = maybe_import("numpy")
 ak = maybe_import("awkward")
-coffea = maybe_import("coffea")
-maybe_import("coffea.nanoevents.methods.nanoaod")
+
+# do not import coffea globally! Do this inside the function
+# coffea = maybe_import("coffea")
+# maybe_import("coffea.nanoevents.methods.nanoaod")
 
 logger = law.logger.get_logger(__name__)
 
 
 def TetraVec(arr: ak.Array) -> ak.Array:
+    import coffea
+    import coffea.nanoevents.methods.nanoaod
+
     TetraVec = ak.zip({"pt": arr.pt, "eta": arr.eta, "phi": arr.phi, "mass": arr.mass},
     with_name="PtEtaPhiMLorentzVector",
     behavior=coffea.nanoevents.methods.vector.behavior)

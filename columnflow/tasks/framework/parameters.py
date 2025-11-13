@@ -14,6 +14,7 @@ import law
 from columnflow.util import try_float, try_complex, DotDict, Derivable
 from columnflow.types import Iterable, Any
 
+
 user_parameter_inst = luigi.Parameter(
     default=getpass.getuser(),
     description="the user running the current task, mainly for central schedulers to distinguish "

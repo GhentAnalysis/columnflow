@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import math
+
 import order as od
 import law
 from collections import OrderedDict
@@ -14,13 +16,12 @@ from columnflow.plotting.plot_util import (
 from columnflow.plotting.plot_all import plot_all
 
 from columnflow.plotting.cmsGhent.plot_util import cumulate
+from columnflow.types import TYPE_CHECKING
 
-plt = maybe_import("matplotlib.pyplot")
 np = maybe_import("numpy")
-mtrans = maybe_import("matplotlib.transforms")
-mplhep = maybe_import("mplhep")
-math = maybe_import("math")
-hist = maybe_import("hist")
+if TYPE_CHECKING:
+    hist = maybe_import("hist")
+    plt = maybe_import("matplotlib.pyplot")
 
 
 def plot_multi_variables(
@@ -252,6 +253,8 @@ def plot_1d_line(
     """
     TODO.
     """
+    import hist
+
     n_bins = math.prod([v.n_bins for v in variable_insts])
 
     def flatten_data(data: hist.Hist | np.ndarray):

@@ -1,12 +1,16 @@
 from __future__ import annotations
 import order as od
 from columnflow.util import maybe_import
+from columnflow.types import TYPE_CHECKING
 
-hist = maybe_import("hist")
 np = maybe_import("numpy")
+if TYPE_CHECKING:
+    hist = maybe_import("hist")
 
 
 def cumulate(h: np.ndarray | hist.Hist, direction="below", axis: str | int | od.Variable = 0):
+    import hist
+
     idx_slice = np.s_[::-1] if direction == "above" else np.s_[:]
     arr = h if isinstance(h, np.ndarray) else h.view(flow=False)
     if isinstance(axis, od.Variable):

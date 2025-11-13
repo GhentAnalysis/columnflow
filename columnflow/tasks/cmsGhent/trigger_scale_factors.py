@@ -6,7 +6,6 @@ import order as od
 from itertools import product
 import luigi
 
-from columnflow.types import Any
 from columnflow.tasks.framework.base import Requirements, ConfigTask
 from columnflow.tasks.framework.mixins import (
     CalibratorClassesMixin, SelectorClassMixin, DatasetsMixin,
@@ -19,10 +18,11 @@ from columnflow.production.cmsGhent.trigger import TriggerSFConfig
 import columnflow.production.cmsGhent.trigger.util as util
 from columnflow.tasks.framework.remote import RemoteWorkflow
 from columnflow.util import dev_sandbox, dict_add_strict, maybe_import
-
+from columnflow.types import TYPE_CHECKING, Any
 
 np = maybe_import("numpy")
-hist = maybe_import("hist")
+if TYPE_CHECKING:
+    hist = maybe_import("hist")
 
 logger = law.logger.get_logger(__name__)
 

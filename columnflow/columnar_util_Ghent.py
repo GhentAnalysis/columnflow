@@ -16,13 +16,14 @@ from columnflow.types import Sequence
 from columnflow.columnar_util import remove_ak_column, has_ak_column
 
 ak = maybe_import("awkward")
-coffea = maybe_import("coffea")
 
 
 def TetraVec(arr: ak.Array, keep: Sequence | str | Literal[-1] = -1) -> ak.Array:
     """
     create a Lorentz for fector from an awkward array with pt, eta, phi, and mass fields
     """
+    import coffea
+
     mandatory_fields = ("pt", "eta", "phi", "mass")
     exclude_fields = ("x", "y", "z", "t")
     for field in mandatory_fields:

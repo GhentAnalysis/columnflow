@@ -14,13 +14,15 @@ from columnflow.plotting.plot_util import (
     apply_variable_settings,
     apply_process_settings,
 )
+from columnflow.types import TYPE_CHECKING
 
-hist = maybe_import("hist")
 np = maybe_import("numpy")
-mpl = maybe_import("matplotlib")
-plt = maybe_import("matplotlib.pyplot")
-mplhep = maybe_import("mplhep")
 od = maybe_import("order")
+
+# import hist, matplotlib... for type checking only like this! import them then also locallu.
+if TYPE_CHECKING:
+    hist = maybe_import("hist")
+    plt = maybe_import("matplotlib.pyplot")
 
 
 def my_plot1d_func(
@@ -45,6 +47,9 @@ def my_plot1d_func(
             --plot-function __cf_module_name__.plotting.example.my_plot1d_func \
             --general-settings example_param=some_text
     """
+    import mplhep
+    import matplotlib.pyplot as plt
+
     # we can add arbitrary parameters via the `general_settings` parameter to access them in the
     # plotting function. They are automatically parsed either to a bool, float, or string
     print(f"The example_param has been set to '{example_param}' (type: {type(example_param)})")

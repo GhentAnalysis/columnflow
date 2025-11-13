@@ -23,7 +23,7 @@ import law
 import order as od
 
 from columnflow.columnar_util import mandatory_coffea_columns, Route, ColumnCollection
-from columnflow.util import is_regex, prettify, DotDict
+from columnflow.util import get_docs_url, is_regex, prettify, DotDict, freeze
 from columnflow.types import Sequence, Callable, Any, T
 
 
@@ -37,6 +37,11 @@ default_dataset = law.config.get_expanded("analysis", "default_dataset")
 default_repr_max_len = law.config.get_expanded_int("analysis", "repr_max_len")
 default_repr_max_count = law.config.get_expanded_int("analysis", "repr_max_count")
 default_repr_hash_len = law.config.get_expanded_int("analysis", "repr_hash_len")
+
+# cached and parsed sections of the law config for faster lookup
+_cfg_outputs_dict = None
+_cfg_versions_dict = None
+_cfg_resources_dict = None
 
 # placeholder to denote a default value that is resolved dynamically
 RESOLVE_DEFAULT = "DEFAULT"
@@ -79,6 +84,9 @@ class TaskShifts:
 
     local: set[str] = field(default_factory=set)
     upstream: set[str] = field(default_factory=set)
+
+    def __hash__(self) -> int:
+        return hash((frozenset(self.local), frozenset(self.upstream)))
 
 
 class BaseTask(law.Task):
@@ -127,11 +135,6 @@ class AnalysisTask(BaseTask, law.SandboxTask):
     exclude_params_branch = {"user"}
     exclude_params_workflow = {"user", "notify_slack", "notify_mattermost", "notify_custom"}
 
-    # cached and parsed sections of the law config for faster lookup
-    _cfg_outputs_dict = None
-    _cfg_versions_dict = None
-    _cfg_resources_dict = None
-
     @classmethod
     def modify_param_values(cls, params: dict[str, Any]) -> dict[str, Any]:
         params = super().modify_param_values(params)
@@ -176,20 +179,26 @@ class AnalysisTask(BaseTask, law.SandboxTask):
         _prefer_cli = law.util.make_set(kwargs.get("_prefer_cli", [])) | {
             "version", "workflow", "job_workers", "poll_interval", "walltime", "max_runtime",
             "retries", "acceptance", "tolerance", "parallel_jobs", "shuffle_jobs", "htcondor_cpus",
-            "htcondor_gpus", "htcondor_memory", "htcondor_disk", "htcondor_pool", "pilot",
+            "htcondor_gpus", "htcondor_memory", "htcondor_disk", "htcondor_pool", "pilot", "remote_claw_sandbox",
         }
         kwargs["_prefer_cli"] = _prefer_cli
 
         # build the params
         params = super().req_params(inst, **kwargs)
 
-        # when not explicitly set in kwargs and no global value was defined on the cli for the task
-        # family, evaluate and use the default value
+        # evaluate and use the default version in case
+        # - "version" is an actual parameter object of cls, and
+        # - "version" is not explicitly set in kwargs, and
+        # - no global value was defined on the cli for the task family, and
+        # - if cls and inst belong to the same family, they differ in the keys used for the config lookup
         if (
             isinstance(getattr(cls, "version", None), luigi.Parameter) and
             "version" not in kwargs and
             not law.parser.global_cmdline_values().get(f"{cls.task_family}_version") and
-            cls.task_family != law.parser.root_task_cls().task_family
+            (
+                cls.task_family != inst.task_family or
+                freeze(cls.get_config_lookup_keys(params)) != freeze(inst.get_config_lookup_keys(inst))
+            )
         ):
             default_version = cls.get_default_version(inst, params)
             if default_version and default_version != law.NO_STR:
@@ -224,17 +233,19 @@ class AnalysisTask(BaseTask, law.SandboxTask):
                         d[part] = {"*": d[part]}
                     d = d[part]
                 else:
-                    # assign value to the last nesting level
-                    if part in d and isinstance(d[part], dict):
-                        d[part]["*"] = value
-                    else:
+                    # assign value to the last nesting level, do not overwrite
+                    if part not in d:
                         d[part] = value
+                    elif isinstance(d[part], dict):
+                        d[part]["*"] = value
 
         return items_dict
 
     @classmethod
     def _get_cfg_outputs_dict(cls) -> dict[str, Any]:
-        if cls._cfg_outputs_dict is None and law.config.has_section("outputs"):
+        global _cfg_outputs_dict
+
+        if _cfg_outputs_dict is None and law.config.has_section("outputs"):
             # collect config item pairs
             skip_keys = {"wlcg_file_systems", "lfn_sources"}
             items = [
@@ -242,26 +253,30 @@ class AnalysisTask(BaseTask, law.SandboxTask):
                 for key, value in law.config.items("outputs")
                 if value and key not in skip_keys
             ]
-            cls._cfg_outputs_dict = cls._structure_cfg_items(items)
+            _cfg_outputs_dict = cls._structure_cfg_items(items)
 
-        return cls._cfg_outputs_dict
+        return _cfg_outputs_dict
 
     @classmethod
     def _get_cfg_versions_dict(cls) -> dict[str, Any]:
-        if cls._cfg_versions_dict is None and law.config.has_section("versions"):
+        global _cfg_versions_dict
+
+        if _cfg_versions_dict is None and law.config.has_section("versions"):
             # collect config item pairs
             items = [
                 (key, value)
                 for key, value in law.config.items("versions")
                 if value
             ]
-            cls._cfg_versions_dict = cls._structure_cfg_items(items)
+            _cfg_versions_dict = cls._structure_cfg_items(items)
 
-        return cls._cfg_versions_dict
+        return _cfg_versions_dict
 
     @classmethod
     def _get_cfg_resources_dict(cls) -> dict[str, Any]:
-        if cls._cfg_resources_dict is None and law.config.has_section("resources"):
+        global _cfg_resources_dict
+
+        if _cfg_resources_dict is None and law.config.has_section("resources"):
             # helper to split resource values into key-value pairs themselves
             def parse(key: str, value: str) -> tuple[str, list[tuple[str, Any]]]:
                 params = []
@@ -285,9 +300,9 @@ class AnalysisTask(BaseTask, law.SandboxTask):
                 for key, value in law.config.items("resources")
                 if value and not key.startswith("_")
             ]
-            cls._cfg_resources_dict = cls._structure_cfg_items(items)
+            _cfg_resources_dict = cls._structure_cfg_items(items)
 
-        return cls._cfg_resources_dict
+        return _cfg_resources_dict
 
     @classmethod
     def get_default_version(cls, inst: AnalysisTask, params: dict[str, Any]) -> str | None:
@@ -354,10 +369,16 @@ class AnalysisTask(BaseTask, law.SandboxTask):
             else getattr(inst_or_params, "analysis", None)
         )
         if analysis not in {law.NO_STR, None, ""}:
-            keys["analysis"] = analysis
+            prefix = "ana"
+            keys[prefix] = f"{prefix}_{analysis}"
 
         # add the task family
-        keys["task_family"] = cls.task_family
+        prefix = "task"
+        keys[prefix] = f"{prefix}_{cls.task_family}"
+
+        # for backwards compatibility, add the task family again without the prefix
+        # (TODO: this should be removed in the future)
+        keys[f"{prefix}_compat"] = cls.task_family
 
         return keys
 
@@ -375,7 +396,7 @@ class AnalysisTask(BaseTask, law.SandboxTask):
             return empty_value
 
         # the keys to use for the lookup are the flattened values of the keys dict
-        flat_keys = collections.deque(law.util.flatten(keys.values() if isinstance(keys, dict) else keys))
+        flat_keys = law.util.flatten(keys.values() if isinstance(keys, dict) else keys)
 
         # start tree traversal using a queue lookup consisting of names and values of tree nodes,
         # as well as the remaining keys (as a deferred function) to compare for that particular path
@@ -389,9 +410,27 @@ class AnalysisTask(BaseTask, law.SandboxTask):
 
             # check if the pattern matches any key
             regex = is_regex(pattern)
-            while _keys:
-                key = _keys.popleft()
+            for i, key in enumerate(_keys):
                 if law.util.multi_match(key, pattern, regex=regex):
+                    # for a limited time, show a deprecation warning when the old task family key was matched
+                    # (old = no "task_" prefix)
+                    # TODO: remove once deprecated
+                    if "task_compat" in keys and key == keys["task_compat"]:
+                        docs_url = get_docs_url(
+                            "user_guide",
+                            "best_practices.html",
+                            anchor="selecting-output-locations",
+                        )
+                        logger.warning_once(
+                            "dfs_lookup_old_task_key",
+                            f"during the lookup of a pinned location, version or resource value of a '{cls.__name__}' "
+                            f"task, an entry matched based on the task family '{key}' that misses the new 'task_' "
+                            "prefix; please update the pinned entries in your law.cfg file by adding the 'task_' "
+                            f"prefix to entries that contain the task family, e.g. 'task_{key}: VALUE'; support for "
+                            f"missing prefixes will be removed in a future version; see {docs_url} for more info",
+                        )
+                    # remove the matched key from remaining lookup keys
+                    _keys.pop(i)
                     # when obj is not a dict, we found the value
                     if not isinstance(obj, dict):
                         return obj
@@ -1237,6 +1276,17 @@ class ConfigTask(AnalysisTask):
                     params["config_insts"] = [params["config_inst"]]
             else:
                 if "config_insts" not in params and "configs" in params:
+                    # custom pattern matching
+                    matched_config_names = []
+                    for pattern in params["configs"]:
+                        matched_config_names.extend(
+                            config_name for config_name in analysis_inst.configs.names()
+                            if law.util.multi_match(config_name, pattern)
+                        )
+                    matched_config_names = law.util.make_unique(matched_config_names)
+                    if matched_config_names:
+                        params["configs"] = matched_config_names
+                    # load config instances
                     params["config_insts"] = list(map(analysis_inst.get_config, params["configs"]))
 
         # resolving of parameters that is required before ArrayFunctions etc. can be initialized
@@ -1351,14 +1401,17 @@ class ConfigTask(AnalysisTask):
     resolution_task_cls = None
 
     @classmethod
-    def req_params(cls, inst: law.Task, *args, **kwargs) -> dict[str, Any]:
-        params = super().req_params(inst, *args, **kwargs)
-
+    def req_params(cls, inst: law.Task, **kwargs) -> dict[str, Any]:
         # manually add known shifts between workflows and branches
-        if isinstance(inst, law.BaseWorkflow) and inst.__class__ == cls and getattr(inst, "known_shifts", None):
-            params["known_shifts"] = inst.known_shifts
+        if (
+            "known_shifts" not in kwargs and
+            isinstance(inst, law.BaseWorkflow) and
+            inst.__class__ == cls and
+            getattr(inst, "known_shifts", None)
+        ):
+            kwargs["known_shifts"] = inst.known_shifts
 
-        return params
+        return super().req_params(inst, **kwargs)
 
     @classmethod
     def _multi_sequence_repr(
@@ -1449,7 +1502,8 @@ class ConfigTask(AnalysisTask):
             else getattr(inst_or_params, "config", None)
         )
         if config not in {law.NO_STR, None, ""}:
-            keys.insert_before("task_family", "config", config)
+            prefix = "cfg"
+            keys.insert_before("task", prefix, f"{prefix}_{config}")
 
         return keys
 
@@ -1479,7 +1533,7 @@ class ConfigTask(AnalysisTask):
 
     @property
     def config_repr(self) -> str:
-        return "__".join(config_inst.name for config_inst in self.config_insts)
+        return "__".join(config_inst.name for config_inst in sorted(self.config_insts, key=lambda c: c.id))
 
     def store_parts(self) -> law.util.InsertableDict:
         parts = super().store_parts()
@@ -1629,7 +1683,8 @@ class ShiftTask(ConfigTask):
             else getattr(inst_or_params, "shift", None)
         )
         if shift not in (law.NO_STR, None, ""):
-            keys["shift"] = shift
+            prefix = "shift"
+            keys[prefix] = f"{prefix}_{shift}"
 
         return keys
 
@@ -1689,6 +1744,21 @@ class DatasetTask(ShiftTask):
         return params
 
     @classmethod
+    def resolve_param_values(cls, params: dict[str, Any]) -> dict[str, Any]:
+        params = super().resolve_param_values(params)
+
+        # also add a reference to the info instance when a global shift is defined
+        if "dataset_inst" in params and "global_shift_inst" in params:
+            shift_name = params["global_shift_inst"].name
+            params["dataset_info_inst"] = (
+                params["dataset_inst"].get_info(shift_name)
+                if shift_name in params["dataset_inst"].info
+                else params["dataset_inst"].get_info("nominal")
+            )
+
+        return params
+
+    @classmethod
     def get_known_shifts(
         cls,
         params: dict[str, Any],
@@ -1720,7 +1790,8 @@ class DatasetTask(ShiftTask):
             else getattr(inst_or_params, "dataset", None)
         )
         if dataset not in {law.NO_STR, None, ""}:
-            keys.insert_before("shift", "dataset", dataset)
+            prefix = "dataset"
+            keys.insert_before("shift", prefix, f"{prefix}_{dataset}")
 
         return keys
 

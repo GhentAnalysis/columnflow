@@ -10,7 +10,6 @@ from columnflow.production import Producer, producer
 
 np = maybe_import("numpy")
 ak = maybe_import("awkward")
-coffea = maybe_import("coffea")
 
 
 def _geometric_matching(particles1: ak.Array, particles2: ak.Array) -> (ak.Array, ak.Array):

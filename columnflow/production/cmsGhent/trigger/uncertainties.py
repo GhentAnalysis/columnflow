@@ -4,12 +4,12 @@ from typing import Callable, Sequence, Literal
 from columnflow.util import maybe_import
 from columnflow.production.cmsGhent.trigger.Koopman_test import koopman_confint
 import columnflow.production.cmsGhent.trigger.util as util
+from columnflow.types import TYPE_CHECKING
 
-import numpy as np
-
-hist = maybe_import("hist")
-
-Hist = hist.Hist
+np = maybe_import("numpy")
+if TYPE_CHECKING:
+    hist = maybe_import("hist")
+    Hist = hist.Hist
 
 
 def calc_stat(
