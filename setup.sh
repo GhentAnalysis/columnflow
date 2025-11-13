@@ -663,6 +663,7 @@ EOF
                 echo
                 cf_color cyan "setting up conda / micromamba environment"
                 micromamba install \
+                    gcc \
                     libgcc \
                     bash \
                     zsh \

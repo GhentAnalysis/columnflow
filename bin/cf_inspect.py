@@ -59,10 +59,13 @@ def _load_nano_root(fname: str, treepath: str | None = None, **kwargs) -> ak.Arr
     except:
         return uproot.open(fname)
 
-
-def _load_h5(fname: str, **kwargs):
-    import h5py
-    return h5py.File(fname, "r")
+    return coffea.nanoevents.NanoEventsFactory.from_root(
+        source,
+        treepath=treepath,
+        mode="eager",
+        runtime_cache=None,
+        persistent_cache=None,
+    ).events()
 
 
 def load(fname: str, **kwargs) -> Any:
@@ -78,8 +81,6 @@ def load(fname: str, **kwargs) -> Any:
         return _load_nano_root(fname, **kwargs)
     if ext == ".json":
         return _load_json(fname, **kwargs)
-    if ext in [".h5", ".hdf5"]:
-        return _load_h5(fname, **kwargs)
     raise NotImplementedError(f"no loader implemented for extension '{ext}'")
 
 

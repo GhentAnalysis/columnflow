@@ -29,7 +29,6 @@ from columnflow.util import maybe_import, DotDict, get_docs_url, get_code_url
 from columnflow.types import Callable
 from columnflow.timing import Timer
 
-
 np = maybe_import("numpy")
 ak = maybe_import("awkward")
 
