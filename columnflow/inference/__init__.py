@@ -1798,11 +1798,14 @@ class InferenceModel(Derivable, metaclass=InferenceModelMeta):
     def remove_dangling_parameters_from_groups(
         self,
         keep_parameters: str | Sequence[str] | None = None,
+        match_mode: Callable = any,
     ) -> None:
         """
         Removes names of parameters from parameter groups that are not assigned to any process in any category.
 
         :param keep_parameters: A string, pattern, or sequence of them to specify parameters to keep.
+        :param match_mode: Either ``any`` or ``all`` to control the parameter matching behavior (see
+            :py:func:`pattern_matcher`).
         """
         # get a list of all parameters
         parameter_names = self.get_parameters("*", flat=True)

@@ -47,7 +47,7 @@ def draw_stat_error_bands(
     baseline[np.isnan(baseline)] = 0.0
 
     bar_kwargs = {
-        "x": h.axes[0].centers,
+        "x": h.axes[0].centers - (h.axes[0].edges[0] if type(h.axes[0]) is hist.axes.Integer else 0),
         "bottom": baseline * (1 - rel_stat_error),
         "height": baseline * 2 * rel_stat_error,
         "width": h.axes[0].edges[1:] - h.axes[0].edges[:-1],
@@ -286,7 +286,7 @@ def draw_errorbars(
     values = h.values() / norm
 
     defaults = {
-        "x": h.axes[0].centers,
+        "x": h.axes[0].centers - (h.axes[0].edges[0] if type(h.axes[0]) is hist.axes.Integer else 0),
         "y": values,
         "color": "k",
         "linestyle": "none",
@@ -396,13 +396,17 @@ def plot_all(
         # invoke the method
         method = cfg["method"]
         h = cfg["hist"]
-        plot_methods[method](ax, h, **cfg.get("kwargs", {}))
+
+        def get_method(method):
+            return method if callable(method) else plot_methods[method]
+
+        get_method(method)(ax, h, **cfg.get("kwargs", {}))
 
         # repeat for ratio axes if configured
         if not skip_ratio and "ratio_kwargs" in cfg:
             # take ratio_method if the ratio plot requires a different plotting method
             method = cfg.get("ratio_method", method)
-            plot_methods[method](rax, h, **cfg.get("ratio_kwargs", {}))
+            get_method(method)(rax, h, **cfg.get("ratio_kwargs", {}))
 
     # axis styling
     ax_kwargs = {

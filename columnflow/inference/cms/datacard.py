@@ -168,6 +168,7 @@ class DatacardWriter(object):
         self.histograms = histograms
         self.rate_precision = rate_precision
         self.effect_precision = effect_precision
+        self.effect_precision = effect_precision
         self.effect_from_shape_if_flat_max_outlier = effect_from_shape_if_flat_max_outlier
         self.effect_from_shape_if_flat_max_deviation = effect_from_shape_if_flat_max_deviation
         self.asymmetrize_if_large_threshold = asymmetrize_if_large_threshold
@@ -687,6 +688,9 @@ class DatacardWriter(object):
                             h_down = h_nom.copy() * f_down
                             h_up = h_nom.copy() * f_up
                         else:
+                            # just extract the shapes
+                            h_down = sum_hists((param_obj.name, "down"), "nominal") * scale
+                            h_up = sum_hists((param_obj.name, "up"), "nominal") * scale
                             # just extract the shapes from the inputs
                             h_down = load(down_name, (param_obj.name, "down"), "nominal", scale=scale)
                             h_up = load(up_name, (param_obj.name, "up"), "nominal", scale=scale)

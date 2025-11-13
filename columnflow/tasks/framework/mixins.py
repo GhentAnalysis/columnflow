@@ -15,7 +15,7 @@ import law
 import order as od
 
 from columnflow.types import Any, Iterable, Sequence
-from columnflow.tasks.framework.base import ConfigTask, DatasetTask, TaskShifts, RESOLVE_DEFAULT
+from columnflow.tasks.framework.base import AnalysisTask, ConfigTask, DatasetTask, TaskShifts, RESOLVE_DEFAULT
 from columnflow.tasks.framework.parameters import SettingsParameter, DerivableInstParameter, DerivableInstsParameter
 from columnflow.calibration import Calibrator
 from columnflow.selection import Selector
@@ -27,6 +27,7 @@ from columnflow.inference import InferenceModel
 from columnflow.columnar_util import Route, ColumnCollection, ChunkedIOHandler, TaskArrayFunction
 from columnflow.util import maybe_import, DotDict, get_docs_url, get_code_url
 from columnflow.types import Callable
+from columnflow.timing import Timer
 
 np = maybe_import("numpy")
 ak = maybe_import("awkward")
@@ -2183,6 +2184,137 @@ class VariablesMixin(ConfigTask):
         return self.build_repr(sorted(self.variables), prepend_count=True)
 
 
+class DatasetsMixin(ConfigTask):
+
+    datasets = law.CSVParameter(
+        default=(),
+        description="comma-separated dataset names or patterns to select; can also be the key of a mapping defined in "
+        "the 'dataset_groups' auxiliary data of the config; when empty, uses all datasets registered in the config "
+        "that contain any of the selected --processes; empty default",
+        brace_expand=True,
+        parse_empty=True,
+    )
+    datasets_multi = law.MultiCSVParameter(
+        default=(),
+        description="multiple comma-separated dataset names or patters to select per config object, each separated by "
+        "a colon; when only one sequence is passed, it is applied to all configs; values can also be the key of a "
+        "mapping defined in " "the 'dataset_groups' auxiliary data of the specific config; when empty, uses all "
+        "datasets registered in the config that contain any of the selected --processes; empty default",
+        brace_expand=True,
+        parse_empty=True,
+    )
+
+    allow_empty_datasets = False
+
+    @classmethod
+    def modify_task_attributes(cls) -> None:
+        super().modify_task_attributes()
+        # single/multi config adjustments in case the switch has been specified
+        if isinstance(cls.single_config, bool) and getattr(cls, "datasets_multi", None) is not None:
+            if not cls.has_single_config():
+                cls.datasets = cls.datasets_multi
+                cls.processes = cls.processes_multi
+            cls.datasets_multi = None
+
+    @classmethod
+    def resolve_datasets(cls, config_inst: od.Config, datasets: Any) -> tuple[list[str], list[str]]:
+        """
+        helper to resolve processes and datasets for one config
+        """
+        if datasets:
+            datasets_orig = datasets
+            datasets = cls.find_config_objects(
+                names=datasets,
+                container=config_inst,
+                object_cls=od.Dataset,
+                groups_str="dataset_groups",
+            )
+            if not datasets and not cls.allow_empty_datasets:
+                raise ValueError(f"no datasets found matching {datasets_orig}")
+
+        return datasets
+
+    @classmethod
+    def resolve_param_values_pre_init(cls, params: dict[str, Any]) -> dict[str, Any]:
+        params = super().resolve_param_values_pre_init(params)
+
+        # get processes and datasets
+        single_config = cls.has_single_config()
+        datasets = (params.get("datasets", law.no_value),) if single_config else params.get("datasets", ())
+
+        # "broadcast" to match number of configs
+        config_insts = params.get("config_insts")
+
+        # perform resolution per config
+        multi_datasets = []
+        for config_inst, _datasets in zip(config_insts, datasets):
+            _datasets = cls.resolve_datasets(config_inst, _datasets)
+            multi_datasets.append(tuple(_datasets) if _datasets != law.no_value else None)
+
+        params["datasets"] = multi_datasets[0] if single_config else tuple(multi_datasets)
+
+        # store instances
+        params["dataset_insts"] = {
+            config_inst: datasets and list(map(config_inst.get_dataset, datasets))
+            for config_inst, datasets in zip(config_insts, multi_datasets)
+        }
+        return params
+
+    @classmethod
+    def resolve_instances(cls, params: dict[str, Any], shifts: TaskShifts) -> dict[str, Any]:
+        if not cls.resolution_task_cls:
+            raise ValueError(f"resolution_task_cls must be set for multi-config task {cls.task_family}")
+
+        cls.get_known_shifts(params, shifts)
+
+        # we loop over all configs/datasets, but return initial params
+        for i, config_inst in enumerate(params["config_insts"]):
+            if cls.has_single_config():
+                datasets = params["datasets"]
+            else:
+                datasets = params["datasets"][i]
+
+            for dataset in datasets:
+                # NOTE: we need to copy here, because otherwise taf inits will only be triggered once
+                _params = {
+                    **params,
+                    "config_inst": config_inst,
+                    "config": config_inst.name,
+                    "dataset": dataset,
+                }
+                logger_dev.debug(f"building taf insts for {config_inst.name}, {dataset}")
+                cls.resolution_task_cls.resolve_instances(_params, shifts)
+                cls.resolution_task_cls.get_known_shifts(_params, shifts)
+
+        params["known_shifts"] = shifts
+
+        return params
+
+    @classmethod
+    def get_known_shifts(
+            cls,
+            params: dict[str, Any],
+            shifts: TaskShifts,
+    ) -> None:
+        """
+        Updates the set of known *shifts* implemented by *this* and upstream tasks.
+
+        :param params: Dictionary of task parameters.
+        :param shifts: TaskShifts object to adjust.
+        """
+        # add shifts of all datasets to upstream ones
+        for config_inst, dataset_insts in params["dataset_insts"].items():
+            for dataset_inst in dataset_insts:
+                if dataset_inst.is_mc:
+                    shifts.upstream |= set(dataset_inst.info.keys())
+
+        super().get_known_shifts(params, shifts)
+
+    @property
+    def datasets_repr(self) -> str:
+        return self._multi_sequence_repr(self.datasets, sort=True)
+
+
 class DatasetsProcessesMixin(ConfigTask):
 
     datasets = law.CSVParameter(
@@ -2665,3 +2797,184 @@ class HistHookMixin(ConfigTask):
         ]
 
         return self.build_repr(names)
+
+
+class MergeHistogramMixin(
+        VariablesMixin,
+        law.LocalWorkflow,
+):
+    only_missing = luigi.BoolParameter(
+        default=False,
+        description="when True, identify missing variables first and only require histograms of "
+                    "missing ones; default: False",
+    )
+    remove_previous = luigi.BoolParameter(
+        default=False,
+        significant=False,
+        description="when True, remove particlar input histograms after merging; default: False",
+    )
+
+    @classmethod
+    def req_params(cls, inst: AnalysisTask, **kwargs) -> dict:
+        _prefer_cli = law.util.make_set(kwargs.get("_prefer_cli", [])) | {"variables"}
+        kwargs["_prefer_cli"] = _prefer_cli
+        return super().req_params(inst, **kwargs)
+
+    def create_branch_map(self):
+        # create a dummy branch map so that this task could be submitted as a job
+        return {0: None}
+
+    def _get_variables(self):
+        if self.is_workflow():
+            return self.as_branch()._get_variables()
+
+        variables = self.variables
+
+        # optional dynamic behavior: determine not yet created variables and require only those
+        if self.only_missing:
+            missing = self.output().count(existing=False, keys=True)[1]
+            variables = sorted(missing, key=variables.index)
+
+        return variables
+
+    def workflow_requires(self):
+        reqs = super().workflow_requires()
+
+        if not self.pilot:
+            variables = self._get_variables()
+            if variables:
+                reqs["hists"] = self.reqs.CreateHistograms.req_different_branching(
+                    self,
+                    branch=-1,
+                    variables=tuple(variables),
+                )
+
+        return reqs
+
+    def requires(self):
+        # optional dynamic behavior: determine not yet created variables and require only those
+        variables = self._get_variables()
+
+        if not variables:
+            return []
+
+        return self.reqs.CreateHistograms.req_different_branching(
+            self,
+            branch=-1,
+            variables=tuple(variables),
+            workflow="local",
+        )
+
+    def output(self):
+        return {"hists": law.SiblingFileCollection({
+            variable_name: self.target(f"hist__{variable_name}.pickle")
+            for variable_name in self.variables
+        })}
+
+    @law.decorator.log
+    def run(self):
+        # preare inputs and outputs
+        inputs = self.input()["collection"]
+        outputs = self.output()
+
+        # load input histograms
+        hists = [
+            inp["hists"].load(formatter="pickle")
+            for inp in self.iter_progress(inputs.targets.values(), len(inputs), reach=(0, 50))
+        ]
+
+        # create a separate file per output variable
+        variable_names = list(hists[0].keys())
+        for variable_name in self.iter_progress(variable_names, len(variable_names), reach=(50, 100)):
+            self.publish_message(f"merging histograms for '{variable_name}'")
+
+            variable_hists = [h[variable_name] for h in hists]
+            merged = sum(variable_hists[1:], variable_hists[0].copy())
+            outputs["hists"][variable_name].dump(merged, formatter="pickle")
+
+        # optionally remove inputs
+        if self.remove_previous:
+            inputs.remove()
+
+
+class ParamsCacheMixin:
+
+    # the get_param_values is called again for every value of this parameter (config by default included)
+    cache_param_sep = ["shift", "shift_sources"]
+
+    # dict to store cached params for different tasks
+    cache_param_values = dict()
+
+    time_get_params = luigi.BoolParameter(
+        default=False,
+        description="Whether to report the time taken to load get the parameters",
+    )
+
+    no_cached_params = luigi.BoolParameter(
+        default=False,
+        description="Return normal call to get_param_values and report if it differs from cached output",
+    )
+
+    check_cached_params = luigi.BoolParameter(
+        default=False,
+        description="Return normal call to get_param_values and report if it differs from cached output",
+    )
+
+    @classmethod
+    def cache_tag(cls, kwargs):
+        tag = cls.__name__
+        for p in ["config"] + list(cls.cache_param_sep):
+            if kwargs.get(p, None):
+                tag += f"__{p}_{kwargs[p]}"
+        return tag
+
+    @classmethod
+    def get_param_values(cls, params, args, kwargs):
+
+        tag = cls.cache_tag(kwargs)
+        cache = cls.cache_param_values.setdefault(tag, [])
+        if cache:
+            # return cached params but overwrite branch(es), dataset, and output/status options
+            dct_update = dict(branch=int(kwargs.get("branch", -1)))
+            if "dataset" in kwargs:
+                dct_update["dataset"] = kwargs["dataset"]
+            cached_out = cache[0] | dct_update | {
+                k: kwargs.get(k, ()) for k in
+                ["print_output", "branches", "print_status", "remove_output", "fetch_output"]
+            }
+
+        # call the normal get_param_values first time, or by request
+        if any([
+            check_cached_params := kwargs.get("check_cached_params", False),
+            no_cached_params := kwargs.get("no_cached_params", False),
+            first_call := not cache,
+        ]):
+            if time_get_params := kwargs.get("time_get_params", False):
+                tmr = Timer(f"{tag} get_param_values")
+
+            out = super().get_param_values(params, args, kwargs)
+
+            if time_get_params:
+                tmr("end of call")
+
+            dct_out = dict(out)
+
+        # store first call to cache
+        if first_call:
+            cache.append(dct_out)
+            cls.cache_param_values[cls.cache_tag(dct_out)] = cache
+        # compare cached output to normal call
+        elif check_cached_params:
+            for key, value in dct_out.items():
+                cached_val = cached_out.get(key, None)
+                if isinstance(value, (tuple, list)) and isinstance(cached_val, (tuple, list)):
+                    value = tuple(value)
+                    cached_val = tuple(cached_val)
+                if cached_val != value:
+                    logger.warning(
+                        "normal call to get_param_values yielded output that differs from cached output\n"
+                        f"Normal call -> {key} [key]: {value}\n"
+                        f"Cached call -> {key} [key]: {cached_val}",
+                    )
+
+        return out if no_cached_params or first_call else list(cached_out.items())

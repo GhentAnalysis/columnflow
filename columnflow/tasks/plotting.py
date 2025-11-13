@@ -210,7 +210,9 @@ class PlotVariablesBase(_PlotVariablesBase):
                         h = h[{"process": sum}]
 
                         # create expected shift bins and fill them with the nominal histogram
-                        expected_shifts = plot_shift_names & process_shift_map[process_inst.name]
+                        # change Ghent: replace all expected shifts with nominal.
+                        # not preffered by columnflow: https://github.com/columnflow/columnflow/pull/692
+                        expected_shifts = plot_shift_names  # & process_shift_map[process_inst.name]
                         add_missing_shifts(h, expected_shifts, str_axis="shift", nominal_bin="nominal")
 
                         # add the histogram

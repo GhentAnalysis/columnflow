@@ -6,10 +6,10 @@ action () {
     local this_dir="$( cd "$( dirname "${this_file}" )" && pwd )"
 
     # check arguments
-    [ "$#" -eq 0 ] && {
-        echo "ERROR: at least one file must be provided"
-        return 1
-    }
+    # [ "$#" -eq 0 ] && {
+    #     echo "ERROR: at least one file must be provided"
+    #     return 1
+    # }
 
     # determine the sandbox to use
     local cf_inspect_sandbox="${CF_INSPECT_SANDBOX:-venv_columnar_dev}"

@@ -526,6 +526,14 @@ def create_category_combinations(
         columnflow to determine whether the summation over specific categories is valid or may result in under- or
         over-counting when combining leaf categories. These checks may be performed by other functions and tools based
         on information derived from groups and stored in auxiliary fields of the newly created categories.
+    Given a *config* object and sequences of *categories* in a dict, creates all combinations of possible leaf
+    categories at different depths, connects them with parent - child relations (see :py:class:`order.Category`) and
+    returns the number of newly created categories.
+
+    *categories* should be a dictionary that maps string names to :py:class:`CategoryGroup` objects which are thin
+    wrappers around sequences of categories (objects or names). Group names (dictionary keys) are used as keyword
+    arguments in a callable *name_fn* that is supposed to return the name of newly created categories (see example
+    below).
 
     All intermediate layers of categories can be built and connected automatically to one another by parent - child
     category relations. The exact behavior is controlled by *parent_mode*:
