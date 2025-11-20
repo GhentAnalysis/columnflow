@@ -33,6 +33,7 @@ from __future__ import annotations
 from collections import OrderedDict
 
 import law
+import order as od
 
 from columnflow.util import maybe_import
 from columnflow.plotting.plot_all import (
@@ -48,25 +49,25 @@ from columnflow.plotting.plot_util import (
     get_cms_label,
     get_position,
 )
+from columnflow.types import TYPE_CHECKING
 
-
-hist = maybe_import("hist")
 np = maybe_import("numpy")
-mpl = maybe_import("matplotlib")
-plt = maybe_import("matplotlib.pyplot")
-mplhep = maybe_import("mplhep")
-od = maybe_import("order")
-mticker = maybe_import("matplotlib.ticker")
-colorsys = maybe_import("colorsys")
+if TYPE_CHECKING:
+    hist = maybe_import("hist")
+    plt = maybe_import("matplotlib.pyplot")
 
 
 def change_saturation(hls, saturation_factor):
+    import colorsys
+
     # Convert back to RGB
     new_rgb = colorsys.hls_to_rgb(hls[0], hls[1], saturation_factor)
     return new_rgb
 
 
 def get_new_colors(original_color, n_new_colors=2):
+    import colorsys
+
     # Convert RGB to HLS
     hls = colorsys.rgb_to_hls(*original_color)
 
@@ -178,6 +179,9 @@ def plot_unrolled(
     variable_settings: dict | None = None,
     **kwargs,
 ) -> plt.Figure:
+    import mplhep
+    import matplotlib as mpl
+    import matplotlib.pyplot as plt
 
     # remove shift axis from histograms
     if len(shift_insts) == 1:

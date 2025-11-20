@@ -14,7 +14,6 @@ from columnflow.tasks.framework.mixins import (
     CalibratorClassesMixin, CalibratorsMixin, SelectorClassMixin, SelectorMixin, ReducerClassMixin, ReducerMixin,
     ProducerClassesMixin, ProducersMixin, VariablesMixin, DatasetShiftSourcesMixin, HistProducerClassMixin,
     HistProducerMixin, ChunkedIOMixin, MLModelsMixin,
-    # ParamsCacheMixin,
 )
 from columnflow.tasks.framework.remote import RemoteWorkflow
 from columnflow.tasks.framework.parameters import last_edge_inclusive_inst
@@ -22,19 +21,27 @@ from columnflow.tasks.framework.decorators import on_failure
 from columnflow.tasks.reduction import ReducedEventsUser
 from columnflow.tasks.production import ProduceColumns
 from columnflow.tasks.ml import MLEvaluation
+from columnflow.hist_util import update_ax_labels, sum_hists
 from columnflow.util import dev_sandbox
 
 
+class VariablesMixinWorkflow(
+    VariablesMixin,
+    law.LocalWorkflow,
+    RemoteWorkflow,
+):
+
+    def control_output_postfix(self) -> str:
+        return f"{super().control_output_postfix()}__vars_{self.variables_repr}"
+
+
 class _CreateHistograms(
-    # ParamsCacheMixin
     ReducedEventsUser,
     ProducersMixin,
     MLModelsMixin,
     HistProducerMixin,
     ChunkedIOMixin,
-    VariablesMixin,
-    law.LocalWorkflow,
-    RemoteWorkflow,
+    VariablesMixinWorkflow,
 ):
     """
     Base classes for :py:class:`CreateHistograms`.
@@ -101,11 +108,13 @@ class CreateHistograms(_CreateHistograms):
                     self.reqs.MLEvaluation.req(self, ml_model=ml_model_inst.cls_name)
                     for ml_model_inst in self.ml_model_insts
                 ]
+        elif self.producer_insts:
+            # pass-through pilot workflow requirements of upstream task
+            t = self.reqs.ProduceColumns.req(self)
+            law.util.merge_dicts(reqs, t.workflow_requires(), inplace=True)
 
-            # add hist_producer dependent requirements
-            reqs["hist_producer"] = law.util.make_unique(law.util.flatten(
-                self.hist_producer_inst.run_requires(task=self),
-            ))
+        # add hist producer dependent requirements
+        reqs["hist_producer"] = law.util.make_unique(law.util.flatten(self.hist_producer_inst.run_requires(task=self)))
 
         return reqs
 
@@ -242,6 +251,10 @@ class CreateHistograms(_CreateHistograms):
                 events = attach_coffea_behavior(events)
                 events, weight = self.hist_producer_inst(events, task=self)
 
+                if len(events) == 0:
+                    self.publish_message(f"no events found in chunk {pos}")
+                    continue
+
                 # merge category ids and check that they are defined as leaf categories
                 category_ids = ak.concatenate(
                     [Route(c).apply(events) for c in self.category_id_columns],
@@ -341,9 +354,7 @@ class _MergeHistograms(
     ProducersMixin,
     MLModelsMixin,
     HistProducerMixin,
-    VariablesMixin,
-    law.LocalWorkflow,
-    RemoteWorkflow,
+    VariablesMixinWorkflow,
 ):
     """
     Base classes for :py:class:`MergeHistograms`.
@@ -421,10 +432,12 @@ class MergeHistograms(_MergeHistograms):
         )
 
     def output(self):
-        return {"hists": law.SiblingFileCollection({
-            variable_name: self.target(f"hist__var_{variable_name}.pickle")
-            for variable_name in self.variables
-        })}
+        return {
+            "hists": law.SiblingFileCollection({
+                variable_name: self.target(f"hist__var_{variable_name}.pickle")
+                for variable_name in self.variables
+            }),
+        }
 
     @law.decorator.notify
     @law.decorator.log
@@ -443,10 +456,13 @@ class MergeHistograms(_MergeHistograms):
         variable_names = list(hists[0].keys())
         for variable_name in self.iter_progress(variable_names, len(variable_names), reach=(50, 100)):
             self.publish_message(f"merging histograms for '{variable_name}'")
+            variable_hists = [h[variable_name] for h in hists]
+
+            # update axis labels from variable insts for consistency
+            update_ax_labels(variable_hists, self.config_inst, variable_name)
 
             # merge them
-            variable_hists = [h[variable_name] for h in hists]
-            merged = sum(variable_hists[1:], variable_hists[0].copy())
+            merged = sum_hists(variable_hists)
 
             # post-process the merged histogram
             merged = self.hist_producer_inst.run_post_process_merged_hist(merged, task=self)
@@ -478,9 +494,7 @@ class _MergeShiftedHistograms(
     ProducerClassesMixin,
     MLModelsMixin,
     HistProducerClassMixin,
-    VariablesMixin,
-    law.LocalWorkflow,
-    RemoteWorkflow,
+    VariablesMixinWorkflow,
 ):
     """
     Base classes for :py:class:`MergeShiftedHistograms`.
@@ -507,9 +521,10 @@ class MergeShiftedHistograms(_MergeShiftedHistograms):
     def workflow_requires(self):
         reqs = super().workflow_requires()
 
-        # add nominal and both directions per shift source
-        for shift in ["nominal"] + self.shifts:
-            reqs[shift] = self.reqs.MergeHistograms.req(self, shift=shift, _prefer_cli={"variables"})
+        if not self.pilot:
+            # add nominal and both directions per shift source
+            for shift in ["nominal"] + self.shifts:
+                reqs[shift] = self.reqs.MergeHistograms.req(self, shift=shift, _prefer_cli={"variables"})
 
         return reqs
 
@@ -535,17 +550,19 @@ class MergeShiftedHistograms(_MergeShiftedHistograms):
         outputs = self.output()["hists"].targets
 
         for variable_name, outp in self.iter_progress(outputs.items(), len(outputs)):
-            self.publish_message(f"merging histograms for '{variable_name}'")
+            with self.publish_step(f"merging histograms for '{variable_name}' ..."):
+                # load hists
+                variable_hists = [
+                    coll["hists"].targets[variable_name].load(formatter="pickle")
+                    for coll in inputs.values()
+                ]
 
-            # load hists
-            variable_hists = [
-                coll["hists"].targets[variable_name].load(formatter="pickle")
-                for coll in inputs.values()
-            ]
+                # update axis labels from variable insts for consistency
+                update_ax_labels(variable_hists, self.config_inst, variable_name)
 
-            # merge and write the output
-            merged = sum(variable_hists[1:], variable_hists[0].copy())
-            outp.dump(merged, formatter="pickle")
+                # merge and write the output
+                merged = sum_hists(variable_hists)
+                outp.dump(merged, formatter="pickle")
 
 
 MergeShiftedHistogramsWrapper = wrapper_factory(

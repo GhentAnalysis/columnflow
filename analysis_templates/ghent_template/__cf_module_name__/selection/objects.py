@@ -10,7 +10,7 @@ from typing import Tuple
 from columnflow.util import maybe_import, four_vec
 from columnflow.columnar_util import set_ak_column
 from columnflow.selection import Selector, SelectionResult, selector
-from columnflow.reduction.util import masked_sorted_indices
+from columnflow.columnar_util import sorted_indices_from_mask
 
 ak = maybe_import("awkward")
 
@@ -53,7 +53,7 @@ def muon_object(
         steps={},
         objects={
             "Muon": {
-                "Muon": masked_sorted_indices(mu_mask, muon.pt)
+                "Muon": sorted_indices_from_mask(mu_mask, muon.pt)
             }
         },
     )
@@ -108,7 +108,7 @@ def electron_object(
         steps={},
         objects={
             "Electron": {
-                "Electron": masked_sorted_indices(e_mask, electron.pt)
+                "Electron": sorted_indices_from_mask(e_mask, electron.pt)
             }
         },
     )
@@ -142,7 +142,7 @@ def jet_object(
         (dR_mask)
     )
 
-    jet_indices = masked_sorted_indices(jet_mask, events.Jet.pt)
+    jet_indices = sorted_indices_from_mask(jet_mask, events.Jet.pt)
     n_jets = ak.sum(jet_mask, axis=-1)
 
     return events, SelectionResult(

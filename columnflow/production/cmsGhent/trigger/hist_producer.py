@@ -15,10 +15,12 @@ from columnflow.reduction.util import create_collections_from_masks
 import columnflow.production.cmsGhent.trigger.util as util
 from columnflow.selection import SelectionResult
 import order as od
+from columnflow.types import TYPE_CHECKING
 
 np = maybe_import("numpy")
 ak = maybe_import("awkward")
-hist = maybe_import("hist")
+if TYPE_CHECKING:
+    hist = maybe_import("hist")
 
 logger = law.logger.get_logger(__name__)
 
@@ -34,6 +36,8 @@ def trigger_efficiency_hists(
     object_mask: dict = None,
     **kwargs,
 ) -> ak.Array:
+    import hist
+
     if hists is None:
         logger.warning_once(self.cls_name + " did not get any histograms")
         return events

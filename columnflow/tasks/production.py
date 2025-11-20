@@ -50,9 +50,7 @@ class ProduceColumns(_ProduceColumns):
         reqs["events"] = self.reqs.ProvideReducedEvents.req(self)
 
         # add producer dependent requirements
-        reqs["producer"] = law.util.make_unique(law.util.flatten(
-            self.producer_inst.run_requires(task=self),
-        ))
+        reqs["producer"] = law.util.make_unique(law.util.flatten(self.producer_inst.run_requires(task=self)))
 
         return reqs
 
@@ -168,7 +166,12 @@ class ProduceColumns(_ProduceColumns):
         # merge output files
         sorted_chunks = [output_chunks[key] for key in sorted(output_chunks)]
         law.pyarrow.merge_parquet_task(
-            self, sorted_chunks, output["columns"], local=True, writer_opts=self.get_parquet_writer_opts(),
+            task=self,
+            inputs=sorted_chunks,
+            output=output["columns"],
+            local=True,
+            writer_opts=self.get_parquet_writer_opts(),
+            target_row_group_size=self.merging_row_group_size,
         )
 
 
@@ -199,6 +202,7 @@ class ProduceColumnsWrapper(_ProduceColumnsWrapperBase):
     producers = law.CSVParameter(
         default=(),
         description="names of producers to use; if empty, the default producer is used",
+        brace_expand=True,
     )
 
     def __init__(self, *args, **kwargs):

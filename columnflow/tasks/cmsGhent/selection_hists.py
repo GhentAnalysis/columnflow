@@ -14,10 +14,10 @@ from columnflow.tasks.framework.plotting import (
     PlotBase, PlotBase1D, VariablePlotSettingMixin, ProcessPlotSettingMixin,
 )
 
-from columnflow.types import Any
+from columnflow.types import TYPE_CHECKING, Any
 
-
-hist = maybe_import("hist")
+if TYPE_CHECKING:
+    hist = maybe_import("hist")
 
 
 class CustomDefaultVariablesMixin(
@@ -189,6 +189,7 @@ class SelectionEfficiencyHistMixin(
         @param incl: histogram with event counts before selection
         @param kwargs: keyword arguments passed to **proportion_confint**
         """
+        import hist
         from statsmodels.stats.proportion import proportion_confint
         efficiency = selected_counts / incl.values()
         eff_sample_size_corr = incl.values() / incl.variances()

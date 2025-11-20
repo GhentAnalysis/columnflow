@@ -12,8 +12,6 @@ from columnflow.columnar_util import set_ak_column
 
 ak = maybe_import("awkward")
 np = maybe_import("numpy")
-hist = maybe_import("hist")
-correctionlib = maybe_import("correctionlib")
 
 logger = law.logger.get_logger(__name__)
 

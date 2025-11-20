@@ -1,15 +1,12 @@
+import order as od
 import law
 from collections import OrderedDict
 from columnflow.util import maybe_import
+from unittest.mock import patch
+from functools import partial
 
-plt = maybe_import("matplotlib.pyplot")
 np = maybe_import("numpy")
-od = maybe_import("order")
-mtrans = maybe_import("matplotlib.transforms")
-mplhep = maybe_import("mplhep")
-hist = maybe_import("hist")
 
-from columnflow.plotting.plot_all import make_plot_2d
 from columnflow.plotting.plot_util import (
     apply_variable_settings,
     remove_residual_axis,
@@ -23,6 +20,7 @@ def merge_migration_bins(h):
     """
     binning both axes in equal bins
     """
+    import hist
 
     x_edges = h.axes[0].edges
     y_edges = h.axes[1].edges
@@ -97,6 +95,10 @@ def plot_migration_matrices(
     keep_bins_in_bkg: bool = False,
     **kwargs,
 ):
+    import mplhep
+    import matplotlib.transforms as mtrans
+    import matplotlib.pyplot as plt
+
     plt.style.use(mplhep.style.CMS)
     fig, axes = plt.subplots(
         2, 3,
@@ -154,16 +156,44 @@ def plot_migration_matrices(
 
     style_config = law.util.merge_dicts(default_style_config, style_config, deep=True)
 
+    #
     # make main central migration plot
-    make_plot_2d(plot_config, style_config, figaxes=(fig, axes[0, 1]))
+    #
+
+    central_ax = axes[0, 1]
+
+    # apply style_config
+    if ax_cfg := style_config.get("ax_cfg", {}):
+        for tickname in ["xticks", "yticks"]:
+            ticks = ax_cfg.pop(tickname)
+            for ticksize in ["major", "minor"]:
+                if subticks := ticks.get(ticksize, {}):
+                    getattr(central_ax, "set_" + tickname)(**subticks, minor=ticksize == "minor")
+        central_ax.set(**ax_cfg)
+
+    if "legend_cfg" in style_config:
+        central_ax.legend(**style_config["legend_cfg"])
+
+    # annotation of category label
+    if annotate_kwargs := style_config.get("annotate_cfg", {}):
+        central_ax.annotate(**annotate_kwargs)
+
+    if cms_label_kwargs := style_config.get("cms_label_cfg", {}):
+        mplhep.cms.label(ax=central_ax, **cms_label_kwargs)
+
+    # call plot method, patching the colorbar function
+    # called internally by mplhep to draw the extension symbols
+    with patch.object(plt, "colorbar", partial(plt.colorbar, **plot_config.get("cbar_kwargs", {}))):
+        plot_config["hist"].plot2d(ax=central_ax, **plot_config.get("kwargs", {}))
+
     if label_numbers:
         for i, x in enumerate(migrations_eq_ax.axes[0].centers):
             for j, y in enumerate(migrations_eq_ax.axes[1].centers):
                 if abs(i - j) <= 1:
                     lbl = f"{migrations_eq_ax.values()[i, j] * 100:.0f}"
-                    axes[0, 1].text(x, y, lbl, ha="center", va="center", size="large")
+                    central_ax.text(x, y, lbl, ha="center", va="center", size="large")
 
-    cbar = plt.colorbar(axes[0, 1].collections[0], **plot_config["cbar_kwargs"])
+    cbar = plt.colorbar(central_ax.collections[0], **plot_config["cbar_kwargs"])
     fix_cbar_minor_ticks(cbar)
     # set cbar range
 

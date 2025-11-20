@@ -18,7 +18,6 @@ ak = maybe_import("awkward")
 
 
 class _CalibrateEvents(
-    # ParamsCacheMixin,
     CalibratorMixin,
     ChunkedIOMixin,
     law.LocalWorkflow,
@@ -27,8 +26,6 @@ class _CalibrateEvents(
     """
     Base classes for :py:class:`CalibrateEvents`.
     """
-
-    # cache_param_sep = ["calibrator"]
 
 
 class CalibrateEvents(_CalibrateEvents):
@@ -63,9 +60,7 @@ class CalibrateEvents(_CalibrateEvents):
         reqs["lfns"] = self.reqs.GetDatasetLFNs.req(self)
 
         # add calibrator dependent requirements
-        reqs["calibrator"] = law.util.make_unique(law.util.flatten(
-            self.calibrator_inst.run_requires(task=self),
-        ))
+        reqs["calibrator"] = law.util.make_unique(law.util.flatten(self.calibrator_inst.run_requires(task=self)))
 
         return reqs
 
@@ -177,7 +172,12 @@ class CalibrateEvents(_CalibrateEvents):
         # merge output files
         sorted_chunks = [output_chunks[key] for key in sorted(output_chunks)]
         law.pyarrow.merge_parquet_task(
-            self, sorted_chunks, output["columns"], local=True, writer_opts=self.get_parquet_writer_opts(),
+            task=self,
+            inputs=sorted_chunks,
+            output=output["columns"],
+            local=True,
+            writer_opts=self.get_parquet_writer_opts(),
+            target_row_group_size=self.merging_row_group_size,
         )
 
 
