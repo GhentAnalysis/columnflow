@@ -34,6 +34,8 @@ def draw_stat_error_bands(
     norm: float | Sequence | np.ndarray = 1.0,
     **kwargs,
 ) -> None:
+    import hist
+
     assert len(h.axes) == 1
 
     # compute relative statistical errors
