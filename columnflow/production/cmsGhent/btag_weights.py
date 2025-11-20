@@ -140,6 +140,9 @@ def fixed_wp_btag_weights(
     # get the total number of jets in the chunk
     jets = events.Jet[jet_mask] if jet_mask is not None else events.Jet
     jets = set_ak_column(jets, "abseta", abs(jets.eta))
+    # currently set hard max on pt for efficiency since overflow could not be changed in correctionlib
+    # (could also manually change the flow)
+    jets = set_ak_column(jets, "minpt", ak.where(jets.pt <= 999, jets.pt, 999))
 
     # helper to create and store the weight
     def add_weight(flavour_group, systematic, variation=None):
@@ -185,9 +188,7 @@ def fixed_wp_btag_weights(
                 )
                 eff = self.btag_eff_corrector(
                     flat_input.hadronFlavour,
-                    # currently set hard max on pt since overflow could not be changed in correctionlib
-                    # (could also manually change the flow)
-                    ak.min([flat_input.pt, 999 * ak.ones_like(flat_input.pt)], axis=0),
+                    flat_input.minpt,
                     flat_input.abseta,
                     working_point,
                 )
