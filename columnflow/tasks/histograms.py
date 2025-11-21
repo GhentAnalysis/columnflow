@@ -140,13 +140,13 @@ class CreateHistograms(_CreateHistograms):
         for k, producer_inst in enumerate(self.producer_insts or []):
             error = remove_corrupted_parquet(
                 "ProduceColumns --producer " + producer_inst.cls_name,
-                inputs["producers"][k]
+                inputs["producers"][k],
             ) or error
 
         for k, ml_model_inst in enumerate(self.ml_model_insts or []):
             error = remove_corrupted_parquet(
                 "MLEvaluation --ml_model " + ml_model_inst.cls_name,
-                inputs["ml"][k]
+                inputs["ml"][k],
             ) or error
 
         if error:

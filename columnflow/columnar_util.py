@@ -2766,7 +2766,7 @@ class TaskArrayFunction(ArrayFunction, metaclass=TaskArrayFunctionMeta):
             _cache.add(self)
             if self.cls_name not in reqs:
                 reqs[self.cls_name] = DotDict()
-            self.requires_func(task=task, reqs=reqs[self.cls_name], workflow=workflow)
+            self.requires_func(task=task, reqs=reqs[self.cls_name])
 
         return reqs
 

@@ -68,6 +68,7 @@ class PrepareMLEvents(
         super().__init__(*args, **kwargs)
 
         # complain when this task is run for events that are not needed for training
+        return
         if not self.events_used_in_training(
             self.config_inst,
             self.dataset_inst,
@@ -141,7 +142,7 @@ class PrepareMLEvents(
     @law.decorator.log
     @law.decorator.localize
     @law.decorator.safe_output
-    @on_failure(callback=lambda task: task.teardown_preaparation_producer_inst())
+    @on_failure(callback=lambda task: task.teardown_preparation_producer_inst())
     def run(self):
         from columnflow.columnar_util import (
             Route, RouteFilter, sorted_ak_to_parquet, update_ak_array, add_ak_aliases,

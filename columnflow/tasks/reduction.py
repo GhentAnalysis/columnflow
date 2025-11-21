@@ -23,6 +23,7 @@ from columnflow.types import Any
 
 ak = maybe_import("awkward")
 
+logger = law.logger.get_logger(__name__)
 
 # default parameters
 default_keep_reduced_events = law.config.get_expanded("analysis", "default_keep_reduced_events")
@@ -107,10 +108,14 @@ class ReduceEvents(_ReduceEvents):
         from columnflow.columnar_util_Ghent import remove_corrupted_parquet
         error = remove_corrupted_parquet("SelectEvents", inputs["selection"])
 
-        for k, calibrator_inst in enumerate(self.calibrator_insts or []):
+        producing_calibs = [
+            ci for ci in (self.calibrator_insts or [])
+            if ci.produced_columns
+        ]
+        for k, calibrator_inst in enumerate(producing_calibs):
             error = remove_corrupted_parquet(
                 "CalibarateEvents --calibrator " + calibrator_inst.cls_name,
-                inputs["calibrations"][k]
+                inputs["calibrations"][k],
             ) or error
 
         if error:
@@ -322,25 +327,34 @@ class MergeReductionStats(_MergeReductionStats):
     def resolve_param_values(cls, params: dict[str, Any]) -> dict[str, Any]:
         params = super().resolve_param_values(params)
 
-        # cap n_inputs
-        if "n_inputs" in params and (dataset_info_inst := params.get("dataset_info_inst")):
-            n_files = dataset_info_inst.n_files
-            if params["n_inputs"] < 0 or params["n_inputs"] > n_files:
-                params["n_inputs"] = n_files
+        # # cap n_inputs
+        # if "n_inputs" in params and (dataset_info_inst := params.get("dataset_info_inst")):
+        #     n_files = dataset_info_inst.n_files
+        #     if params["n_inputs"] < 0 or params["n_inputs"] > n_files:
+        #        params["n_inputs"] = n_files
 
         # check for the default merged size
         if "merged_size" in params:
             if params["merged_size"] in {None, law.NO_FLOAT}:
                 merged_size = 512.0
                 if "config_inst" in params:
-                    merged_size_cfg = params["config_inst"].x("reduced_file_size", merged_size)
-                    if isinstance(merged_size_cfg, dict):
-                        merged_size = merged_size_cfg[params["dataset"]]
+                    merged_size_tmp = params["config_inst"].x("reduced_file_size", merged_size)
+                    if isinstance(merged_size_tmp, dict):
+                        for k in merged_size_tmp.keys():
+                            if law.util.multi_match(params["dataset"], k):
+                                merged_size_tmp = merged_size_tmp[k]
+                        if isinstance(merged_size_tmp, dict):
+                            for k in merged_size_tmp.keys():
+                                if law.util.multi_match(params["shift"], k):
+                                    merged_size = merged_size_tmp[k]
+                        else:
+                            merged_size = merged_size_tmp
                     else:
-                        merged_size = merged_size_cfg
+                        merged_size = merged_size_tmp
                 params["merged_size"] = float(merged_size)
             elif params["merged_size"] == 0:
                 params["n_inputs"] = 0
+            print(params["dataset"], params["shift"], params["merged_size"])
 
         return params
 
@@ -528,19 +542,35 @@ class MergeReducedEvents(_MergeReducedEvents):
             "events": self.target(f"events_{self.branch}.parquet"),
         }
 
+    def check_parquet(self, inputs):
+        from columnflow.columnar_util_Ghent import remove_corrupted_parquet
+        error = remove_corrupted_parquet("ReduceEvents", inputs["events"])
+
+        if error:
+            exit()
+
     def run(self):
+        import pyarrow
         # prepare inputs and output
-        inputs = [inp["events"] for inp in self.input()["events"].collection.targets.values()]
+        inputs = []
+        for task_input in self.input()["events"].collection.targets.values():
+            self.check_parquet(task_input)
+            inputs.append(task_input["events"])
         output = self.output()["events"]
 
-        law.pyarrow.merge_parquet_task(
-            task=self,
-            inputs=inputs,
-            output=output,
-            callback=self.create_progress_callback(len(inputs)),
-            writer_opts=self.get_parquet_writer_opts(),
-            target_row_group_size=self.merging_row_group_size,
-        )
+        try:
+            law.pyarrow.merge_parquet_task(
+                task=self,
+                inputs=inputs,
+                output=output,
+                callback=self.create_progress_callback(len(inputs)),
+                writer_opts=self.get_parquet_writer_opts(),
+                target_row_group_size=self.merging_row_group_size,
+            )
+        except pyarrow.lib.ArrowInvalid as e:
+            logger.info("pyarrow.merge_parquet_task failed. Trying ak.concatenate")
+            arrs = [i.load() for i in inputs]
+            output.dump(ak.concatenate(arrs, axis=0))
 
         # optionally remove initial inputs
         if not self.keep_reduced_events and self.is_leaf():

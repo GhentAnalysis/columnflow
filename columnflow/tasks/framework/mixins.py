@@ -1470,6 +1470,8 @@ class MLModelTrainingMixin(
 
         if self.ml_model_inst:
             parts.insert_before("version", "ml_model", f"ml__{self.ml_model_repr}")
+            if hasattr(self.ml_model_inst, "store_parts"):
+                self.ml_model_inst.store_parts(parts)
 
         return parts
 

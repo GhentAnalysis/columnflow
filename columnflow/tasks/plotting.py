@@ -181,8 +181,8 @@ class PlotVariablesBase(_PlotVariablesBase):
         # histogram data per process copy
         hists: dict[od.Config, dict[od.Process, hist.Hist]] = {}
         with self.publish_step(
-            f"plotting {self.branch_data.variable} in {self.branch_data.category}"
-            + (f" (shift source: {ss})" if (ss := self.branch_data.get("shift_source", None)) else "")
+            f"plotting {self.branch_data.variable} in {self.branch_data.category}" +
+            (f" (shift source: {ss})" if (ss := self.branch_data.get("shift_source", None)) else "",  )
         ):
             inputs = self.input() or self.workflow_input().merged_hists
             for i, (config, dataset_dict) in enumerate(inputs.items()):

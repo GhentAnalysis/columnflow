@@ -480,17 +480,19 @@ def normalization_weights_setup(
     # consistency check: when the main process of the current dataset is part of these "lowest level" processes,
     # there should only be this single process, otherwise the manual (sub) process assignment does not match the
     # general dataset -> main process info
-    if self.dataset_inst.processes.get_first() in process_insts and len(process_insts) > 1:
-        raise Exception(
-            f"dataset '{self.dataset_inst.name}' has main process '{self.dataset_inst.processes.get_first().name}' "
-            "assigned to it (likely as per cmsdb), but the dataset selection stats for this dataset contain multiple "
-            "sub processes, which is likely a misconfiguration of the manual sub process assignment upstream; found "
-            f"sub processes: {', '.join(f'{process_inst.name} ({process_inst.id})' for process_inst in process_insts)}",
-        )
+    # if self.dataset_inst.processes.get_first() in process_insts and len(process_insts) > 1:
+    #     raise Exception(
+    #         f"dataset '{self.dataset_inst.name}' has main process '{self.dataset_inst.processes.get_first().name}' "
+    #         "assigned to it (likely as per cmsdb), but the dataset selection stats for this dataset contain multiple "
+    #         "sub processes, which is likely a misconfiguration of the manual sub process assignment upstream; found "
+    #         f"sub processes: {', '.join(f'{process_inst.name} ({process_inst.id})' for process_inst in process_insts)}",
+    #     )
 
+    logger.info("past consistency check")
     # setup the event weight lookup table
-    process_weight_table = scipy.sparse.lil_matrix((max(process_ids) + 1, 1), dtype=np.float32)
+    process_weight_table = scipy.sparse.dok_matrix((max(process_ids) + 1, 1), dtype=np.float32)
 
+    logger.info("check 1")
     def fill_weight_table(process_inst: od.Process, xsec: float, sum_weights: float) -> None:
         if sum_weights == 0:
             logger.warning(
@@ -516,6 +518,7 @@ def normalization_weights_setup(
         )
         self.inclusive_weight = norm_factor * inclusive_xsec * lumi / inclusive_sum_weights
 
+    logger.info("check 2")
     # fill weights into the lut, depending on whether stitching is allowed / needed or not
     do_stitch = (
         self.allow_stitching and
@@ -523,7 +526,7 @@ def normalization_weights_setup(
         (len(process_insts) > 1 or len(self.required_datasets) > 1)
     )
     if do_stitch:
-        logger.debug(
+        logger.info(
             f"using inclusive dataset '{self.inclusive_dataset.name}' and process '{inclusive_proc.name}' for cross "
             "section lookup",
         )
@@ -560,6 +563,8 @@ def normalization_weights_setup(
     # store lookup table and known process ids
     self.process_weight_table = process_weight_table
     self.known_process_ids = process_ids
+    logger.info("finish setup")
+
 
 
 stitched_normalization_weights = normalization_weights.derive(

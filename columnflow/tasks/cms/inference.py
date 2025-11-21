@@ -122,6 +122,7 @@ class CreateDatacards(SerializeInferenceModelBase):
                     if cat_obj.data_from_processes:
                         for process_inst in list(_input_hists[config_inst]):
                             if process_inst.is_data:
+                                logger.info(f"removing ['{config_inst.name}']['{process_inst.name}']")
                                 del _input_hists[config_inst][process_inst]
 
                     # start the transformation
@@ -130,9 +131,10 @@ class CreateDatacards(SerializeInferenceModelBase):
                         proc_objs.append(self.inference_model_inst.process_spec(name="data"))
                     for proc_obj in proc_objs:
                         # skip the process objects if it does not contribute to this config_inst
-                        if config_inst.name not in proc_obj.config_data:
+
+                        if proc_obj.name != "data" and config_inst.name not in proc_obj.config_data:
                             self.logger.warning(
-                                f"{proc_obj.name} has not config data and will always be skipped",
+                                f"{proc_obj.name} has no config data and will always be skipped",
                             )
                             continue
 

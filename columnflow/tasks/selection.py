@@ -126,7 +126,7 @@ class SelectEvents(_SelectEvents):
         for k, calibrator_inst in enumerate(self.calibrator_insts or []):
             error = remove_corrupted_parquet(
                 "CalibarateEvents --calibrator " + calibrator_inst.cls_name,
-                inputs["calibrations"][k]
+                inputs["calibrations"][k],
             ) or error
 
         if error:
@@ -405,12 +405,19 @@ class MergeSelectionStats(_MergeSelectionStats):
         # merge input stats
         merged_stats = defaultdict(float)
         merged_hists = {}
+        do_exit = False
         for inp in self.input().collection.targets.values():
             stats = inp["stats"].load(formatter="json", cache=False)
             self.merge_counts(merged_stats, stats)
             if self.create_selection_hists:
-                hists = inp["hists"].load(formatter="pickle", cache=False)
-                self.merge_counts(merged_hists, hists)
+                try:
+                    hists = inp["hists"].load(formatter="pickle", cache=False)
+                    self.merge_counts(merged_hists, hists)
+                except:
+                    do_exit = True
+                    print(inp["hists"])
+        if do_exit:
+            exit()
 
         # write outputs
         outputs = self.output()

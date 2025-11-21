@@ -62,20 +62,22 @@ def remove_obj_overlap(*arrays, objects=("Jet", "Electron", "Muon")):
                     arrays[i2] = c0 = remove_ak_column(c0, obj)
     return arrays
 
+
 def check_task_parquet_inputs(inputs, mode="check"):
     import pyarrow
 
     error = None
     if isinstance(inputs, (dict, tuple, list)):
-        inputs = list(inputs.values()) if isinstance(inputs, dict) else inputs
+        if isinstance(inputs, dict):
+            inputs = list(inputs.values())
         for k_inputs in inputs:
             error = check_task_parquet_inputs(k_inputs, mode=mode) or error
         return error
     elif (
-        mode == "check"
-        and isinstance(inputs, law.LocalFileTarget)
-        and inputs.abspath.endswith("parquet")
-        and inputs.exists()
+        mode == "check" and
+        isinstance(inputs, law.LocalFileTarget) and
+        inputs.abspath.endswith("parquet") and
+        inputs.exists()
     ):
         try:
             ak.metadata_from_parquet(inputs.abspath)
