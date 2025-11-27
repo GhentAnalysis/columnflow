@@ -7,6 +7,7 @@ Tasks related to the creation of datacards for inference purposes.
 from __future__ import annotations
 
 import collections
+import itertools
 
 import law
 import order as od
@@ -226,8 +227,36 @@ class CreateDatacards(SerializeInferenceModelBase):
             del input_hists
 
 
-CreateDatacardsWrapper = wrapper_factory(
+# CreateDatacardsWrapper = wrapper_factory(
+_CreateDatacardsWrapperBase = wrapper_factory(
     base_cls=AnalysisTask,
     require_cls=CreateDatacards,
-    enable=["configs", "skip_configs"],
+#    enable=["configs", "skip_configs"],
+    enable=[],
 )
+
+# CreateDatacardsWrapper.exclude_index = True
+_CreateDatacardsWrapperBase.exclude_index = True
+
+class CreateDatacardsWrapper(_CreateDatacardsWrapperBase):
+
+    inference_models = law.CSVParameter(
+        default=(),
+        description="names of inference models to use; if empty, the default inference model is used",
+        brace_expand=True,
+    )
+    exclude_index = False
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+
+        if self.inference_models:
+            # add the inference models parameter
+            self.wrapper_fields.append("inference_model")
+
+            # extend the parameter combinations with inference models
+            self.wrapper_parameters = [
+                params + (inference_model,) for params, inference_model
+                in itertools.product(self.wrapper_parameters or [()], self.inference_models)
+            ]
+

@@ -2501,7 +2501,7 @@ class TaskArrayFunction(ArrayFunction, metaclass=TaskArrayFunctionMeta):
         """
         cls.requires_func = func
 
-    def requires_func(self, task: law.Task, reqs: dict[str, DotDict[str, Any]]) -> None:
+    def requires_func(self, task: law.Task, reqs: dict[str, DotDict[str, Any]], **kwargs) -> None:
         """
         Default requires function.
         """
@@ -2766,7 +2766,13 @@ class TaskArrayFunction(ArrayFunction, metaclass=TaskArrayFunctionMeta):
             _cache.add(self)
             if self.cls_name not in reqs:
                 reqs[self.cls_name] = DotDict()
-            self.requires_func(task=task, reqs=reqs[self.cls_name])
+            try:
+                self.requires_func(task=task, reqs=reqs[self.cls_name], workflow=workflow)
+            except TypeError as e:
+                logger.error(f"{self} - {e}")
+                self.requires_func(task=task, reqs=reqs[self.cls_name])
+
+
 
         return reqs
 

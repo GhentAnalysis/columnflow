@@ -2200,7 +2200,9 @@ def wrapper_factory(
                         )
                 config_insts = list(map(self.analysis_inst.get_config, sorted(configs)))
             else:
-                config_insts = [self.config_inst]
+                config_insts = [
+                    # self.config_inst
+                ]
 
             # for the remaining fields, build the full combinatorics per config_inst
             for config_inst in config_insts:
@@ -2275,7 +2277,6 @@ def wrapper_factory(
                 params = self.update_wrapper_params(params)
                 if not params:
                     continue
-
                 # add the requirement if not present yet
                 req = self.wrapper_require_cls.req(self, **params)
                 if req not in reqs.values():

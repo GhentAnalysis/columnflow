@@ -354,7 +354,6 @@ class MergeReductionStats(_MergeReductionStats):
                 params["merged_size"] = float(merged_size)
             elif params["merged_size"] == 0:
                 params["n_inputs"] = 0
-            print(params["dataset"], params["shift"], params["merged_size"])
 
         return params
 
