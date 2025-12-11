@@ -34,6 +34,8 @@ def draw_stat_error_bands(
     norm: float | Sequence | np.ndarray = 1.0,
     **kwargs,
 ) -> None:
+    import hist
+
     assert len(h.axes) == 1
 
     # compute relative statistical errors
@@ -505,14 +507,16 @@ def plot_all(
         ax.legend(handles, labels, **legend_kwargs)
 
     # custom annotation
-    log_x = style_config.get("ax_cfg", {}).get("xscale", "linear") == "log"
+    # log_x = style_config.get("ax_cfg", {}).get("xscale", "linear") == "log"
     annotate_kwargs = {
         "text": "",
-        "xy": (
-            get_position(*ax.get_xlim(), factor=0.05, logscale=log_x),
-            get_position(*ax.get_ylim(), factor=0.95, logscale=log_y),
-        ),
-        "xycoords": "data",
+        # "xy": (
+        #     get_position(*ax.get_xlim(), factor=0.05, logscale=log_x),
+        #     get_position(*ax.get_ylim(), factor=0.95, logscale=log_y),
+        # ),
+        # "xycoords": "data"
+        "xy": (0.05, 0.95),
+        "xycoords": "axes fraction",
         "color": "black",
         "fontsize": 22,
         "horizontalalignment": "left",
