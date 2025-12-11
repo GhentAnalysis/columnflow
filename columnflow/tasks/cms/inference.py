@@ -231,12 +231,13 @@ class CreateDatacards(SerializeInferenceModelBase):
 _CreateDatacardsWrapperBase = wrapper_factory(
     base_cls=AnalysisTask,
     require_cls=CreateDatacards,
-#    enable=["configs", "skip_configs"],
+    #    enable=["configs", "skip_configs"],
     enable=[],
 )
 
 # CreateDatacardsWrapper.exclude_index = True
 _CreateDatacardsWrapperBase.exclude_index = True
+
 
 class CreateDatacardsWrapper(_CreateDatacardsWrapperBase):
 
@@ -259,5 +260,3 @@ class CreateDatacardsWrapper(_CreateDatacardsWrapperBase):
                 params + (inference_model,) for params, inference_model
                 in itertools.product(self.wrapper_parameters or [()], self.inference_models)
             ]
-
-

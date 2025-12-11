@@ -2771,9 +2771,6 @@ class TaskArrayFunction(ArrayFunction, metaclass=TaskArrayFunctionMeta):
             except TypeError as e:
                 logger.error(f"{self} - {e}")
                 self.requires_func(task=task, reqs=reqs[self.cls_name])
-
-
-
         return reqs
 
     def run_setup(

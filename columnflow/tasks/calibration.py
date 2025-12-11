@@ -153,7 +153,7 @@ class CalibrateEvents(_CalibrateEvents):
                 # insert additional columns
                 events = update_ak_array(events, *cols)
 
-                # test_file = f"/user/mdecoen/columnflow/singletop/data/singletop/tth_thomas/events_{self.config}_{self.dataset}_{self.shift}_{self.branch}_{pos.index}.parquet"
+                # test_file = f"/user/mdecoen/columnflow/singletop/data/singletop/tth_thomas/events_{self.config}_{self.dataset}_{self.shift}_{self.branch}_{pos.index}.parquet" # noqa
                 # ak.to_parquet(events, test_file)
 
                 # just invoke the calibration function

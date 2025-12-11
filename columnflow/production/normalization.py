@@ -485,7 +485,7 @@ def normalization_weights_setup(
     #         f"dataset '{self.dataset_inst.name}' has main process '{self.dataset_inst.processes.get_first().name}' "
     #         "assigned to it (likely as per cmsdb), but the dataset selection stats for this dataset contain multiple "
     #         "sub processes, which is likely a misconfiguration of the manual sub process assignment upstream; found "
-    #         f"sub processes: {', '.join(f'{process_inst.name} ({process_inst.id})' for process_inst in process_insts)}",
+    #         f"sub processes: {', '.join(f'{process_inst.name} ({process_inst.id})' for process_inst in process_insts)}", # noqa
     #     )
 
     logger.info("past consistency check")
@@ -493,6 +493,7 @@ def normalization_weights_setup(
     process_weight_table = scipy.sparse.dok_matrix((max(process_ids) + 1, 1), dtype=np.float32)
 
     logger.info("check 1")
+
     def fill_weight_table(process_inst: od.Process, xsec: float, sum_weights: float) -> None:
         if sum_weights == 0:
             logger.warning(
@@ -564,7 +565,6 @@ def normalization_weights_setup(
     self.process_weight_table = process_weight_table
     self.known_process_ids = process_ids
     logger.info("finish setup")
-
 
 
 stitched_normalization_weights = normalization_weights.derive(

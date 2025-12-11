@@ -566,7 +566,7 @@ class MergeReducedEvents(_MergeReducedEvents):
                 writer_opts=self.get_parquet_writer_opts(),
                 target_row_group_size=self.merging_row_group_size,
             )
-        except pyarrow.lib.ArrowInvalid as e:
+        except pyarrow.lib.ArrowInvalid:
             logger.info("pyarrow.merge_parquet_task failed. Trying ak.concatenate")
             arrs = [i.load() for i in inputs]
             output.dump(ak.concatenate(arrs, axis=0))
