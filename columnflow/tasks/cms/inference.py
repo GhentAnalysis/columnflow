@@ -120,11 +120,11 @@ class CreateDatacards(SerializeInferenceModelBase):
                     leaf_category_insts = category_inst.get_leaf_categories() or [category_inst]
 
                     # eagerly remove data histograms in case data is supposed to be faked from mc processes
-                    if cat_obj.data_from_processes:
-                        for process_inst in list(_input_hists[config_inst]):
-                            if process_inst.is_data:
-                                logger.info(f"removing ['{config_inst.name}']['{process_inst.name}']")
-                                del _input_hists[config_inst][process_inst]
+                    # if cat_obj.data_from_processes:
+                    #     for process_inst in list(_input_hists[config_inst]):
+                    #         if process_inst.is_data:
+                    #             self.logger.info(f"removing ['{config_inst.name}']['{process_inst.name}']")
+                    #             del _input_hists[config_inst][process_inst]
 
                     # start the transformation
                     proc_objs = list(cat_obj.processes)
@@ -259,4 +259,5 @@ class CreateDatacardsWrapper(_CreateDatacardsWrapperBase):
                 params + (inference_model,) for params, inference_model
                 in itertools.product(self.wrapper_parameters or [()], self.inference_models)
             ]
+
 
