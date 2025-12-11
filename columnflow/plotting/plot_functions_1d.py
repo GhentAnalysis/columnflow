@@ -283,10 +283,8 @@ def plot_shifted_variable(
         "up": "red",
         "down": "blue",
     }
-    for i, shift_name in enumerate(h_sum.axes["shift"]):
-        shift_inst = config_inst.get_shift(shift_name)
-
-        h = h_sum[{"shift": hist.loc(shift_name)}]
+    for i, shift_inst in enumerate(shift_insts):
+        h = h_sum[{"shift": hist.loc(shift_inst.name)}]
         # assuming `nominal` always has shift id 0
         ratio_norm = h_sum[{"shift": hist.loc("nominal")}].values()
 
