@@ -263,18 +263,21 @@ class InferenceModel(Derivable, metaclass=InferenceModelMeta):
                     type: rate_gauss
                     effect: 1.02
                     effect_precision: 4
+                    is_dynamic: False
                     config_data: {}
                     transformations: []
                   - name: pu
                     type: rate_gauss
                     effect: [0.97, 1.02]
                     effect_precision: 4
+                    is_dynamic: False
                     config_data: {}
                     transformations: []
                   - name: pileup
                     type: shape
                     effect: 1.0
                     effect_precision: 4
+                    is_dynamic: False
                     config_data:
                       22pre_v14:
                         shift_source: minbias_xs
@@ -292,6 +295,7 @@ class InferenceModel(Derivable, metaclass=InferenceModelMeta):
                     type: rate_gauss
                     effect: 1.02
                     effect_precision: 4
+                    is_dynamic: False
                     config_data: {}
                     transformations: []
 
@@ -501,6 +505,7 @@ class InferenceModel(Derivable, metaclass=InferenceModelMeta):
         config_data: dict[str, DotDict] | None = None,
         effect: Any | None = 1.0,
         effect_precision: int = 4,
+        is_dynamic: bool = False,
     ) -> DotDict:
         """
         Returns a dictionary representing a (nuisance) parameter, forwarding all arguments.
@@ -527,6 +532,7 @@ class InferenceModel(Derivable, metaclass=InferenceModelMeta):
             )),
             ("effect", effect),
             ("effect_precision", effect_precision),
+            ("is_dynamic", bool(is_dynamic)),
         ])
 
     @classmethod
