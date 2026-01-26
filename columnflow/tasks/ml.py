@@ -784,6 +784,9 @@ class MLEvaluation(
                         ml_model_inst=self.ml_model_inst,
                     )
 
+                # test_file = f"/user/mdecoen/columnflow/singletop/data/singletop/test_mleval/events_{self.config}_{self.dataset}_{self.shift}_{self.branch}_{pos.index}.parquet" # noqa
+                # ak.to_parquet(events, test_file)
+
                 # evaluate the model
                 events = self.ml_model_inst.evaluate(
                     self,
