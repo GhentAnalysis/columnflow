@@ -72,7 +72,8 @@ def cf_default_post_process_hist(self: HistProducer, h: hist.Hist, task: law.Tas
     Post-process the histogram, converting integer to string axis for consistent lookup across configs where ids might
     be different.
     """
-    axis_names = {ax.name for ax in h.axes}
+    import hist
+    axis_names = {ax.name for ax in h.axes if isinstance(ax, hist.axis.IntCategory)}
 
     # translate axes
     if "category" in axis_names:
