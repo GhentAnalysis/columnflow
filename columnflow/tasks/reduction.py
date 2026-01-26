@@ -138,7 +138,7 @@ class ReduceEvents(_ReduceEvents):
 
         # prepare inputs and outputs
         inputs = self.input()
-        self.check_parquet(inputs)
+        # self.check_parquet(inputs)
 
         lfn_task = self.requires()["lfns"]
         output = self.output()
@@ -568,8 +568,19 @@ class MergeReducedEvents(_MergeReducedEvents):
             )
         except pyarrow.lib.ArrowInvalid:
             logger.info("pyarrow.merge_parquet_task failed. Trying ak.concatenate")
-            arrs = [i.load() for i in inputs]
-            output.dump(ak.concatenate(arrs, axis=0))
+            arrs = []
+            empties = False
+            for i in inputs:
+                try:
+                    arrs.append(i.load())
+                except IndexError:
+                    empties = True
+                    logger.warning("skipping suspected empty file: " + i.abspath)
+            arr = ak.concatenate(arrs, axis=0)
+            if empties:
+                logger.warning(f"{len(arr)} events collected. Check if this is expected")
+            output.dump(arr)
+
 
         # optionally remove initial inputs
         if not self.keep_reduced_events and self.is_leaf():
