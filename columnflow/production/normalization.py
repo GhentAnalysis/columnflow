@@ -475,6 +475,7 @@ def normalization_weights_setup(
     # get all process ids and instances seen and assigned during selection of this dataset
     # (i.e., all possible processes that might be encountered during event processing)
     process_ids = set(map(int, dataset_selection_stats_br[self.dataset_inst.name]["sum_mc_weight_per_process"]))
+    process_ids = set(filter(self.config_inst.has_process, process_ids))
     process_insts = set(map(self.config_inst.get_process, process_ids))
 
     # consistency check: when the main process of the current dataset is part of these "lowest level" processes,
@@ -488,11 +489,8 @@ def normalization_weights_setup(
     #         f"sub processes: {', '.join(f'{process_inst.name} ({process_inst.id})' for process_inst in process_insts)}", # noqa
     #     )
 
-    logger.info("past consistency check")
     # setup the event weight lookup table
     process_weight_table = scipy.sparse.dok_matrix((max(process_ids) + 1, 1), dtype=np.float32)
-
-    logger.info("check 1")
 
     def fill_weight_table(process_inst: od.Process, xsec: float, sum_weights: float) -> None:
         if sum_weights == 0:
@@ -519,7 +517,6 @@ def normalization_weights_setup(
         )
         self.inclusive_weight = norm_factor * inclusive_xsec * lumi / inclusive_sum_weights
 
-    logger.info("check 2")
     # fill weights into the lut, depending on whether stitching is allowed / needed or not
     do_stitch = (
         self.allow_stitching and
@@ -564,7 +561,6 @@ def normalization_weights_setup(
     # store lookup table and known process ids
     self.process_weight_table = process_weight_table
     self.known_process_ids = process_ids
-    logger.info("finish setup")
 
 
 stitched_normalization_weights = normalization_weights.derive(
