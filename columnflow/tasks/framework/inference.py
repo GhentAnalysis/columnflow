@@ -171,7 +171,7 @@ class SerializeInferenceModelBase(
                                     continue
 
                                 # only add if a shift is required for this parameter
-                                if not param_obj.is_dynamic and (
+                                if (
                                     (param_obj.type.is_shape and not param_obj.transformations.any_from_rate) or
                                     (param_obj.type.is_rate and param_obj.transformations.any_from_shape)
                                 ):
@@ -199,8 +199,9 @@ class SerializeInferenceModelBase(
                     for param_obj in proc_obj.parameters:
                         if config_inst.name not in param_obj.config_data:
                             continue
+
                         # only add if a shift is required for this parameter
-                        if (
+                        if not param_obj.is_dynamic & (
                             (param_obj.type.is_shape and not param_obj.transformations.any_from_rate) or
                             (param_obj.type.is_rate and param_obj.transformations.any_from_shape)
                         ):
@@ -303,7 +304,7 @@ class SerializeInferenceModelBase(
                     if not any(p.name in h.axes["process"] for p in sub_process_insts):
                         logger.warning(
                             f"no '{variable}' histograms found for process '{process_inst.name}'"
-                            f" in dataset {dataset_name} (config {config_inst.name})",
+                            f" in dataset {dataset_name} (config {config_inst.name})"
                         )
                         continue
 
