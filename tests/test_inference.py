@@ -125,7 +125,7 @@ class TestInferenceModel(unittest.TestCase):
             },
             effect=effect,
             effect_precision=effect_precision,
-            is_dynamic=False,
+            is_dynamic=is_dynamic,
         )
 
         # Call the method
