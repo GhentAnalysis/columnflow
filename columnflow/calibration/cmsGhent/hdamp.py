@@ -18,7 +18,7 @@ maybe_import("coffea.nanoevents.methods.nanoaod")
 
 @calibrator(
     uses=four_vec("GenPart", "pdgId"),
-    produces={"hdamp_{up,down}"},
+    produces={"hdamp_weight_{up,down}"},
     sandbox="bash::$CF_BASE/sandboxes/venv_onnxruntime.sh",
     maxM=243.9517,
     default_hdamp=1.379,
@@ -85,7 +85,7 @@ def hdamp_reweighting_producer(self: Calibrator, events: ak.Array, **kwargs) -> 
         pred = model.run([label_name], {input_name: input.astype(np.float32)})[0]
         out = np.ones(len(events))
         out[mask] = pred[:, 0] / pred[:, 1]
-        events = set_ak_column(events, f"hdamp_{variation}", out)
+        events = set_ak_column(events, f"hdamp_weight_{variation}", out)
 
     return events
 
