@@ -110,17 +110,21 @@ def all_weights(self: HistProducer, events: ak.Array, **kwargs) -> ak.Array:
                 dataset_inst.x.event_weights["pdf_weight"] = get_shifts_from_sources(config, "pdf")
     """
     weight = ak.Array(np.ones(len(events)))
-
+    _weight_debug = False
     # build the full event weight
     if self.dataset_inst.is_mc and len(events):
         # multiply weights from global config `event_weights` aux entry
         for column in self.config_inst.x.event_weights:
+            if _weight_debug: print(column)
             weight = weight * Route(column).apply(events)
+            if _weight_debug: print(weight)
 
         # multiply weights from dataset-specific `event_weights` aux entry
         for column in self.dataset_inst.x("event_weights", []):
             if has_ak_column(events, column):
+                if _weight_debug: print(column)
                 weight = weight * Route(column).apply(events)
+                if _weight_debug: print(weight)
             else:
                 self.logger.warning_once(
                     f"missing_dataset_weight_{column}",
