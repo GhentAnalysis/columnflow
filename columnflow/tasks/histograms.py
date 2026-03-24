@@ -24,6 +24,9 @@ from columnflow.tasks.ml import MLEvaluation
 from columnflow.util import dev_sandbox
 
 
+logger = law.logger.get_logger(__name__)
+
+
 class _CreateHistograms(
     ReducedEventsUser,
     ProducersMixin,
@@ -251,7 +254,7 @@ class CreateHistograms(_CreateHistograms):
                 events = add_ak_aliases(
                     events,
                     aliases,
-                    remove_src=True,
+                    remove_src=False,
                     missing_strategy=self.missing_column_alias_strategy,
                 )
 
@@ -318,7 +321,7 @@ class CreateHistograms(_CreateHistograms):
 
                     # let the hist producer fill it
                     self.hist_producer_inst.run_fill_hist(histograms[var_key], fill_data, task=self)
-
+                    logger.info("histogrammed " + var_key)
         # post-process the histograms
         for var_key in self.variable_tuples.keys():
             histograms[var_key] = self.hist_producer_inst.run_post_process_hist(histograms[var_key], task=self)
@@ -448,27 +451,47 @@ class MergeHistograms(_MergeHistograms):
     @law.decorator.notify
     @law.decorator.log
     def run(self):
+        import gc
+
         # preare inputs and outputs
         inputs = self.input()["collection"]
         outputs = self.output()
 
         # load input histograms
-        hists = [
-            inp["hists"].load(formatter="pickle")
-            for inp in self.iter_progress(inputs.targets.values(), len(inputs), reach=(0, 50))
-        ]
+        hist_files = [inp["hists"] for inp in inputs.targets.values()]
+
+        merged_hists = {}
+        self.publish_message(f"merging {len(hist_files)} histograms")
+        for k, hist_file in enumerate(self.iter_progress(hist_files, len(inputs), reach=(0, 50))):
+            self.publish_message(f"load branch {k}")
+            part_hists = hist_file.load()
+            for var in part_hists:
+                if var not in merged_hists:
+                    merged_hists[var] = part_hists[var]
+                else:
+                    variables = var.split("-")
+                    for variable in variables:
+                        label1 = merged_hists[var].axes[variable].label
+                        label2 = part_hists[var].axes[variable].label
+                        if label1 != label2:
+                            label = self.config_inst.get_variable(variable).x_title
+                            logger.warning(f"correcting conflicting label: {label1} >< {label2} to {label}")
+                            merged_hists[var].axes[variable].label = label
+                            part_hists[var].axes[variable].label = label
+                    merged_hists[var] = merged_hists[var] + part_hists[var]
+
+            # free up memory
+            self.publish_message(f"close branch {k}")
+            del part_hists
+            gc.collect()
 
         # create a separate file per output variable
-        variable_names = list(hists[0].keys())
+        variable_names = list(merged_hists.keys())
         for variable_name in self.iter_progress(variable_names, len(variable_names), reach=(50, 100)):
-            self.publish_message(f"merging histograms for '{variable_name}'")
-
-            # merge them
-            variable_hists = [h[variable_name] for h in hists]
-            merged = sum(variable_hists[1:], variable_hists[0].copy())
+            self.publish_message(f"store histogram for {variable_name}")
 
             # post-process the merged histogram
-            merged = self.hist_producer_inst.run_post_process_merged_hist(merged, task=self)
+            merged = self.hist_producer_inst.run_post_process_merged_hist(merged_hists[variable_name], task=self)
 
             # ensure the format is compatible
             if not self.hist_producer_inst.skip_compatibility_check:
@@ -476,7 +499,6 @@ class MergeHistograms(_MergeHistograms):
 
             # write the output
             outputs["hists"][variable_name].dump(merged, formatter="pickle")
-
         # optionally remove inputs
         if self.remove_previous:
             inputs.remove()
@@ -559,6 +581,10 @@ class MergeShiftedHistograms(_MergeShiftedHistograms):
         outputs = self.output()["hists"].targets
 
         for variable_name, outp in self.iter_progress(outputs.items(), len(outputs)):
+
+            variables = variable_name.split("-")
+            variable_labels = {v: self.config_inst.get_variable(v).get_full_x_title() for v in variables}
+
             with self.publish_step(f"merging histograms for '{variable_name}' ..."):
                 # load hists
                 variable_hists = [
@@ -566,6 +592,13 @@ class MergeShiftedHistograms(_MergeShiftedHistograms):
                     for coll in inputs.values()
                 ]
 
+                # correct for changes labels
+                for variable_hist in variable_hists:
+                    for variable, label in variable_labels.items():
+                        h_label = variable_hist.axes[variable].label
+                        if h_label != label:
+                            logger.warning(f"correcting conflicting label: {h_label} > {label}")
+                            variable_hist.axes[variable].label = label
                 # merge and write the output
                 merged = sum(variable_hists[1:], variable_hists[0].copy())
                 outp.dump(merged, formatter="pickle")
