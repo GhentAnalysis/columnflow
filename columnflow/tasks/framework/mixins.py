@@ -1981,6 +1981,13 @@ class InferenceModelMixin(InferenceModelClassMixin):
     exclude_params_sandbox = {"inference_model_inst"}
     exclude_params_remote_workflow = {"inference_model_inst"}
 
+    def __init__(self, *args, **kwargs) -> None:
+        super().__init__(*args, **kwargs)
+
+        # overwrite the sandbox when set
+        if (sandbox := getattr(self.inference_model_inst, "sandbox", None)):
+            self.reset_sandbox(sandbox)
+
     @classmethod
     def build_inference_model_inst(
         cls,
