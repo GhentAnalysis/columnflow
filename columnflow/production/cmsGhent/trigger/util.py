@@ -30,7 +30,7 @@ def reduce_hist(
 
     exclude = law.util.make_list(exclude)
     if reduce is Ellipsis:
-        return histogram.project(*exclude)
+        reduce = histogram.axes.name
     elif reduce is None:
         return histogram
 
@@ -86,7 +86,7 @@ def syst_hist(
     else:
         variations = [f"{syst_name}_{dr}" if syst_name else dr for dr in [od.Shift.DOWN, od.Shift.UP]]
 
-    h = Hist(
+    h = hist.Hist(
         hist.axis.StrCategory(variations, name="systematic", growth=True),
         *[ax for ax in axes if ax.name != "systematic"],
         storage=hist.storage.Weight,
