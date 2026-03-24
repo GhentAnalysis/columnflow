@@ -594,8 +594,12 @@ class PlotVariablesBaseMultiShifts(
         sources = self.shift_sources if self.combine_shifts else [self.branch_data.shift_source]
         shifts = []
         for source in sources:
-            shifts.append(get_shift_from_configs(self.config_insts, f"{source}_{od.Shift.UP}"))
-            shifts.append(get_shift_from_configs(self.config_insts, f"{source}_{od.Shift.DOWN}"))
+            for direction in (od.Shift.UP, od.Shift.DOWN):
+                shift = get_shift_from_configs(self.config_insts, f"{source}_{direction}")
+                if (subshifts := getattr(shift.x, "subshifts", [])):
+                    shifts.extend([get_shift_from_configs(self.config_insts, s) for s in subshifts])
+                else:
+                    shifts.append(get_shift_from_configs(self.config_insts, f"{source}_{direction}"))
 
         # add nominal
         return [self.config_inst.get_shift("nominal"), *shifts]
