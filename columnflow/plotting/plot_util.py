@@ -466,17 +466,18 @@ def prepare_style_config(
     if not yscale:
         yscale = "log" if variable_inst.log_y else "linear"
 
-    discrete_shift = (variable_inst.x_min if variable_inst.x_discrete else 0)
-
     xlim = (
-        variable_inst.x("x_min", variable_inst.x_min - discrete_shift),
-        variable_inst.x("x_max", variable_inst.x_max - discrete_shift),
+        variable_inst.x("x_min", variable_inst.x_min),
+        variable_inst.x("x_max", variable_inst.x_max),
     )
 
     if (sl := getattr(variable_inst, "slice", variable_inst.aux.get("slice", None))):
         bins = np.linspace(*xlim, variable_inst.n_bins + 1)
-        bins = bins[slice(sl[0], sl[1] + 1)]
+        bins = bins[slice(int(sl[0]), int(sl[1]) + 1)]
         xlim = bins[[0, -1]]
+
+    discrete_shift = xlim[0] if variable_inst.x_discrete else 0
+    xlim = tuple(xl - discrete_shift for xl in xlim)
 
     # build the label from category and optional variable selection labels
     cat_label = join_labels(category_inst.label, variable_inst.x("selection_label", None))
@@ -508,7 +509,7 @@ def prepare_style_config(
 
     if variable_inst.discrete_x:
         # TODO: options for very large ranges, or non-uniform discrete x
-        tx = np.array(variable_inst.bin_edges)
+        tx = np.array(variable_inst.bin_edges) - discrete_shift
         tx = (tx[1:] + tx[:-1]) / 2
         slices = getattr(variable_inst, "slice", None) or variable_inst.x("slice", None)
         step_size = len(tx) // 10 + 1
@@ -516,7 +517,7 @@ def prepare_style_config(
             slices and isinstance(slices, Iterable) and len(slices) >= 2 and
             try_complex(slices[0]) and try_complex(slices[1])
         ):
-            sl = slice(*slices[:2], step_size)
+            sl = slice(*map(int, slices[:2]), step_size)
         else:
             sl = slice(None, None, step_size)
         style_config["ax_cfg"]["xticks"] = tx[sl]
