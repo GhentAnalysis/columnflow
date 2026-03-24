@@ -12,11 +12,14 @@ import itertools
 import law
 import order as od
 
+from columnflow.util import maybe_import
 from columnflow.tasks.framework.base import AnalysisTask, wrapper_factory
 from columnflow.tasks.framework.inference import SerializeInferenceModelBase
 from columnflow.tasks.histograms import MergeHistograms
 from columnflow.inference.cms.datacard import DatacardWriter
 from columnflow.types import TYPE_CHECKING
+
+np = maybe_import("numpy")
 
 if TYPE_CHECKING:
     from columnflow.inference.cms.datacard import DatacardHists, ShiftHists
@@ -181,6 +184,12 @@ class CreateDatacards(SerializeInferenceModelBase):
                             "shift": hist.loc(config_inst.get_shift("nominal").name),
                         }]
 
+                        if np.any(np.isnan(shift_hists["nominal"].values(flow=True))):
+                            raise ValueError(
+                                "Nan values found in nominal histogram for"
+                                f"{proc_obj.name} in {cat_obj.name} (cfg {config_inst.name})",
+                            )
+
                         # no additional shifts need to be created for data
                         if proc_obj.name == "data":
                             continue
@@ -194,6 +203,7 @@ class CreateDatacards(SerializeInferenceModelBase):
                             )
                             if not need_shapes:
                                 continue
+
                             # store the varied hists
                             if config_inst.name not in param_obj.config_data:
                                 continue
@@ -214,9 +224,20 @@ class CreateDatacards(SerializeInferenceModelBase):
                                         f"'{param_obj.name}' in datacard category '{cat_obj.name}', available shifts "
                                         f"are: {list(h_proc.axes['shift'])}",
                                     )
-                                shift_hists[(param_obj.name, d)] = h_proc[{
+                                shift_hists[(param_obj.name, d)] = _h = h_proc[{
                                     "shift": hist.loc(f"{shift_source}_{d}" if shift_source else "nominal"),
                                 }]
+
+                                nans = np.isnan(_h.values(flow=True))
+                                if np.any(nans):
+                                    self.logger.warning(
+                                        f"Nan values found in {param_obj.name} ({d}) histogram for"
+                                        f"{proc_obj.name} in {cat_obj.name} (cfg {config_inst.name}). "
+                                        "Set to nominal.",
+                                    )
+                                    _h.values(flow=True)[nans] = shift_hists["nominal"].values(flow=True)[nans]
+
+                                shift_hists[(param_obj.name, d)] = _h
 
                 # forward objects to the datacard writer
                 outp = outputs[cat_obj.name]
