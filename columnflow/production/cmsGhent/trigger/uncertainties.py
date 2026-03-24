@@ -135,6 +135,7 @@ def calc_corr(
           scale factor (SF) calculations.
         - The output is constructed using `util.syst_hist` and matches the axes of the original histogram.
         """
+    import hist
 
     # Get the MC histogram from input (we only use MC for correlation bias estimation)
     mc_hist = histograms["mc"]
@@ -209,6 +210,7 @@ def calc_auxiliary_unc(
     store_hists: dict,
     auxiliaries: list[str],
     apply_aux_to: Literal["data", "mc", "both"] = "both",
+    bin_variables: Sequence[str] = tuple(),
     dev_func: str | Callable[
         [np.ndarray, tuple[int]],  # an array, indices of auxilaray indices
         np.ndarray | tuple[np.ndarray, np.ndarray],  # symmetric or down, up
@@ -235,6 +237,9 @@ def calc_auxiliary_unc(
             List of auxiliary axis names along which systematic variations are defined.
         apply_aux_to : {"data", "mc", "both"}, optional
             Specifies whether to apply auxiliary variations to data, MC, or both. Default is "both".
+        bin_variables : Sequence[str], optional
+            Names of the axes (variables) to preserve when reducing the histogram. The auxiliary
+            uncertainty will be binned in these variables. Defaults to an empty tuple (i.e., fully inclusive).
         dev_func : str or Callable, optional
             Function (or name of a registered function) to calculate deviations from the nominal SF.
             It takes the SF difference array and the indices of auxiliary axes and returns either a
@@ -256,23 +261,41 @@ def calc_auxiliary_unc(
     if isinstance(dev_func, str):
         dev_func = dev_funcs[dev_func]
 
-    nom_hist = {dt: util.reduce_hist(histograms[dt], reduce=auxiliaries, keepdims=True) for dt in histograms}
+    # fully binned nominal
+    nom_hist = {
+        dt: util.reduce_hist(histograms[dt], reduce=auxiliaries, keepdims=False)
+        for dt in histograms
+    }
     eff = {dt: util.calculate_efficiency(nom_hist[dt], *triggers) for dt in nom_hist}
     sf = eff["data"] / eff["mc"].values()
 
+    # partially binned nominal
+    keep_vars = [*bin_variables, trigger, ref_trigger]
+    nom_red_hist = {
+        dt: util.reduce_hist(histograms[dt], exclude=keep_vars, keepdims=True)
+        for dt in histograms
+    }
+    eff_red = {dt: util.calculate_efficiency(nom_red_hist[dt], *triggers) for dt in nom_red_hist}
+    sf_red = eff_red["data"] / eff_red["mc"].values()
+
     # overwrite nominal with auxiliary
+    aux_hist = {
+        dt: util.reduce_hist(histograms[dt], exclude=[*keep_vars, *auxiliaries], keepdims=True)
+        for dt in histograms
+    }
     apply_aux_to = ["data", "mc"] if apply_aux_to == "both" else [apply_aux_to]
-    eff_aux = eff | {dt: util.calculate_efficiency(histograms[dt], *triggers) for dt in apply_aux_to}
+    eff_aux = eff_red | {dt: util.calculate_efficiency(aux_hist[dt], *triggers) for dt in apply_aux_to}
     sf_aux = eff_aux["data"] / eff_aux["mc"].values()
 
     aux_idx = tuple([sf_aux.axes.name.index(vr) for vr in auxiliaries])
-    dev = dev_func(sf_aux.values() - sf.values(), aux_idx)
+    dev = dev_func(sf_aux.values() - sf_red.values(), aux_idx)
     if not isinstance(dev, tuple):
         dev = (dev, dev)
 
-    sf = sf[{aux: 0 for aux in auxiliaries}]
+    sf_red = sf_red[{aux: 0 for aux in auxiliaries}]
+    syst_ratio = np.array([1 - dev[0] / sf_red.values(), 1 + dev[1] / sf_red.values()])
     return util.syst_hist(
         sf.axes,
         syst_name="aux" + "_".join(auxiliaries),
-        arrays=[sf.values() - dev[0], sf.values() + dev[1]],
+        arrays=syst_ratio * sf.values()[None],
     )
