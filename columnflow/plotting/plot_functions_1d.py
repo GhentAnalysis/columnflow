@@ -251,6 +251,7 @@ def plot_shifted_variable(
     legend_title: str | None = None,
     process_settings: dict | None = None,
     variable_settings: dict | None = None,
+    plot_config: dict | None = None,
     **kwargs,
 ) -> plt.Figure:
     """
@@ -277,7 +278,7 @@ def plot_shifted_variable(
     h_sum = sum(list(hists.values())[1:], list(hists.values())[0].copy())
 
     # setup plotting configs
-    plot_config = {}
+    default_plot_config = {}
     colors = {
         "nominal": "black",
         "up": "red",
@@ -293,7 +294,7 @@ def plot_shifted_variable(
         if not shift_inst.is_nominal:
             label += " ({0:+.2f}%)".format(diff * 100)
 
-        plot_config[shift_inst.name] = plot_cfg = {
+        default_plot_config[shift_inst.name] = plot_cfg = {
             "method": "draw_hist",
             "hist": h,
             "kwargs": {
@@ -310,6 +311,8 @@ def plot_shifted_variable(
             for key in ("kwargs", "ratio_kwargs"):
                 if key in plot_cfg:
                     plot_cfg[key]["yerr"] = None
+
+    plot_config = law.util.merge_dicts(default_plot_config, plot_config, deep=True)
 
     # legend title setting
     if not legend_title and len(hists) == 1:
