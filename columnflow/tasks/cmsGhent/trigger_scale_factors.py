@@ -163,7 +163,10 @@ class TriggerScaleFactors(
             key = "_".join(vrs)
 
             # calculate efficiency binned in given variables
-            red_hist = {dt: util.reduce_hist(h, exclude=vrs + triggers) for dt, h in collect_hists.items()}
+            red_hist = {
+                dt: util.reduce_hist(h, exclude=vrs + triggers, keepdims=False)
+                for dt, h in collect_hists.items()
+            }
             efficiencies[key] = eff = {dt: calc_eff(h) for dt, h in red_hist.items()}
 
             # calculate sf from efficiencies
