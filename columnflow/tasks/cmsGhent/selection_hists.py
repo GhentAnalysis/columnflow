@@ -131,6 +131,7 @@ class SelectionEfficiencyHistMixin(
         read the histograms calculated in MergeSelectionStats task, properly normalize,
         and apply flow and merged bin settings from the given variables.
         """
+        import hist
         from columnflow.plotting.plot_util import use_flow_bins
 
         if name is None:
