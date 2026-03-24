@@ -8,6 +8,8 @@ from columnflow.tasks.framework.mixins import DatasetsProcessesMixin
 
 class ReadDataSets(DatasetsProcessesMixin, ConfigTask):
 
+    resolution_task_cls = ConfigTask
+    single_config = True
     shifts = luigi.BoolParameter(
         default=False,
         significant=False,
