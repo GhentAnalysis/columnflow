@@ -299,3 +299,50 @@ def calc_auxiliary_unc(
         syst_name="aux" + "_".join(auxiliaries),
         arrays=syst_ratio * sf.values()[None],
     )
+
+
+def calc_flat_unc(
+    histograms: dict[str, Hist],
+    trigger: str,
+    ref_trigger: str,
+    store_hists: dict,
+    unc_value: float | complex,
+    name: str,
+):
+    """
+        Apply a flat relative or absolute uncertainty on the scale factors (SFs).
+        Imaginary numbers are interpreted as relative.
+
+        Parameters
+        ----------
+        histograms : dict[str, Hist]
+            Dictionary mapping dataset types ("data", "mc") to their corresponding histograms.
+        trigger : str
+            The trigger of interest used for efficiency calculation.
+        ref_trigger : str
+            The reference trigger used as the denominator in efficiency calculation.
+        store_hists : dict
+            Dictionary for optionally storing intermediate histograms (not used internally here).
+        unc_value: float | complex
+            Real for absolute uncertainty, imaginary for flat. If both are present, they are added in quadrature.
+        name: str
+            Name of the uncertainy
+
+        Returns
+        -------
+        Hist
+            A histogram containing the systematic variation band (down and up) around the nominal SF,
+            with the same axes as the nominal SF histogram.
+    """
+
+    triggers = (trigger, ref_trigger)
+    eff = {dt: util.calculate_efficiency(histograms[dt], *triggers) for dt in histograms}
+    sf = eff["data"] / eff["mc"].values()
+
+    unc_value += 0j
+    abs_var = np.full(sf.shape, fill_value=unc_value.real)
+    err = (abs_var ** 2 + (unc_value.imag * sf.values()) ** 2) ** 0.5
+    up = sf.values() + err
+    down = sf.values() - err
+
+    return util.syst_hist(sf.axes, syst_name=name, arrays=[down, up])
