@@ -27,7 +27,7 @@ class LeptonWeightConfig:
         @param get_sf_file: function mapping external files to the scale factor json
         @param input_pars: dictionary passed to the corrector inputs
         @syst_key: systematic variable key of the correction set
-        @param systematics: tuple of tuples (or dict) of systematic variable input of the correction set and the postfix linked to the systematic 
+        @param systematics: tuple of tuples (or dict) of systematic variable input of the correction set and the postfix linked to the systematic
         @param aux: dictionary with other useful information
         @param uses: columns used for the weight calculation
         @param input_func: function that calculates a dictionary with input arrays for the weight calculation
@@ -66,13 +66,13 @@ class LeptonWeightConfig:
                 else:
                     AssertionError(f"provided illegal systematics for {self}")
             self.systematics = systs
-        else:
-            self.systematics = {
-                s: ("_" if ss else "") + ss.lstrip("_")
-                for s, ss in self.systematics.items()
-            }
 
-        self.produced_weights = {f"{self.weight_name}{postfix}" for postfix in self.systematics.values()}
+        self.produced_weights = set()
+        for postfix in self.systematics.values():
+            if isinstance(postfix, tuple):
+                self.produced_weights |= {f"{self.weight_name}{_postfix}" for _postfix in postfix}
+            else:
+                self.produced_weights |= {f"{self.weight_name}{postfix}"}
 
     def copy(self, /, **changes):
         return dataclasses.replace(self, **changes)
@@ -161,11 +161,8 @@ def lepton_weights(
     variable_map |= self.input_pars
 
     # loop over systematics
+    nominal_sf = None
     for syst, postfix in self.systematics.items():
-        # initialize weights (take the weights if already applied once)
-        # but is needed to apply multiple corrections from different correctionlib files
-        weight = ak.ones_like(events.event)
-
         # add year, WorkingPoint, and ValType to inputs
         inputs = variable_map | {self.syst_key: syst}
 
@@ -173,16 +170,31 @@ def lepton_weights(
             inputs[inp.name]
             for inp in self.corrector.inputs
         ]
-        sf = ak_evaluate(self.corrector, *inputs)
+        sf_unc = ak_evaluate(self.corrector, *inputs)
+        if nominal_sf is None:
+            nominal_sf = sf_unc
 
-        # add the correct layout to it
-        # sf = layout_ak_array(sf_flat, events.Electron.pt[electron_mask])
+        store = {}
+        if isinstance(postfix, tuple):
+            if nominal_sf is None:
+                raise ValueError("nominal should be specified first in systematics dict")
+            for _postfix in postfix:
+                if _postfix.endswith("_up"):
+                    sf = nominal_sf + sf_unc
+                elif _postfix.endswith("_down"):
+                    sf = nominal_sf - sf_unc
+                else:
+                    raise ValueError(f"unexpected postfix {_postfix} for {syst} uncertainty")
+                store[f"{self.weight_name}{_postfix}"] = sf
+        else:
+            store[f"{self.weight_name}{postfix}"] = sf_unc
 
-        # create the product over all electrons in one event and multiply with the existing weight
-        weight = weight * ak.prod(sf, axis=1, mask_identity=False)
+        for name, sf in store.items():
+            weight = ak.ones_like(events.event) * ak.prod(sf, axis=1, mask_identity=False)
 
-        # store it
-        events = set_ak_column(events, f"{self.weight_name}{postfix}", weight, value_type=np.float32)
+            # store it
+            events = set_ak_column(events, name, weight, value_type=np.float32)
+
     return events
 
 
@@ -248,7 +260,7 @@ ElectronBaseWeightConfig = LeptonWeightConfig(
     correction_set="UL-Electron-ID-SF",
     get_sf_file=lambda bundle: bundle.electron_sf,
     input_pars=dict(WorkingPoint=None),
-    systematics=dict(sf="", sfup="up", sfdown="down"),
+    systematics=dict(sf="", sfup="_up", sfdown="_down"),
 )
 
 
