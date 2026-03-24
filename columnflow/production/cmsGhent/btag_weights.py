@@ -382,15 +382,16 @@ def btag_efficiency_hists(
         "mc_weight": events.mc_weight[results.x.event_no_btag],
     })
 
-    histogram = hist.Hist.new.IntCat([0, 4, 5], name="hadronFlavour")  # Jet hadronFlavour 0, 4, or 5
-    # add variables for binning the efficiency
-    for var_inst in self.variable_insts:
-        histogram = histogram.Var(
-            var_inst.bin_edges,
-            name=var_inst.name,
-            label=var_inst.get_full_x_title(),
-        )
-    hists["btag_efficiencies"] = histogram.Weight()
+    if "btag_efficiencies" not in hists:
+        histogram = hist.Hist.new.IntCat([0, 4, 5], name="hadronFlavour")  # Jet hadronFlavour 0, 4, or 5
+        # add variables for binning the efficiency
+        for var_inst in self.variable_insts:
+            histogram = histogram.Var(
+                var_inst.bin_edges,
+                name=var_inst.name,
+                label=var_inst.get_full_x_title(),
+            )
+        hists["btag_efficiencies"] = histogram.Weight()
 
     fill_kwargs = {
         # broadcast event weight and process-id to jet weight
