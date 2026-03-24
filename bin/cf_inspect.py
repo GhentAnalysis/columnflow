@@ -12,11 +12,12 @@ import os
 import json
 import pickle
 
-import awkward as ak
 import numpy as np  # noqa
 
-from columnflow.util import ipython_shell
+from columnflow.util import ipython_shell, maybe_import
 from columnflow.types import Any
+
+ak = maybe_import("awkward")
 
 
 def _load_json(fname: str, **kwargs) -> Any:
