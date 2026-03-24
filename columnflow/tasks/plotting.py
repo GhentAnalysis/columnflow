@@ -318,6 +318,8 @@ class PlotVariablesBase(_PlotVariablesBase):
             lumi = sum([_config_inst.x.luminosity for _config_inst in self.config_insts])
             with law.util.patch_object(config_inst.x, "luminosity", lumi):
                 # call the plot function
+                if self.version == "break":
+                    breakpoint()
                 fig, _ = self.call_plot_func(
                     self.plot_function,
                     hists=hists,
