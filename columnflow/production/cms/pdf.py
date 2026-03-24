@@ -29,7 +29,7 @@ fill_at_f32 = functools.partial(fill_at, value_type=np.float32)
     uses={"LHEPdfWeight"},
     # produced columns depend on store_all_weights and are added in the init
     # whether to store all weights, or to compute nominal and varied weights per-event
-    store_all_weights=False,
+    store_all_weights=True,
     # only run on mc
     mc_only=True,
 )
@@ -82,6 +82,13 @@ def pdf_weights(
     _raise_unknown_action("outlier_action", outlier_action, ("ignore", "remove", "raise"))
     _raise_unknown_action("outlier_log_mode", outlier_log_mode, ("none", "info", "debug", "warning"))
 
+    msg_func = {
+        "none": lambda msg: None,
+        "info": logger.info,
+        "warning": logger.warning,
+        "debug": logger.debug,
+    }[outlier_log_mode]
+
     # check for the correct amount of weights
     n_weights = ak.num(events.LHEPdfWeight, axis=1)
     invalid_mask = (n_weights != 101) & (n_weights != 103)
@@ -100,13 +107,11 @@ def pdf_weights(
     empty = full_like(events.LHEPdfWeight[:, :0], 0)
     if ak.all(invalid_mask):
         logger.warning("no 'LHEPdfWeight' vector with correct length found, setting weights to 1")
+        events = set_ak_column_f32(events, "pdf_weight", ones)
+        events = set_ak_column_f32(events, "pdf_weight_up", ones)
+        events = set_ak_column_f32(events, "pdf_weight_down", ones)
         if self.store_all_weights:
             events = set_ak_column_f32(events, "pdf_weights", empty)
-            events = set_ak_column_f32(events, "pdf_weight", ones)
-        else:
-            events = set_ak_column_f32(events, "pdf_weight", ones)
-            events = set_ak_column_f32(events, "pdf_weight_up", ones)
-            events = set_ak_column_f32(events, "pdf_weight_down", ones)
 
         events = set_ak_column_f32(events, "alphas_weight", ones)
         events = set_ak_column_f32(events, "alphas_weight_up", ones)
@@ -150,6 +155,27 @@ def pdf_weights(
         events = set_ak_column_f32(events, "alphas_weight", ones)
         events = set_ak_column_f32(events, "alphas_weight_up", alphas_weight[:, 0])
         events = set_ak_column_f32(events, "alphas_weight_down", alphas_weight[:, 1])
+
+        outlier_mask = ~np.all(abs(alphas_weight - 1) < outlier_threshold, axis=1)
+        if ak.any(outlier_mask):
+            occurances = ak.sum(outlier_mask)
+            frac = occurances / len(outlier_mask) * 100
+            msg = (
+                f"in dataset {self.dataset_inst.name}, there are {occurances} ({frac:.2f}%) "
+                f"entries with alpha uncertainty above {outlier_threshold * 100:.0f}%"
+            )
+
+            if outlier_action == "remove":
+                # set all pdf weights to 0 when the *outlier_threshold* is passed
+                events = fill_at_f32(events, outlier_mask, "alphas_weight", 0)
+                events = fill_at_f32(events, outlier_mask, "alphas_weight_up", 0)
+                events = fill_at_f32(events, outlier_mask, "alphas_weight_down", 0)
+                msg += "; the nominal/up/down alphas_weight columns have been set to 0 for these events"
+
+            elif outlier_action == "raise":
+                raise Exception(msg)
+
+            msg_func(msg)
     else:
         logger.debug(
             "the LHEPdfWeights do not include alpha_s variations and alphas_weight_up(down) are set to 1",
@@ -163,7 +189,7 @@ def pdf_weights(
 
     # store all weights if requested, then finish
     if self.store_all_weights:
-        return set_ak_column_f32(events, "pdf_weights", pdf_weights)
+        events = set_ak_column_f32(events, "pdf_weights", pdf_weights)
 
     # below this point, the weights are combined per-event into single up/down variations
 
@@ -192,17 +218,13 @@ def pdf_weights(
             events = fill_at_f32(events, outlier_mask, "pdf_weight", 0)
             events = fill_at_f32(events, outlier_mask, "pdf_weight_up", 0)
             events = fill_at_f32(events, outlier_mask, "pdf_weight_down", 0)
+            if self.store_all_weights:
+                events = fill_at_f32(events, outlier_mask[:, None], "pdf_weights", 0)
             msg += "; the nominal/up/down pdf_weight columns have been set to 0 for these events"
 
         elif outlier_action == "raise":
             raise Exception(msg)
 
-        msg_func = {
-            "none": lambda msg: None,
-            "info": logger.info,
-            "warning": logger.warning,
-            "debug": logger.debug,
-        }[outlier_log_mode]
         msg_func(msg)
 
     # handle invalid values
@@ -217,7 +239,8 @@ def pdf_weights(
         events = fill_at_f32(events, invalid_pdf_weight, "pdf_weight", 0)
         events = fill_at_f32(events, invalid_pdf_weight, "pdf_weight_up", 0)
         events = fill_at_f32(events, invalid_pdf_weight, "pdf_weight_down", 0)
-
+        if self.store_all_weights:
+            events = fill_at_f32(events, invalid_pdf_weight[:, None], "pdf_weights", 0)
         events = fill_at_f32(events, invalid_pdf_weight, "alphas_weight", 0)
         events = fill_at_f32(events, invalid_pdf_weight, "alphas_weight_up", 0)
         events = fill_at_f32(events, invalid_pdf_weight, "alphas_weight_down", 0)
@@ -228,7 +251,9 @@ def pdf_weights(
 @pdf_weights.init
 def pdf_weight_init(self: Producer, **kwargs) -> None:
     # add produced columns: nominal+all, or nominal+up+down
-    self.produces.add("pdf_weight{,s}" if self.store_all_weights else "pdf_weight{,_up,_down}")
+    self.produces.add("pdf_weight{,_up,_down}")
+    if self.store_all_weights:
+        self.produces.add("pdf_weights")
     self.produces.add("alphas_weight{,_up,_down}")
 
 
