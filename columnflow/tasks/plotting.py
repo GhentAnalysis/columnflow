@@ -25,9 +25,13 @@ from columnflow.tasks.framework.plotting import (
 from columnflow.tasks.framework.decorators import view_output_plots
 from columnflow.tasks.framework.remote import RemoteWorkflow
 from columnflow.tasks.histograms import MergeHistograms, MergeShiftedHistograms
-from columnflow.util import DotDict, dev_sandbox, dict_add_strict
+from columnflow.util import DotDict, dev_sandbox, dict_add_strict, maybe_import
 from columnflow.hist_util import add_missing_shifts
 from columnflow.config_util import get_shift_from_configs
+
+np = maybe_import("numpy")
+
+logger = law.logger.get_logger(__file__)
 
 
 class _PlotVariablesBase(
@@ -219,6 +223,20 @@ class PlotVariablesBase(_PlotVariablesBase):
                         # not preffered by columnflow: https://github.com/columnflow/columnflow/pull/692
                         expected_shifts = plot_shift_names  # & process_shift_map[process_inst.name]
                         add_missing_shifts(h, expected_shifts, str_axis="shift", nominal_bin="nominal")
+
+                        # deal with nan values
+                        for s in h.axes["shift"]:
+                            nans = np.isnan(h[{"shift": s}].values(flow=True))
+                            if np.any(nans):
+                                warning = f"hist for shift {s} and config {config_inst.name} has nans."
+                                if s != "nominal":
+                                    warning += " Set to nominal."
+                                logger.warning(warning)
+
+                            if s != "nominal":
+                                sh = h[{"shift": s}]
+                                sh.view(flow=True)[nans] = h[{"shift": "nominal"}].view(flow=True)[nans]
+                                h[{"shift": s}] = sh.view(flow=True)
 
                         # add the histogram
                         if process_inst in hists_config:
