@@ -322,6 +322,18 @@ class PlotTriggerScaleFactorsBase(
         dict_add_strict(params, "legend_title", "Processes")
         return params
 
+    def get_variables(self, vrs, histogram=None):
+        vr_insts = []
+        for v in vrs:
+            v_inst = self.trigger_config_inst.get_variable(v)
+            v_inst_copy = v_inst.copy_shallow()
+            # take into account possible rebinning
+            if (rebin := v_inst.x("merge_bins", [])):
+                rebin_edges = np.choose(np.cumsum(rebin), v_inst.bin_edges)
+                v_inst_copy.binning = [v_inst.bin_edges[0], *rebin_edges]
+            vr_insts.append(v_inst_copy)
+        return vr_insts
+
 
 class PlotTriggerScaleFactors2D(
     PlotTriggerScaleFactorsBase,
@@ -338,7 +350,7 @@ class PlotTriggerScaleFactors2D(
         out = {}
         for sys in ["central", "down", "up"]:
             for vrs in self.loop_variables(include_1d=False):
-                vr_insts = [self.trigger_config_inst.get_variable(v) for v in vrs]
+                vr_insts = self.get_variables(vrs)
                 for idx in product(*[range(vr.n_bins) for vr in vr_insts[2:]]):
                     key = (sys,) + vrs[:2] + tuple([(v, i) for v, i in zip(vrs[2:], idx)])
                     name = "_".join(vrs[:2]) + "__" + "_".join([f"{v}_{i}" for v, i in zip(vrs[2:], idx)])
@@ -363,13 +375,15 @@ class PlotTriggerScaleFactors2D(
             "annotate_cfg": {"bbox": dict(alpha=0.5, facecolor="white")},
         }
 
+        vr_insts = self.get_variables([vr1, vr2])
+
         p_cat = self.baseline_cat(add="\n".join([f"{vr}: bin {i}" for vr, i in other_vars]))
         fig, _ = self.call_plot_func(
             self.plot_function,
             hists={self.process_inst: hist2d},
             config_inst=self.config_inst,
             category_inst=p_cat,
-            variable_insts=[self.trigger_config_inst.get_variable(vr).copy_shallow() for vr in [vr1, vr2]],
+            variable_insts=vr_insts,
             style_config=style_config,
             shift_insts=[self.config_inst.get_shift("nominal")],
             **self.get_plot_parameters(),
@@ -441,12 +455,7 @@ class PlotTriggerScaleFactors1D(
         if not kwargs.setdefault("skip_ratio"):
             kwargs["skip_ratio"] = len(hists) == 1
 
-        vr_insts = []
-        for v in vrs:
-            v_inst = self.trigger_config_inst.get_variable(v)
-            # take into account possible rebinning
-            v_inst.binning = list(sf_nom.axes[v_inst.name].edges)
-            vr_insts.append(v_inst)
+        vr_insts = self.get_variables(vrs)
 
         fig, axes = self.call_plot_func(
             self.plot_function,
@@ -490,20 +499,22 @@ class PlotTriggerEfficiencies1D(
     def run(self):
         vrs, syst = self.branch_data
 
-        efficiencies = self.input()["collection"][0]["eff"].load(formatter="pickle")
+        efficiencies = self.input()["collection"][0]["eff"].load(formatter="pickle")["_".join(vrs)]
         hists = {}
-        for k, hs in efficiencies["_".join(vrs)].items():
+        for k, hs in efficiencies.items():
             hs = [hs[{"systematic": sys}].values() for sys in ["central", f"{syst}down", f"{syst}up"]]
             # convert down and up variations to up and down errors
             hists[k] = [hs[0]] + [np.abs(h - hs[0]) for h in hs[1:]]
 
         kwargs = self.get_plot_parameters() | dict(skip_ratio=len(hists) == 1)
+
+        vr_insts = self.get_variables(vrs)
         fig, axes = self.call_plot_func(
             self.plot_function,
             hists=hists,
             config_inst=self.config_inst,
             category_inst=self.baseline_cat(),
-            variable_insts=[self.trigger_config_inst.get_variable(v) for v in vrs],
+            variable_insts=vr_insts,
             **kwargs,
         )
 
