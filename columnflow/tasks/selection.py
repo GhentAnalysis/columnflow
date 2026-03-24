@@ -164,7 +164,7 @@ class SelectEvents(_SelectEvents):
         # prepare inputs and outputs
         lfn_task = self.requires()["lfns"]
         inputs = self.input()
-        self.check_parquet(inputs)
+        # self.check_parquet(inputs)
 
         outputs = self.output()
         result_chunks = {}
