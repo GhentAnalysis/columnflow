@@ -12,7 +12,7 @@ import law
 
 from columnflow.production import Producer, producer
 from columnflow.util import maybe_import
-from columnflow.columnar_util import set_ak_column, full_like, fill_at
+from columnflow.columnar_util import set_ak_column, full_like, fill_at, optional_column
 
 np = maybe_import("numpy")
 ak = maybe_import("awkward")
@@ -29,7 +29,6 @@ fill_at_f32 = functools.partial(fill_at, value_type=np.float32)
     uses={"LHEPdfWeight"},
     # produced columns depend on store_all_weights and are added in the init
     # whether to store all weights, or to compute nominal and varied weights per-event
-    store_all_weights=True,
     # only run on mc
     mc_only=True,
 )
@@ -40,6 +39,7 @@ def pdf_weights(
     outlier_threshold: float = 0.5,
     outlier_action: str = "ignore",
     outlier_log_mode: str = "warning",
+    store_all_weights = True,
     **kwargs,
 ) -> ak.Array:
     """
@@ -110,7 +110,7 @@ def pdf_weights(
         events = set_ak_column_f32(events, "pdf_weight", ones)
         events = set_ak_column_f32(events, "pdf_weight_up", ones)
         events = set_ak_column_f32(events, "pdf_weight_down", ones)
-        if self.store_all_weights:
+        if store_all_weights:
             events = set_ak_column_f32(events, "pdf_weights", empty)
 
         events = set_ak_column_f32(events, "alphas_weight", ones)
@@ -188,7 +188,7 @@ def pdf_weights(
     events = set_ak_column_f32(events, "pdf_weight", ones)
 
     # store all weights if requested, then finish
-    if self.store_all_weights:
+    if store_all_weights:
         events = set_ak_column_f32(events, "pdf_weights", pdf_weights)
 
     # below this point, the weights are combined per-event into single up/down variations
@@ -218,7 +218,7 @@ def pdf_weights(
             events = fill_at_f32(events, outlier_mask, "pdf_weight", 0)
             events = fill_at_f32(events, outlier_mask, "pdf_weight_up", 0)
             events = fill_at_f32(events, outlier_mask, "pdf_weight_down", 0)
-            if self.store_all_weights:
+            if store_all_weights:
                 events = fill_at_f32(events, outlier_mask[:, None], "pdf_weights", 0)
             msg += "; the nominal/up/down pdf_weight columns have been set to 0 for these events"
 
@@ -239,7 +239,7 @@ def pdf_weights(
         events = fill_at_f32(events, invalid_pdf_weight, "pdf_weight", 0)
         events = fill_at_f32(events, invalid_pdf_weight, "pdf_weight_up", 0)
         events = fill_at_f32(events, invalid_pdf_weight, "pdf_weight_down", 0)
-        if self.store_all_weights:
+        if store_all_weights:
             events = fill_at_f32(events, invalid_pdf_weight[:, None], "pdf_weights", 0)
         events = fill_at_f32(events, invalid_pdf_weight, "alphas_weight", 0)
         events = fill_at_f32(events, invalid_pdf_weight, "alphas_weight_up", 0)
@@ -252,8 +252,7 @@ def pdf_weights(
 def pdf_weight_init(self: Producer, **kwargs) -> None:
     # add produced columns: nominal+all, or nominal+up+down
     self.produces.add("pdf_weight{,_up,_down}")
-    if self.store_all_weights:
-        self.produces.add("pdf_weights")
+    self.produces.add(optional_column("pdf_weights"))
     self.produces.add("alphas_weight{,_up,_down}")
 
 

@@ -6,6 +6,8 @@ Task to produce and merge histograms.
 
 from __future__ import annotations
 
+from itertools import product
+
 import luigi
 import law
 
@@ -48,6 +50,11 @@ class CreateHistograms(_CreateHistograms):
 
     sandbox = dev_sandbox(law.config.get("analysis", "default_columnar_sandbox"))
 
+    num_output_files = luigi.IntParameter(
+        default=1,
+        description="split variables into several output files. Default: 1 output file."
+    )
+
     # upstream requirements
     reqs = Requirements(
         ReducedEventsUser.reqs,
@@ -83,8 +90,11 @@ class CreateHistograms(_CreateHistograms):
     def workflow_requires(self):
         reqs = super().workflow_requires()
 
+        branch = self.branch_data["branch"] if self.is_branch() else -1
+
         # require the full merge forest
-        reqs["events"] = self.reqs.ProvideReducedEvents.req(self)
+        print(branch)
+        reqs["events"] = self.reqs.ProvideReducedEvents.req(self, branch=branch)
 
         if not self.pilot:
             if self.producer_insts:
@@ -93,13 +103,14 @@ class CreateHistograms(_CreateHistograms):
                         self,
                         producer=producer_inst.cls_name,
                         producer_inst=producer_inst,
+                        branch=branch,
                     )
                     for producer_inst in self.producer_insts
                     if producer_inst.produced_columns
                 ]
             if self.ml_model_insts:
                 reqs["ml"] = [
-                    self.reqs.MLEvaluation.req(self, ml_model=ml_model_inst.cls_name)
+                    self.reqs.MLEvaluation.req(self, ml_model=ml_model_inst.cls_name, branch=branch)
                     for ml_model_inst in self.ml_model_insts
                 ]
 
@@ -111,21 +122,29 @@ class CreateHistograms(_CreateHistograms):
         return reqs
 
     def requires(self):
-        reqs = {"events": self.reqs.ProvideReducedEvents.req(self)}
+        branch = self.branch_data["branch"]
+        reqs = {"events": self.reqs.ProvideReducedEvents.req_different_branching(
+            self, branch=branch,
+        )}
 
         if self.producer_insts:
             reqs["producers"] = [
-                self.reqs.ProduceColumns.req(
+                self.reqs.ProduceColumns.req_different_branching(
                     self,
                     producer=producer_inst.cls_name,
                     producer_inst=producer_inst,
+                    branch=branch,
                 )
                 for producer_inst in self.producer_insts
                 if producer_inst.produced_columns
             ]
         if self.ml_model_insts:
             reqs["ml"] = [
-                self.reqs.MLEvaluation.req(self, ml_model=ml_model_inst.cls_name)
+                self.reqs.MLEvaluation.req_different_branching(
+                    self,
+                    ml_model=ml_model_inst.cls_name,
+                    branch=branch,
+                )
                 for ml_model_inst in self.ml_model_insts
             ]
 
@@ -157,9 +176,29 @@ class CreateHistograms(_CreateHistograms):
 
     workflow_condition = ReducedEventsUser.workflow_condition.copy()
 
+    def create_branch_map(self):
+        branch_map = super(ReducedEventsUser, self).create_branch_map()
+        new_branch_map = {}
+        num_output_files = min(self.num_output_files, len(self.variables))
+        for i, (group, branch) in enumerate(
+            product(range(num_output_files), branch_map),
+        ):
+            new_branch_map[i] = {
+                "group": group,
+                "branch": branch,
+            }
+        return new_branch_map
+
     @workflow_condition.output
     def output(self):
-        return {"hists": self.target(f"hist__vars_{self.variables_repr}__{self.branch}.pickle")}
+        num_output_files = min(self.num_output_files, len(self.variables))
+        suff = "" if self.num_output_files == 1 else f"_{self.branch_data['group']}"
+        out = self.target(f"hist__vars_{self.variables_repr}{suff}__{self.branch_data['branch']}.pickle")
+        # out = []
+        # for i in range(num_output_files):
+        #     suff = "" if self.num_output_files == 1 else f"_{i}"
+        #     out.append(self.target(f"hist__vars_{self.variables_repr}{suff}__{self.branch}.pickle"))
+        return {"hists": out}
 
     @law.decorator.notify
     @law.decorator.log
@@ -203,6 +242,11 @@ class CreateHistograms(_CreateHistograms):
         # get shift dependent aliases
         aliases = self.local_shift_inst.x("column_aliases", {})
 
+        # determine variable group
+        num_output_files = min(self.num_output_files, len(self.variables))
+        group = self.branch_data["group"]
+        variable_tuples = dict(sorted(self.variable_tuples.items())[group::num_output_files])
+
         # define columns that need to be read
         read_columns = {Route("process_id")}
         read_columns |= set(map(Route, self.category_id_columns))
@@ -212,7 +256,7 @@ class CreateHistograms(_CreateHistograms):
             Route(inp)
             for variable_inst in (
                 self.config_inst.get_variable(var_name)
-                for var_name in law.util.flatten(self.variable_tuples.values())
+                for var_name in law.util.flatten(variable_tuples.values())
             )
             for inp in ((
                 {variable_inst.expression}
@@ -277,7 +321,7 @@ class CreateHistograms(_CreateHistograms):
                     )
 
                 # define and fill histograms, taking into account multiple axes
-                for var_key, var_names in self.variable_tuples.items():
+                for var_key, var_names in variable_tuples.items():
                     # get variable instances
                     variable_insts = [self.config_inst.get_variable(var_name) for var_name in var_names]
 
@@ -323,7 +367,7 @@ class CreateHistograms(_CreateHistograms):
                     self.hist_producer_inst.run_fill_hist(histograms[var_key], fill_data, task=self)
                     logger.info("histogrammed " + var_key)
         # post-process the histograms
-        for var_key in self.variable_tuples.keys():
+        for var_key in variable_tuples.keys():
             histograms[var_key] = self.hist_producer_inst.run_post_process_hist(histograms[var_key], task=self)
 
             # check the format after post-processing if no merged preprocessing will take place
@@ -337,6 +381,11 @@ class CreateHistograms(_CreateHistograms):
         self.teardown_hist_producer_inst()
 
         # merge output files
+        # outputs = self.output()["hists"]
+        # for i, output in enumerate(outputs):
+        #    variables = sorted(histograms)[i::len(outputs)]
+        #    store_histograms = {v: histograms[v] for v in variables}
+        #    output.dump(store_histograms, formatter="pickle")
         self.output()["hists"].dump(histograms, formatter="pickle")
 
 
@@ -382,6 +431,10 @@ class MergeHistograms(_MergeHistograms):
         significant=False,
         description="when True, remove particular input histograms after merging; default: False",
     )
+    num_output_files = luigi.IntParameter(
+        default=1,
+        description="split variables in CreateHistograms into several output files. Default: 1 output file."
+    )
 
     sandbox = dev_sandbox(law.config.get("analysis", "default_columnar_sandbox"))
 
@@ -399,7 +452,9 @@ class MergeHistograms(_MergeHistograms):
 
     def create_branch_map(self):
         # create a dummy branch map so that this task could be submitted as a job
-        return {0: None}
+        variables = self._get_variables()
+        num_output_files = min(self.num_output_files, len(variables))
+        return {i: variables[i::num_output_files] for i in range(num_output_files)}
 
     def _get_variables(self):
         if self.is_workflow():
@@ -422,8 +477,8 @@ class MergeHistograms(_MergeHistograms):
             if variables:
                 reqs["hists"] = self.reqs.CreateHistograms.req_different_branching(
                     self,
-                    branch=-1,
                     variables=tuple(variables),
+                    branch=-1,
                 )
 
         return reqs
@@ -432,19 +487,16 @@ class MergeHistograms(_MergeHistograms):
         variables = self._get_variables()
         if not variables:
             return []
-
-        return self.reqs.CreateHistograms.req_different_branching(
-            self,
-            branch=-1,
-            variables=tuple(variables),
-            workflow="local",
-        )
+        kwargs = dict(variables=tuple(variables), workflow="local", branch=-1)
+        task = self.reqs.CreateHistograms.req_different_branching(self, **kwargs)
+        branches = [branch for branch, branch_data  in task.branch_map.items() if branch_data["group"] == self.branch]
+        return self.reqs.CreateHistograms.req_different_branching(self, branches=branches, **kwargs)
 
     def output(self):
         return {
             "hists": law.SiblingFileCollection({
                 variable_name: self.target(f"hist__var_{variable_name}.pickle")
-                for variable_name in self.variables
+                for variable_name in self.branch_data
             }),
         }
 
@@ -462,9 +514,9 @@ class MergeHistograms(_MergeHistograms):
 
         merged_hists = {}
         self.publish_message(f"merging {len(hist_files)} histograms")
-        for k, hist_file in enumerate(self.iter_progress(hist_files, len(inputs), reach=(0, 50))):
+        for k, hist_files in enumerate(self.iter_progress(hist_files, len(inputs), reach=(0, 50))):
             self.publish_message(f"load branch {k}")
-            part_hists = hist_file.load()
+            part_hists = hist_files.load()
             for var in part_hists:
                 if var not in merged_hists:
                     merged_hists[var] = part_hists[var]
