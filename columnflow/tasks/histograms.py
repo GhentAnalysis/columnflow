@@ -93,7 +93,6 @@ class CreateHistograms(_CreateHistograms):
         branch = self.branch_data["branch"] if self.is_branch() else -1
 
         # require the full merge forest
-        print(branch)
         reqs["events"] = self.reqs.ProvideReducedEvents.req(self, branch=branch)
 
         if not self.pilot:
@@ -464,10 +463,10 @@ class MergeHistograms(_MergeHistograms):
 
         # optional dynamic behavior: determine not yet created variables and require only those
         if self.only_missing:
-            missing = self.output()["hists"].count(existing=False, keys=True)[1]
+            missing = self.output(full=True)["hists"].count(existing=False, keys=True)[1]
             variables = sorted(missing, key=variables.index)
 
-        return variables
+        return sorted(variables)
 
     def workflow_requires(self):
         reqs = super().workflow_requires()
@@ -492,11 +491,11 @@ class MergeHistograms(_MergeHistograms):
         branches = [branch for branch, branch_data  in task.branch_map.items() if branch_data["group"] == self.branch]
         return self.reqs.CreateHistograms.req_different_branching(self, branches=branches, **kwargs)
 
-    def output(self):
+    def output(self, full=False):
         return {
             "hists": law.SiblingFileCollection({
                 variable_name: self.target(f"hist__var_{variable_name}.pickle")
-                for variable_name in self.branch_data
+                for variable_name in (self.variables if full else self.branch_data)
             }),
         }
 
@@ -593,9 +592,38 @@ class MergeShiftedHistograms(_MergeShiftedHistograms):
         MergeHistograms=MergeHistograms,
     )
 
+    split_variables = luigi.IntParameter(
+        default=1,
+        description="split variables into several groups submitted separately. Default: 1 group."
+    )
+
+    only_missing = luigi.BoolParameter(
+        default=False,
+        description="when True, identify missing variables first and only require histograms of "
+        "missing ones; default: False",
+    )
+
+    def _get_variables(self):
+        if self.is_workflow():
+            return self.as_branch()._get_variables()
+
+        variables = self.variables
+
+        # optional dynamic behavior: determine not yet created variables and require only those
+        if self.only_missing:
+            missing = self.output(full=True)["hists"].count(existing=False, keys=True)[1]
+            variables = sorted(missing, key=variables.index)
+
+        return sorted(variables)
+
     def create_branch_map(self):
         # create a dummy branch map so that this task can run as a job
-        return {0: None}
+        variables = self._get_variables()
+        split_variables = min(self.split_variables, len(variables))
+        return {
+            i: variables[i::split_variables]
+            for i in range(split_variables)
+        }
 
     def workflow_requires(self):
         reqs = super().workflow_requires()
@@ -603,7 +631,7 @@ class MergeShiftedHistograms(_MergeShiftedHistograms):
         # add nominal and both directions per shift source
         if not self.pilot:
             for shift in ["nominal"] + self.shifts:
-                task = self.reqs.MergeHistograms.req(self, shift=shift, _prefer_cli={"variables"})
+                task = self.reqs.MergeHistograms.req(self, shift=shift, _prefer_cli={"variables"}, only_missing=False)
                 if task.shift == shift:
                     reqs[shift] = task
 
@@ -612,16 +640,21 @@ class MergeShiftedHistograms(_MergeShiftedHistograms):
     def requires(self):
         reqs = {}
         for shift in ["nominal"] + self.shifts:
-            task = self.reqs.MergeHistograms.req(self, shift=shift, _prefer_cli={"variables"})
+            task = self.reqs.MergeHistograms.req_different_branching(
+                self, shift=shift, _prefer_cli={"variables"},
+                variables=self.branch_data,
+                only_missing=False,
+                branch=0,
+            )
             if task.shift == shift:
                 reqs[shift] = task
         return reqs
 
-    def output(self):
+    def output(self, full=False):
         return {
             "hists": law.SiblingFileCollection({
                 variable_name: self.target(f"hists__{variable_name}.pickle")
-                for variable_name in self.variables
+                for variable_name in (self.variables if full else self.branch_data)
             }),
         }
 

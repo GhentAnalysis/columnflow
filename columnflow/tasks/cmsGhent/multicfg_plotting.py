@@ -8,6 +8,8 @@ from columnflow.tasks.framework.plotting import PlotBase1D, PlotBase, PlotBase2D
 from columnflow.tasks.framework.decorators import view_output_plots
 from columnflow.util import DotDict
 
+from columnflow.hist_util import add_missing_shifts
+
 
 class PlotVariablesCatsPerProcessBase(PlotVariablesBaseSingleShift):
 
@@ -22,7 +24,8 @@ class PlotVariablesCatsPerProcessBase(PlotVariablesBaseSingleShift):
         cats = self.categories
         if self.initial not in cats:
             cats = [self.initial, *cats]
-        return [
+
+        out = [
             DotDict({
                 "category": law.util.create_hash(cats),
                 "categories": cats,
@@ -32,15 +35,13 @@ class PlotVariablesCatsPerProcessBase(PlotVariablesBaseSingleShift):
             for proc_name in sorted(self.processes[0])
             for var_name in sorted(self.variables)
         ]
+        return out
 
     def output(self):
         return {"plots": [
             self.local_target(name)
             for name in self.get_plot_names("plot")
         ]}
-
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
 
     @law.decorator.log
     @view_output_plots
@@ -49,6 +50,7 @@ class PlotVariablesCatsPerProcessBase(PlotVariablesBaseSingleShift):
 
         # get the shifts to extract and plot
         plot_shifts = law.util.make_list(self.get_plot_shifts())
+        plot_shift_names = set(shift_inst.name for shift_inst in plot_shifts)
 
         # prepare config objects
         variable_tuple = self.variable_tuples[self.branch_data.variable]
@@ -58,52 +60,119 @@ class PlotVariablesCatsPerProcessBase(PlotVariablesBaseSingleShift):
         ]
         category_insts = [self.config_inst.get_category(c) for c in self.branch_data.categories]
         category_insts_leafs = [c.get_leaf_categories() or [c] for c in category_insts]
-        process_inst = self.config_inst.get_process(self.branch_data.process)
-        sub_process_insts = [sub for sub, _, _ in process_inst.walk_processes(include_self=True)]
 
-        # histogram data for process
-        process_hists = {c.name: 0 for c in category_insts}
+        # get assignment of processes to datasets and shifts
+        config_process_map, process_shift_map = self.get_config_process_map()
 
+        # filter for branch process
+        config_process_map = {
+            cfg: {p: v for p, v in process_map.items() if p.name == self.branch_data.process}
+            for cfg, process_map in config_process_map.items()
+        }
+        process_shift_map = {
+            p: v for p, v in process_shift_map.items()
+            if p.name == self.branch_data.process
+        }
+        # sub_process_insts = [sub for sub, _, _ in process_inst.walk_processes(include_self=True)]
+
+
+        # histogram data per category copy
+        hists: dict[od.Config, dict[str, hist.Hist]] = {}
         with self.publish_step(f"plotting {self.branch_data.variable} for {process_inst.name}"):
-            for dataset, inp in self.input().items():
-                dataset_inst = self.config_inst.get_dataset(dataset)
-                h_in = inp["collection"][0]["hists"].targets[self.branch_data.variable].load(formatter="pickle")
+            inputs = self.input() or self.workflow_input().merged_hists
+            for i, (config, dataset_dict) in enumerate(inputs.items()):
+                config_inst = self.config_insts[i]
+                category_insts = [config_inst.get_category(c) for c in self.branch_data.categories]
+                category_insts_leafs = [c.get_leaf_categories() or [c] for c in category_insts]
 
-                # extract one histogram for process
-                # skip when the dataset is already known to not contain any sub process
-                if not any(map(dataset_inst.has_process, sub_process_insts)):
-                    continue
+                # histogram data for process
+                hists_config = {}
+                for dataset, inp in dataset_dict:
+                    dataset_inst = config_inst.get_dataset(dataset)
+                    h_in = inp["collection"][0]["hists"].targets[self.branch_data.variable].load(formatter="pickle")
 
-                # work on a copy
-                h = h_in.copy()
-                h = h[{
-                    "process": [
-                        hist.loc(p.id)
-                        for p in sub_process_insts
-                        if p.id in h.axes["process"]
-                    ],
-                    "shift": [
-                        hist.loc(s.id)
-                        for s in plot_shifts
-                        if s.id in h.axes["shift"]
-                    ],
-                }]
+                    if h_in.empty():
+                        continue
 
-                # axis selections
-                for c, lcs in zip(category_insts, category_insts_leafs):
-                    hc = h[{
-                        "category": [
-                            hist.loc(c.id)
-                            for c in lcs
-                            if c.id in h.axes["category"]
+                    process_inst = config_inst.get_process(self.branch_data.process)
+                    process_info = config_process_map[process_inst]
+
+
+                    if dataset_inst not in process_info["dataset_proc_name_map"].keys():
+                        continue
+
+                    # select processes and reduce axis
+                    h = h_in.copy()
+                    h = h[{
+                        "process": [
+                            hist.loc(proc_name)
+                            for proc_name in process_info["dataset_proc_name_map"][dataset_inst]
+                            if proc_name in h.axes["process"]
                         ],
                     }]
 
-                    # axis reductions
-                    hc = hc[{"category": sum}]
+                    add_missing_shifts(h, plot_shift_names, str_axis="shift", nominal_bin="nominal")
 
-                    # add the histsogram
-                    process_hists[c.name] = hc + process_hists[c.name]
+                    # add the histogram
+                    if process_inst in hists_config:
+                        hists_config[process_inst] += h
+                    else:
+                        hists_config[process_inst] = h
+
+                hists[config_inst] = {
+                    proc_inst: hists_config[proc_inst]
+                    for proc_inst in sorted(
+                        hists_config.keys(), key=list(config_process_map[config_inst].keys()).index,
+                    )
+                }
+
+            # there should be hists to plot
+            if not hists:
+                raise Exception(
+                    "no histograms found to plot; possible reasons:\n"
+                    "  - requested variable requires columns that were missing during histogramming\n"
+                    "  - selected --processes did not match any value on the process axis of the input histogram",
+                )
+
+            # update histograms using custom hooks
+            hists = self.invoke_hist_hooks(
+                hists,
+                hook_kwargs={"category_name": self.branch_data.categories, "variable_name": self.branch_data.variable},
+            )
+
+            # merge configs
+            if len(self.config_insts) != 1:
+                process_memory = {}
+                merged_hists = {}
+                for _hists in hists.values():
+                    for process_inst, h in _hists.items():
+                        if process_inst.id in merged_hists:
+                            merged_hists[process_inst.id] += h
+                        else:
+                            merged_hists[process_inst.id] = h
+                            process_memory[process_inst.id] = process_inst
+
+                process_insts = list(process_memory.values())
+                hists = {process_memory[process_id]: h for process_id, h in merged_hists.items()}
+            else:
+                hists = hists[self.config_inst]
+                process_insts = list(hists.keys())
+
+            # axis selections
+            for c, lcs in zip(category_insts, category_insts_leafs):
+                hc = h[{
+                    "category": [
+                        hist.loc(c.id)
+                        for c in lcs
+                        if c.id in h.axes["category"]
+                    ],
+                }]
+
+                # axis reductions
+                hc = hc[{"category": sum}]
+
+                # add the histsogram
+                process_hists[c.name] = hc + process_hists[c.name]
 
             # there should be hists to plot
             if not all(process_hists.values()):

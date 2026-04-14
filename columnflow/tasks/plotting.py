@@ -252,13 +252,13 @@ class PlotVariablesBase(_PlotVariablesBase):
                     )
                 }
 
-                # there should be hists to plot
-                if not hists:
-                    raise Exception(
-                        "no histograms found to plot; possible reasons:\n"
-                        "  - requested variable requires columns that were missing during histogramming\n"
-                        "  - selected --processes did not match any value on the process axis of the input histogram",
-                    )
+            # there should be hists to plot
+            if not hists:
+                raise Exception(
+                    "no histograms found to plot; possible reasons:\n"
+                    "  - requested variable requires columns that were missing during histogramming\n"
+                    "  - selected --processes did not match any value on the process axis of the input histogram",
+                )
 
             # update histograms using custom hooks
             hists = self.invoke_hist_hooks(
