@@ -52,8 +52,6 @@ class PlotVariablesCatsPerProcessBase(PlotVariablesBaseSingleShift):
     @law.decorator.log
     @view_output_plots
     def run(self):
-        import hist
-
         # get the shifts to extract and plot
         plot_shifts = law.util.make_list(self.get_plot_shifts())
 
@@ -206,8 +204,6 @@ class MultiVarMixin:
             category_insts: list[od.Category],
             plot_shifts: list[od.Shift],
     ):
-        import hist
-
         hists = {}
         process_insts = list(sub_process_insts)
 
@@ -229,9 +225,9 @@ class MultiVarMixin:
                 h = h_in.copy()
                 h = h[{
                     "process": [
-                        hist.loc(p.id)
+                        p.name
                         for p in sub_process_insts[process_inst]
-                        if p.id in h.axes["process"]
+                        if p.name in h.axes["process"]
                     ],
                 }]
                 h = h[{"process": sum}]
@@ -265,14 +261,14 @@ class MultiVarMixin:
             # selections
             h = h[{
                 "category": [
-                    hist.loc(c.id)
+                    c.name
                     for c in category_insts
-                    if c.id in h.axes["category"]
+                    if c.name in h.axes["category"]
                 ],
                 "shift": [
-                    hist.loc(s.id)
+                    s.name
                     for s in plot_shifts
-                    if s.id in h.axes["shift"]
+                    if s.name in h.axes["shift"]
                 ],
             }]
             # reductions
