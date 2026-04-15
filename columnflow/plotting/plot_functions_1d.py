@@ -179,6 +179,7 @@ def plot_variable_variants(
     yscale: str | None = None,
     hide_stat_errors: bool | None = None,
     variable_settings: dict | None = None,
+    initial: str = "Initial",
     **kwargs,
 ) -> plt.Figure:
     """
@@ -187,7 +188,7 @@ def plot_variable_variants(
     hists = remove_residual_axis(hists, "shift")
 
     variable_inst = variable_insts[0]
-    hists = apply_variable_settings(hists, variable_insts, variable_settings)
+    hists, variable_style_config = apply_variable_settings(hists, variable_insts, variable_settings)
     if kwargs.get("remove_negative", None):
         hists = remove_negative_contributions(hists)
     if density:
@@ -199,6 +200,7 @@ def plot_variable_variants(
     selector_step_labels = config_inst.x("selector_step_labels", {})
 
     # add hists
+    initial_norm = sum(hists[initial].values()) if shape_norm else 1
     for label, h in hists.items():
         norm = sum(h.values()) if shape_norm else 1
         plot_config[f"hist_{label}"] = plot_cfg = {
@@ -209,7 +211,7 @@ def plot_variable_variants(
                 "label": selector_step_labels.get(label, label),
             },
             "ratio_kwargs": {
-                "norm": hists["Initial"].values(),
+                "norm": hists[initial].values() / initial_norm * norm,
             },
         }
         if hide_stat_errors:
@@ -228,9 +230,14 @@ def plot_variable_variants(
     )
     # plot-function specific changes
     default_style_config["rax_cfg"]["ylim"] = (0., 1.1)
-    default_style_config["rax_cfg"]["ylabel"] = "Step / Initial"
+    default_style_config["rax_cfg"]["ylabel"] = f"Step / {initial}"
 
-    style_config = law.util.merge_dicts(default_style_config, style_config, deep=True)
+    style_config = law.util.merge_dicts(
+        default_style_config,
+        variable_style_config[variable_inst],
+        style_config,
+        deep=True,
+    )
     if shape_norm:
         style_config["ax_cfg"]["ylabel"] = "Normalized entries"
 
