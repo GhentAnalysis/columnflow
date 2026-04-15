@@ -580,8 +580,6 @@ class MergeReducedEvents(_MergeReducedEvents):
             if empties:
                 logger.warning(f"{len(arr)} events collected. Check if this is expected")
             output.dump(arr)
-
-
         # optionally remove initial inputs
         if not self.keep_reduced_events and self.is_leaf():
             with self.publish_step("removing reduced inputs ..."):

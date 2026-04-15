@@ -52,7 +52,7 @@ class CreateHistograms(_CreateHistograms):
 
     num_output_files = luigi.IntParameter(
         default=1,
-        description="split variables into several output files. Default: 1 output file."
+        description="split variables into several output files. Default: 1 output file.",
     )
 
     # upstream requirements
@@ -190,7 +190,7 @@ class CreateHistograms(_CreateHistograms):
 
     @workflow_condition.output
     def output(self):
-        num_output_files = min(self.num_output_files, len(self.variables))
+        min(self.num_output_files, len(self.variables))
         suff = "" if self.num_output_files == 1 else f"_{self.branch_data['group']}"
         out = self.target(f"hist__vars_{self.variables_repr}{suff}__{self.branch_data['branch']}.pickle")
         # out = []
@@ -432,7 +432,7 @@ class MergeHistograms(_MergeHistograms):
     )
     num_output_files = luigi.IntParameter(
         default=1,
-        description="split variables in CreateHistograms into several output files. Default: 1 output file."
+        description="split variables in CreateHistograms into several output files. Default: 1 output file.",
     )
 
     sandbox = dev_sandbox(law.config.get("analysis", "default_columnar_sandbox"))
@@ -488,7 +488,7 @@ class MergeHistograms(_MergeHistograms):
             return []
         kwargs = dict(variables=tuple(variables), workflow="local", branch=-1)
         task = self.reqs.CreateHistograms.req_different_branching(self, **kwargs)
-        branches = [branch for branch, branch_data  in task.branch_map.items() if branch_data["group"] == self.branch]
+        branches = [branch for branch, branch_data in task.branch_map.items() if branch_data["group"] == self.branch]
         return self.reqs.CreateHistograms.req_different_branching(self, branches=branches, **kwargs)
 
     def output(self, full=False):
@@ -594,7 +594,7 @@ class MergeShiftedHistograms(_MergeShiftedHistograms):
 
     split_variables = luigi.IntParameter(
         default=1,
-        description="split variables into several groups submitted separately. Default: 1 group."
+        description="split variables into several groups submitted separately. Default: 1 group.",
     )
 
     only_missing = luigi.BoolParameter(
