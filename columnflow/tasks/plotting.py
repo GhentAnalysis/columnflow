@@ -383,7 +383,7 @@ class PlotVariablesBaseSingleShift(
         for config_inst, datasets in zip(self.config_insts, self.datasets):
             reqs[config_inst.name] = {}
             for d in datasets:
-                if d not in config_inst.datasets:
+                if not config_inst.has_dataset(d):
                     continue
                 reqs[config_inst.name][d] = self.reqs.MergeHistograms.req_different_branching(
                     self,
