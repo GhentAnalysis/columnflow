@@ -18,6 +18,11 @@ class PlotVariablesCatsPerProcessBase(PlotVariablesBaseSingleShift):
         description="Name of category that is considered as initial reference.",
     )
 
+    total = luigi.Parameter(
+        default="incl",
+        description="Name of category that contains all categories (for annotating)",
+    )
+
     def create_branch_map(self):
         cats = self.categories
         if self.initial not in cats:
@@ -25,7 +30,7 @@ class PlotVariablesCatsPerProcessBase(PlotVariablesBaseSingleShift):
         return [
             DotDict({
                 "category": law.util.create_hash(cats),
-                "categories": cats,
+                "categories": sorted(cats),
                 "process": proc_name,
                 "variable": var_name,
             })
@@ -39,8 +44,10 @@ class PlotVariablesCatsPerProcessBase(PlotVariablesBaseSingleShift):
             for name in self.get_plot_names("plot")
         ]}
 
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
+    def plot_parts(self) -> law.util.InsertableDict:
+        parts = super().plot_parts()
+        parts["processes"] = f"proc_{self.branch_data.process}"
+        return parts
 
     @law.decorator.log
     @view_output_plots
@@ -57,15 +64,17 @@ class PlotVariablesCatsPerProcessBase(PlotVariablesBaseSingleShift):
             for var_name in variable_tuple
         ]
         category_insts = [self.config_inst.get_category(c) for c in self.branch_data.categories]
+        category_insts = sorted(category_insts, key=lambda c: (c.x("order", 0), c.name != self.initial, c.name))
         category_insts_leafs = [c.get_leaf_categories() or [c] for c in category_insts]
         process_inst = self.config_inst.get_process(self.branch_data.process)
         sub_process_insts = [sub for sub, _, _ in process_inst.walk_processes(include_self=True)]
 
         # histogram data for process
-        process_hists = {c.name: 0 for c in category_insts}
+        process_hists = {}
 
         with self.publish_step(f"plotting {self.branch_data.variable} for {process_inst.name}"):
-            for dataset, inp in self.input().items():
+            inputs = self.input() or self.workflow_input().merged_hists
+            for dataset, inp in inputs[self.config_inst.name].items():
                 dataset_inst = self.config_inst.get_dataset(dataset)
                 h_in = inp["collection"][0]["hists"].targets[self.branch_data.variable].load(formatter="pickle")
 
@@ -78,14 +87,14 @@ class PlotVariablesCatsPerProcessBase(PlotVariablesBaseSingleShift):
                 h = h_in.copy()
                 h = h[{
                     "process": [
-                        hist.loc(p.id)
+                        p.name
                         for p in sub_process_insts
-                        if p.id in h.axes["process"]
+                        if p.name in h.axes["process"]
                     ],
                     "shift": [
-                        hist.loc(s.id)
+                        s.name
                         for s in plot_shifts
-                        if s.id in h.axes["shift"]
+                        if s.name in h.axes["shift"]
                     ],
                 }]
 
@@ -93,9 +102,9 @@ class PlotVariablesCatsPerProcessBase(PlotVariablesBaseSingleShift):
                 for c, lcs in zip(category_insts, category_insts_leafs):
                     hc = h[{
                         "category": [
-                            hist.loc(c.id)
+                            c.name
                             for c in lcs
-                            if c.id in h.axes["category"]
+                            if c.name in h.axes["category"]
                         ],
                     }]
 
@@ -103,7 +112,8 @@ class PlotVariablesCatsPerProcessBase(PlotVariablesBaseSingleShift):
                     hc = hc[{"category": sum}]
 
                     # add the histsogram
-                    process_hists[c.name] = hc + process_hists[c.name]
+                    name = c.x("short_label", c.name)
+                    process_hists[name] = process_hists.get(name, 0) + hc
 
             # there should be hists to plot
             if not all(process_hists.values()):
@@ -130,8 +140,9 @@ class PlotVariablesCatsPerProcessBase(PlotVariablesBaseSingleShift):
                 style_config={
                     "legend_cfg": {"title": process_inst.label},
                     "rax_cfg": {"ylabel": "Category / " + self.initial, "ylim": (.75, 1.25)},
+                    "annotate_cfg": {"text": self.config_inst.get_category(self.total).label},
                 },
-                initial=self.initial,
+                initial=self.config_inst.get_category(self.initial).x("short_label", self.initial),
                 **self.get_plot_parameters(),
             )
 
@@ -200,7 +211,8 @@ class MultiVarMixin:
         hists = {}
         process_insts = list(sub_process_insts)
 
-        for dataset, inp in self.input().items():
+        inputs = self.input() or self.workflow_input().merged_hists
+        for dataset, inp in inputs.items():
             dataset_inst = self.config_inst.get_dataset(dataset)
             h_in = inp["collection"][0]["hists"].targets[variable_inst.name].load(formatter="pickle")
 
