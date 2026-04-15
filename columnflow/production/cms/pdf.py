@@ -39,7 +39,7 @@ def pdf_weights(
     outlier_threshold: float = 0.5,
     outlier_action: str = "ignore",
     outlier_log_mode: str = "warning",
-    store_all_weights= True,
+    store_all_weights: bool = True,
     **kwargs,
 ) -> ak.Array:
     """
