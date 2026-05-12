@@ -139,7 +139,13 @@ class GetDatasetLFNs(DatasetTask, law.tasks.TransferLocalFile):
         The path of custom files have to be given in law.cfg file as [custom_pnfs_fs]
         """
         base = law.config.get_expanded("custom_pnfs_fs", "base")
-        out = glob.glob(f"{base}{dataset_key}/*/*/*.root")
+        base_v2 = law.config.get_expanded("custom_pnfs_fs_v2", "base")
+        if os.path.exists(f"{base_v2}{dataset_key}"):
+            print(f"Loading dataset from {base_v2}")
+            out = glob.glob(f"{base_v2}{dataset_key}/*/*/*.root")
+        else:
+            print(f"Loading dataset from {base}")
+            out = glob.glob(f"{base}{dataset_key}/*/*/*.root")
         return out
 
     def get_dataset_lfns_dasgoclient(
