@@ -806,7 +806,8 @@ def add_ak_alias(
     src_route: Route | Sequence[str] | str,
     dst_route: Route | Sequence[str] | str,
     remove_src: bool = False,
-    missing_strategy: str = "original",
+    missing_strategy: str = "warn",
+    #missing_strategy: str = "original",
 ) -> ak.Array:
     """
     Adds an alias to an awkward array *ak_array* pointing the array at *src_route* to *dst_route*
@@ -850,7 +851,7 @@ def add_ak_alias(
         # -> the destination column "Jet.pt" will be removed as there is no source column to alias
     """
     # check the strategy
-    strategies = ("original", "remove", "raise")
+    strategies = ("original", "remove", "raise", "warn")
     if missing_strategy not in strategies:
         raise ValueError(
             f"unknown missing_strategy '{missing_strategy}', valid values are {strategies}",
@@ -870,6 +871,9 @@ def add_ak_alias(
             ak_array = remove_ak_column(ak_array, src_route)
 
     else:
+        if missing_strategy == "warn":
+            print(f"[Warning] no column found in array for route '{src_route}' not replacing '{dst_route}' weight")
+
         # the source column does not exist, so apply the missing_strategy
         if missing_strategy == "raise":
             # complain
