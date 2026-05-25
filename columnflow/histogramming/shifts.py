@@ -92,10 +92,10 @@ def shifts_hist(self: HistProducer, events: ak.Array, **kwargs) -> ak.Array:
                 all_weights.append(subshift_weight)
             return events, np.transpose(all_weights)
 
-    if self.dataset_inst.is_data and len(events) and self.config_inst.x.data_event_weights:
-        # for data we apply a seperate set of weights if applicable
-        for column in self.config_inst.x.data_event_weights:
-            weight = weight * Route(column).apply(events)
+    #if self.dataset_inst.is_data and len(events) and self.config_inst.x.data_event_weights:
+    #    # for data we apply a seperate set of weights if applicable
+    #    for column in self.config_inst.x.data_event_weights:
+    #        weight = weight * Route(column).apply(events)
 
     return events, weight
 
