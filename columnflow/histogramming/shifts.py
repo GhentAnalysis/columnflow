@@ -14,6 +14,7 @@ from columnflow.util import maybe_import
 from columnflow.hist_util import create_hist_from_variables, fill_hist, translate_hist_intcat_to_strcat
 from columnflow.columnar_util import has_ak_column, Route, optional_column as optional
 from columnflow.types import Any
+from columnflow.columnar_util import set_ak_column
 
 np = maybe_import("numpy")
 ak = maybe_import("awkward")
@@ -45,7 +46,7 @@ def shifts_hist(self: HistProducer, events: ak.Array, **kwargs) -> ak.Array:
             if not dataset_inst.has_tag("skip_pdf"):
                 dataset_inst.x.event_weights["pdf_weight"] = get_shifts_from_sources(config, "pdf")
     """
-    _weight_debug = True
+    _weight_debug = False
     # build the full event weight
     weight = ak.Array(np.ones(len(events)))
     if self.dataset_inst.is_mc and len(events):
@@ -96,7 +97,6 @@ def shifts_hist(self: HistProducer, events: ak.Array, **kwargs) -> ak.Array:
     #    # for data we apply a seperate set of weights if applicable
     #    for column in self.config_inst.x.data_event_weights:
     #        weight = weight * Route(column).apply(events)
-
     return events, weight
 
 
