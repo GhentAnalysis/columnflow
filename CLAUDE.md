@@ -6,9 +6,10 @@ Backend for columnar, fully orchestrated HEP analyses with [law](https://github.
 
 - **01-pipeline.md** — task order, 5 TAF types, law.cfg module registration
 - **02-invariants.md** — set_ak_column, uses/produces, imports, Selector return type, MC guard, keep_columns, no loops
+- **linting.md** — after writing code run `flake8 --config=.flake8 <file>` and fix all errors
 
 Path-scoped rules load automatically when Claude works with files in the corresponding directory:
-`selection/`, `production/`, `calibration/`, `config/`, `categorization/`, `histogramming/`, `inference/`
+`selection/`, `production/`, `calibration/`, `config/`, `categorization/`, `histogramming/`, `inference/`, `tasks/`
 
 ## Commands
 
