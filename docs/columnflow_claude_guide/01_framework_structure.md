@@ -21,6 +21,7 @@ It solves three practical problems every HEP analyst faces:
 [Law](https://github.com/riga/law) (built on [Luigi](https://luigi.readthedocs.io)) defines the **task graph**: every processing step is a `Task` object with declared outputs. When you run a downstream task (e.g. `PlotVariables1D`), law checks which upstream tasks are missing and runs them first — automatically.
 
 Key properties:
+
 - Tasks are **idempotent**: if the output already exists, the task is skipped.
 - Tasks run **locally** or on **HTCondor / Slurm** with a single flag change (`--workflow htcondor`).
 - The `--version` tag separates parallel analysis branches on disk — you can have `dev1` and `prod1` coexist.
@@ -39,7 +40,7 @@ All event data is stored as [awkward arrays](https://awkward-array.org): irregul
 
 The standard pipeline processes data from ROOT files to plots and datacards:
 
-```
+```text
 Raw NanoAOD ROOT files
          │
          ▼
@@ -121,7 +122,7 @@ All TAFs share the same decorator pattern and lifecycle. See [02 Coding Style](0
 
 ## Directory Structure of an Analysis
 
-```
+```text
 myanalysis/
 ├── analysis/
 │   └── my_analysis.py        # Creates Analysis, Campaign, Config objects
@@ -157,7 +158,7 @@ myanalysis/
 
 ### Hierarchy
 
-```
+```text
 Analysis  ─── top-level container (rarely holds analysis logic itself)
   └── Config  ─── analysis + campaign combination; carries all per-config settings
         └── Campaign  ─── experimental period (year, energy, tier, file locations)
@@ -349,7 +350,7 @@ cfg.add_shift(name="tune_up", id=20, type=od.Shift.SHAPE, tags={"disjoint_from_n
 
 ## Data Flow Summary
 
-```
+```text
 ROOT files  →  chunks of ak.Array named "events"
                      │
                 [Calibrator]   adds corrected columns (never removes)

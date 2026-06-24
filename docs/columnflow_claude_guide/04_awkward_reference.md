@@ -3,6 +3,7 @@
 Columnflow event data is stored as `ak.Array` named `events`. Fields like `events.Jet` are collections (variable-length sub-arrays); scalar fields like `events.MET.pt` are uniform arrays over events.
 
 Always import awkward via `maybe_import`:
+
 ```python
 from columnflow.util import maybe_import
 ak = maybe_import("awkward")

@@ -4,7 +4,7 @@
 
 A typical analysis module tree mirrors columnflow's own structure:
 
-```
+```text
 myanalysis/
 ├── analysis/
 │   └── my_analysis.py         # Analysis + Campaign + Config definitions

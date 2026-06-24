@@ -38,6 +38,7 @@ law run cf.GetDatasetLFNs --version dev1 --dataset tt_dl_powheg --print-output 0
 ```
 
 **Tips:**
+
 - Run this first for all datasets before starting the pipeline.
 - If your datasets are stored locally or on a custom SE, configure `cfg.x.get_dataset_lfns` to bypass DAS.
 - For debugging, add `--branch 0` to retrieve only the first file entry.
