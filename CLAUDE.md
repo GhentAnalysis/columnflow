@@ -1,24 +1,24 @@
-# Columnflow Project — Claude Instructions
+# Columnflow Project
 
-This is a **columnflow** analysis project. Columnflow is a fully orchestrated columnar HEP analysis framework built on [law](https://github.com/riga/law) (workflow orchestration) and [order](https://github.com/riga/order) (metadata management), using [awkward-array](https://awkward-array.org) for columnar event data.
+Backend for columnar, fully orchestrated HEP analyses with [law](https://github.com/riga/law) (workflow orchestration), [order](https://github.com/riga/order) (metadata), and [awkward-array](https://awkward-array.org) (columnar event data).
 
-Read all five guide files before writing or modifying any code:
+## Always-loaded rules (in `.claude/rules/`)
 
-| Guide | Contents |
-|---|---|
-| [01 Framework Structure](docs/columnflow_claude_guide/01_framework_structure.md) | Big picture, analysis pipeline, task graph, config objects (Analysis/Campaign/Config), systematics |
-| [02 Coding Style](docs/columnflow_claude_guide/02_coding_style.md) | TAF decorators, uses/produces, imports, module registration, naming conventions |
-| [03 Task User Guide](docs/columnflow_claude_guide/03_task_commands.md) | Per-task explanation, `law run` commands, key parameters, tips |
-| [04 Awkward Reference](docs/columnflow_claude_guide/04_awkward_reference.md) | Key `ak.*` functions used in columnflow code |
-| [05 Dos and Don'ts](docs/columnflow_claude_guide/05_dos_and_donts.md) | Common mistakes and best practices for new users |
-| [06 Custom Tasks](docs/columnflow_claude_guide/06_custom_tasks.md) | Writing Selectors, Producers, Calibrators, HistProducers, Categorizers, custom law tasks |
+- **01-pipeline.md** — task order, 5 TAF types, law.cfg module registration
+- **02-invariants.md** — set_ak_column, uses/produces, imports, Selector return type, MC guard, keep_columns, no loops
 
-## Quick orientation
+Path-scoped rules load automatically when Claude works with files in the corresponding directory:
+`selection/`, `production/`, `calibration/`, `config/`, `categorization/`, `histogramming/`, `inference/`
 
-- All data operations act on **chunks** of events encoded as `ak.Array` named `events`.
-- Task array functions (TAFs): `Calibrator`, `Selector`, `Producer`, `Reducer`, `HistProducer`.
-- Each TAF declares `uses` (columns to read) and `produces` (columns to write) in its decorator.
-- Events are **never modified in-place** — always use `set_ak_column(events, "FieldName", value)` and reassign `events`.
-- The standard pipeline order: `GetDatasetLFNs → CalibrateEvents → SelectEvents → ReduceEvents → ProduceColumns → CreateHistograms → PlotVariables1D`.
-- All tasks are run with `law run cf.<TaskName> --version <name> [--config <cfg>] [...]`.
-- New Python modules must be registered in `law.cfg` under the correct `*_modules` key.
+## Commands
+
+```bash
+law run cf.<TaskName> --version <name> [--config <cfg>] [--dataset <name>] [--branch 0]
+law run cf.PlotVariables1D --version dev1 --processes tt --variables jet1_pt --print-status -1
+law run cf.SelectEvents    --version dev1 --dataset tt_dl_powheg --remove-output 0,a,y
+```
+
+## User guide
+
+Full documentation for users is in `docs/columnflow_claude_guide/`:
+`01_framework_structure.md` · `02_coding_style.md` · `03_task_commands.md` · `04_awkward_reference.md` · `05_dos_and_donts.md` · `06_custom_tasks.md`
