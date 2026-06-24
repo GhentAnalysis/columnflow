@@ -91,6 +91,7 @@ def plot_variable_stack(
         hists,
         shape_norm=shape_norm,
         shift_insts=shift_insts,
+        density=density,
         **kwargs,
     )
 
@@ -326,7 +327,7 @@ def plot_shifted_variable(
     if legend_title:
         default_style_config["legend_cfg"]["title"] = legend_title
     if shape_norm:
-        style_config["ax_cfg"]["ylabel"] = "Normalized entries"
+        default_style_config["ax_cfg"]["ylabel"] = "Normalized entries"
     style_config = law.util.merge_dicts(
         default_style_config,
         process_style_config,

@@ -25,6 +25,7 @@ from columnflow.histogramming import HistProducer
 from columnflow.ml import MLModel
 from columnflow.inference import InferenceModel
 from columnflow.columnar_util import Route, ColumnCollection, ChunkedIOHandler, TaskArrayFunction
+from columnflow.config_util import expand_shift_sources
 from columnflow.util import maybe_import, DotDict, get_docs_url, get_code_url
 from columnflow.types import Callable
 from columnflow.timing import Timer
@@ -97,8 +98,9 @@ class CalibratorClassMixin(ArrayFunctionClassMixin):
     def get_config_lookup_keys(
         cls,
         inst_or_params: CalibratorClassMixin | dict[str, Any],
+        significant: bool = False,
     ) -> law.util.InsertiableDict:
-        keys = super().get_config_lookup_keys(inst_or_params)
+        keys = super().get_config_lookup_keys(inst_or_params, significant=significant)
 
         # add the calibrator name
         calibrator = (
@@ -314,8 +316,9 @@ class CalibratorClassesMixin(ArrayFunctionClassMixin):
     def get_config_lookup_keys(
         cls,
         inst_or_params: CalibratorClassesMixin | dict[str, Any],
+        significant: bool = False,
     ) -> law.util.InsertiableDict:
-        keys = super().get_config_lookup_keys(inst_or_params)
+        keys = super().get_config_lookup_keys(inst_or_params, significant=significant)
 
         # add the calibrator names
         calibrators = (
@@ -500,8 +503,9 @@ class SelectorClassMixin(ArrayFunctionClassMixin):
     def get_config_lookup_keys(
         cls,
         inst_or_params: SelectorClassMixin | dict[str, Any],
+        significant: bool = False,
     ) -> law.util.InsertiableDict:
-        keys = super().get_config_lookup_keys(inst_or_params)
+        keys = super().get_config_lookup_keys(inst_or_params, significant=significant)
 
         # add the selector name
         selector = (
@@ -716,8 +720,9 @@ class ReducerClassMixin(ArrayFunctionClassMixin):
     def get_config_lookup_keys(
         cls,
         inst_or_params: ReducerClassMixin | dict[str, Any],
+        significant: bool = False,
     ) -> law.util.InsertiableDict:
-        keys = super().get_config_lookup_keys(inst_or_params)
+        keys = super().get_config_lookup_keys(inst_or_params, significant=significant)
 
         # add the reducer name
         reducer = (
@@ -767,7 +772,13 @@ class ReducerMixin(ArrayFunctionInstanceMixin, ReducerClassMixin):
 
     @classmethod
     def get_reducer_dict(cls, params: dict[str, Any]) -> dict[str, Any]:
-        return cls.get_array_function_dict(params)
+        d = cls.get_array_function_dict(params)
+
+        # special case: add selector shifts
+        if (selector_inst := params.get("selector_inst")):
+            d["selector_shifts"] = selector_inst.all_shifts
+
+        return d
 
     @classmethod
     def build_reducer_inst(
@@ -909,8 +920,9 @@ class ProducerClassMixin(ArrayFunctionClassMixin):
     def get_config_lookup_keys(
         cls,
         inst_or_params: ProducerClassMixin | dict[str, Any],
+        significant: bool = False,
     ) -> law.util.InsertiableDict:
-        keys = super().get_config_lookup_keys(inst_or_params)
+        keys = super().get_config_lookup_keys(inst_or_params, significant=significant)
 
         # add the producer name
         producer = (
@@ -1126,8 +1138,9 @@ class ProducerClassesMixin(ArrayFunctionClassMixin):
     def get_config_lookup_keys(
         cls,
         inst_or_params: ProducerClassesMixin | dict[str, Any],
+        significant: bool = False,
     ) -> law.util.InsertiableDict:
-        keys = super().get_config_lookup_keys(inst_or_params)
+        keys = super().get_config_lookup_keys(inst_or_params, significant=significant)
 
         # add the producer names
         producers = (
@@ -1344,8 +1357,9 @@ class MLModelMixinBase(ConfigTask):
     def get_config_lookup_keys(
         cls,
         inst_or_params: MLModelMixinBase | dict[str, Any],
+        significant: bool = False,
     ) -> law.util.InsertiableDict:
-        keys = super().get_config_lookup_keys(inst_or_params)
+        keys = super().get_config_lookup_keys(inst_or_params, significant=significant)
 
         # add the ml model name
         ml_model = (
@@ -1689,8 +1703,9 @@ class MLModelsMixin(ConfigTask):
     def get_config_lookup_keys(
         cls,
         inst_or_params: MLModelsMixin | dict[str, Any],
+        significant: bool = False,
     ) -> law.util.InsertiableDict:
-        keys = super().get_config_lookup_keys(inst_or_params)
+        keys = super().get_config_lookup_keys(inst_or_params, significant=significant)
 
         # add the ml model names
         ml_models = (
@@ -1754,8 +1769,9 @@ class HistProducerClassMixin(ArrayFunctionClassMixin):
     def get_config_lookup_keys(
         cls,
         inst_or_params: HistProducerClassMixin | dict[str, Any],
+        significant: bool = False,
     ) -> law.util.InsertiableDict:
-        keys = super().get_config_lookup_keys(inst_or_params)
+        keys = super().get_config_lookup_keys(inst_or_params, significant=significant)
 
         # add the hist producer name
         producer = (
@@ -2036,6 +2052,7 @@ class CategoriesMixin(ConfigTask):
 
     default_categories = None
     allow_empty_categories = False
+    sort_categories = True
 
     @classmethod
     def resolve_param_values_post_init(cls, params: dict[str, Any]) -> dict[str, Any]:
@@ -2073,15 +2090,26 @@ class CategoriesMixin(ConfigTask):
             if not categories and not cls.allow_empty_categories:
                 raise ValueError(f"no categories found matching {params['categories']}")
 
+            # sort them
+            if cls.sort_categories:
+                categories = sorted(categories)
+
             params["categories"] = tuple(categories)
 
         return params
 
+    @classmethod
+    def _categories_repr(cls, categories: Sequence[str]) -> str:
+        # single category representation
+        if len(categories) == 1:
+            return cls.build_repr(categories[0])
+
+        # full representation
+        return cls.build_repr(categories, prepend_count=True)
+
     @property
     def categories_repr(self) -> str:
-        if len(self.categories) == 1:
-            return self.build_repr(self.categories[0])
-        return self.build_repr(self.categories, prepend_count=True)
+        return self._categories_repr(self.categories)
 
 
 class VariablesMixin(ConfigTask):
@@ -2124,7 +2152,7 @@ class VariablesMixin(ConfigTask):
                     multi_strategy="union",
                 )
                 # since there can be multi-dimensional variables, resolve each part separately
-                resolved_variables = set()
+                resolved_variables = []
                 for variable in variables:
                     resolved_parts = [
                         cls.find_config_objects(
@@ -2137,8 +2165,8 @@ class VariablesMixin(ConfigTask):
                         for part in cls.split_multi_variable(variable)
                     ]
                     # build combinatrics
-                    resolved_variables.update(map(cls.join_multi_variable, itertools.product(*resolved_parts)))
-                variables = resolved_variables
+                    resolved_variables.extend(map(cls.join_multi_variable, itertools.product(*resolved_parts)))
+                variables = law.util.make_unique(resolved_variables)
 
             # when still empty, fallback to using all known variables
             if not variables:
@@ -2168,6 +2196,15 @@ class VariablesMixin(ConfigTask):
         """
         return "-".join(map(str, variables))
 
+    @classmethod
+    def _variables_repr(cls, variables: Sequence[str]) -> str:
+        # simplified representation for single source
+        if len(variables) == 1:
+            return cls.build_repr(variables[0])
+
+        # full representation
+        return cls.build_repr(sorted(variables), prepend_count=True)
+
     def __init__(self, *args, **kwargs) -> None:
         super().__init__(*args, **kwargs)
 
@@ -2179,140 +2216,7 @@ class VariablesMixin(ConfigTask):
 
     @property
     def variables_repr(self) -> str:
-        if len(self.variables) == 1:
-            return self.build_repr(self.variables[0])
-        return self.build_repr(sorted(self.variables), prepend_count=True)
-
-
-class DatasetsMixin(ConfigTask):
-
-    datasets = law.CSVParameter(
-        default=(),
-        description="comma-separated dataset names or patterns to select; can also be the key of a mapping defined in "
-        "the 'dataset_groups' auxiliary data of the config; when empty, uses all datasets registered in the config "
-        "that contain any of the selected --processes; empty default",
-        brace_expand=True,
-        parse_empty=True,
-    )
-    datasets_multi = law.MultiCSVParameter(
-        default=(),
-        description="multiple comma-separated dataset names or patters to select per config object, each separated by "
-        "a colon; when only one sequence is passed, it is applied to all configs; values can also be the key of a "
-        "mapping defined in " "the 'dataset_groups' auxiliary data of the specific config; when empty, uses all "
-        "datasets registered in the config that contain any of the selected --processes; empty default",
-        brace_expand=True,
-        parse_empty=True,
-    )
-
-    allow_empty_datasets = False
-
-    @classmethod
-    def modify_task_attributes(cls) -> None:
-        super().modify_task_attributes()
-        # single/multi config adjustments in case the switch has been specified
-        if isinstance(cls.single_config, bool) and getattr(cls, "datasets_multi", None) is not None:
-            if not cls.has_single_config():
-                cls.datasets = cls.datasets_multi
-                cls.processes = cls.processes_multi
-            cls.datasets_multi = None
-
-    @classmethod
-    def resolve_datasets(cls, config_inst: od.Config, datasets: Any) -> tuple[list[str], list[str]]:
-        """
-        helper to resolve processes and datasets for one config
-        """
-        if datasets:
-            datasets_orig = datasets
-            datasets = cls.find_config_objects(
-                names=datasets,
-                container=config_inst,
-                object_cls=od.Dataset,
-                groups_str="dataset_groups",
-            )
-            if not datasets and not cls.allow_empty_datasets:
-                raise ValueError(f"no datasets found matching {datasets_orig}")
-
-        return datasets
-
-    @classmethod
-    def resolve_param_values_pre_init(cls, params: dict[str, Any]) -> dict[str, Any]:
-        params = super().resolve_param_values_pre_init(params)
-
-        # get processes and datasets
-        single_config = cls.has_single_config()
-        datasets = (params.get("datasets", law.no_value),) if single_config else params.get("datasets", ())
-
-        # "broadcast" to match number of configs
-        config_insts = params.get("config_insts")
-
-        # perform resolution per config
-        multi_datasets = []
-        for config_inst, _datasets in zip(config_insts, datasets):
-            _datasets = cls.resolve_datasets(config_inst, _datasets)
-            multi_datasets.append(tuple(_datasets) if _datasets != law.no_value else None)
-
-        params["datasets"] = multi_datasets[0] if single_config else tuple(multi_datasets)
-
-        # store instances
-        params["dataset_insts"] = {
-            config_inst: datasets and list(map(config_inst.get_dataset, datasets))
-            for config_inst, datasets in zip(config_insts, multi_datasets)
-        }
-        return params
-
-    @classmethod
-    def resolve_instances(cls, params: dict[str, Any], shifts: TaskShifts) -> dict[str, Any]:
-        if not cls.resolution_task_cls:
-            raise ValueError(f"resolution_task_cls must be set for multi-config task {cls.task_family}")
-
-        cls.get_known_shifts(params, shifts)
-
-        # we loop over all configs/datasets, but return initial params
-        for i, config_inst in enumerate(params["config_insts"]):
-            if cls.has_single_config():
-                datasets = params["datasets"]
-            else:
-                datasets = params["datasets"][i]
-
-            for dataset in datasets:
-                # NOTE: we need to copy here, because otherwise taf inits will only be triggered once
-                _params = {
-                    **params,
-                    "config_inst": config_inst,
-                    "config": config_inst.name,
-                    "dataset": dataset,
-                }
-                logger_dev.debug(f"building taf insts for {config_inst.name}, {dataset}")
-                cls.resolution_task_cls.resolve_instances(_params, shifts)
-                cls.resolution_task_cls.get_known_shifts(_params, shifts)
-
-        params["known_shifts"] = shifts
-
-        return params
-
-    @classmethod
-    def get_known_shifts(
-            cls,
-            params: dict[str, Any],
-            shifts: TaskShifts,
-    ) -> None:
-        """
-        Updates the set of known *shifts* implemented by *this* and upstream tasks.
-
-        :param params: Dictionary of task parameters.
-        :param shifts: TaskShifts object to adjust.
-        """
-        # add shifts of all datasets to upstream ones
-        for config_inst, dataset_insts in params["dataset_insts"].items():
-            for dataset_inst in dataset_insts:
-                if dataset_inst.is_mc:
-                    shifts.upstream |= set(dataset_inst.info.keys())
-
-        super().get_known_shifts(params, shifts)
-
-    @property
-    def datasets_repr(self) -> str:
-        return self._multi_sequence_repr(self.datasets, sort=True)
+        return self._variables_repr(self.variables)
 
 
 class DatasetsProcessesMixin(ConfigTask):
@@ -2372,8 +2276,13 @@ class DatasetsProcessesMixin(ConfigTask):
 
         # helper to resolve processes and datasets for one config
         def resolve(config_inst: od.Config, processes: Any, datasets: Any) -> tuple[list[str], list[str]]:
+<<<<<<< HEAD
             if processes != law.no_value:
                 processes_orig = processes
+=======
+            processes_orig = processes
+            if processes != law.no_value:
+>>>>>>> origin/GhentAnalysis/upstream_merge_with_master
                 if processes:
                     processes = cls.find_config_objects(
                         names=processes,
@@ -2412,6 +2321,24 @@ class DatasetsProcessesMixin(ConfigTask):
                         object_cls=od.Dataset,
                         groups_str="dataset_groups",
                     )
+<<<<<<< HEAD
+=======
+                    # reduce processes to those present in selected datasets when none were given initially
+                    if datasets and processes and processes_orig in {law.no_value, ()}:
+                        def use_process_for_dataset(process_inst: od.Process, dataset_inst: od.Dataset) -> bool:
+                            return (
+                                dataset_inst.has_process(process_inst) or
+                                process_inst.has_process(dataset_inst.processes.get_first())
+                            )
+                        dataset_insts = list(map(config_inst.get_dataset, datasets))
+                        processes = tuple(
+                            process for process in processes
+                            if any(
+                                use_process_for_dataset(config_inst.get_process(process), dataset_inst)
+                                for dataset_inst in dataset_insts
+                            )
+                        )
+>>>>>>> origin/GhentAnalysis/upstream_merge_with_master
                 elif processes and processes != law.no_value:
                     # pick all datasets that contain any of the requested (sub)processes
                     sub_process_insts = sum((
@@ -2524,12 +2451,37 @@ class ShiftSourcesMixin(ConfigTask):
     shift_sources = law.CSVParameter(
         default=(),
         description="comma-separated shift source names (without direction) or patterns to select; can also be the key "
+<<<<<<< HEAD
         "of a mapping defined in the 'shift_group' auxiliary data of the config; default: ()",
+=======
+        "of a mapping defined in the 'shift_group' auxiliary data of the config; empty default",
+>>>>>>> origin/GhentAnalysis/upstream_merge_with_master
         brace_expand=True,
         parse_empty=True,
     )
 
     allow_empty_shift_sources = False
+<<<<<<< HEAD
+=======
+    sort_shift_sources = True
+    enforce_nominal_shift_source = False
+    remove_nominal_shift_source = False
+
+    @classmethod
+    def modify_param_values(cls, params: dict[str, Any]) -> dict[str, Any]:
+        params = super().modify_param_values(params)
+
+        # enforce/remove nominal shift source
+        if params.get("shift_sources") is not None:
+            if cls.enforce_nominal_shift_source and "nominal" not in params["shift_sources"]:
+                params["shift_sources"] = ("nominal",) + tuple(params["shift_sources"])
+            elif cls.remove_nominal_shift_source and "nominal" in params["shift_sources"]:
+                params["shift_sources"] = tuple(
+                    source for source in params["shift_sources"] if source != "nominal"
+                )
+
+        return params
+>>>>>>> origin/GhentAnalysis/upstream_merge_with_master
 
     @classmethod
     def resolve_param_values_post_init(cls, params: dict[str, Any]) -> dict[str, Any]:
@@ -2538,7 +2490,11 @@ class ShiftSourcesMixin(ConfigTask):
         # resolve shift sources
         if (container := cls._get_config_container(params)) and "shift_sources" in params:
             shifts = cls.find_config_objects(
+<<<<<<< HEAD
                 names=cls.expand_shift_sources(params["shift_sources"]),
+=======
+                names=expand_shift_sources(params["shift_sources"]),
+>>>>>>> origin/GhentAnalysis/upstream_merge_with_master
                 container=container,
                 object_cls=od.Shift,
                 groups_str="shift_groups",
@@ -2550,12 +2506,20 @@ class ShiftSourcesMixin(ConfigTask):
             if shifts:
                 sources = cls.reduce_shifts(shifts)
 
+<<<<<<< HEAD
                 # # reduce shifts based on known shifts
+=======
+                # reduce shifts based on known shifts
+>>>>>>> origin/GhentAnalysis/upstream_merge_with_master
                 if "known_shifts" not in params:
                     raise ValueError("known_shifts must be set before resolving shift sources")
                 sources = [
                     source for source in sources
+<<<<<<< HEAD
                     if (
+=======
+                    if source == "nominal" or (
+>>>>>>> origin/GhentAnalysis/upstream_merge_with_master
                         f"{source}_up" in params["known_shifts"].upstream and
                         f"{source}_down" in params["known_shifts"].upstream
                     )
@@ -2565,22 +2529,33 @@ class ShiftSourcesMixin(ConfigTask):
             if not sources and not cls.allow_empty_shift_sources:
                 raise ValueError(f"no shifts found matching {params['shift_sources']}")
 
+<<<<<<< HEAD
+=======
+            # potentially sort them
+            if cls.sort_shift_sources:
+                sources = sorted(sources)
+
+>>>>>>> origin/GhentAnalysis/upstream_merge_with_master
             # store them
             params["shift_sources"] = tuple(sources)
 
         return params
 
     @classmethod
+<<<<<<< HEAD
     def expand_shift_sources(cls, sources: Sequence[str] | set[str]) -> list[str]:
         return sum(([f"{s}_up", f"{s}_down"] for s in sources), [])
 
     @classmethod
+=======
+>>>>>>> origin/GhentAnalysis/upstream_merge_with_master
     def reduce_shifts(cls, shifts: Sequence[str] | set[str]) -> list[str]:
         return list(set(od.Shift.split_name(shift)[0] for shift in shifts))
 
     def __init__(self, *args, **kwargs) -> None:
         super().__init__(*args, **kwargs)
 
+<<<<<<< HEAD
         self.shifts = self.expand_shift_sources(self.shift_sources)
 
     @property
@@ -2590,6 +2565,43 @@ class ShiftSourcesMixin(ConfigTask):
         if len(self.shift_sources) == 1:
             return self.build_repr(self.shift_sources[0])
         return self.build_repr(sorted(self.shift_sources), prepend_count=True)
+=======
+        self.shifts = expand_shift_sources(self.shift_sources)
+
+    @classmethod
+    def _shift_sources_repr(
+        cls,
+        shift_sources: tuple[str, ...] | None,
+        enforce_nominal_shift_source: bool = False,
+    ) -> str:
+        if not shift_sources:
+            return "none"
+
+        # when nominal is the only source, but it is enforced to be present, also show "none" as in "no additional" ones
+        if enforce_nominal_shift_source and tuple(shift_sources) == ("nominal",):
+            return "none"
+
+        # sort shift sources, moving nominal to front if present, but dropping it if enforced
+        sorted_sources = sorted(shift_sources)
+        if "nominal" in sorted_sources:
+            sorted_sources.remove("nominal")
+            if not enforce_nominal_shift_source:
+                sorted_sources.insert(0, "nominal")
+
+        # simplified representation for single source
+        if len(sorted_sources) == 1:
+            return cls.build_repr(sorted_sources[0])
+
+        # full representation
+        return cls.build_repr(sorted_sources, prepend_count=True)
+
+    @property
+    def shift_sources_repr(self) -> str:
+        return self._shift_sources_repr(
+            self.shift_sources,
+            enforce_nominal_shift_source=self.enforce_nominal_shift_source,
+        )
+>>>>>>> origin/GhentAnalysis/upstream_merge_with_master
 
     def store_parts(self) -> law.util.InsertableDict:
         parts = super().store_parts()
@@ -2604,7 +2616,11 @@ class DatasetShiftSourcesMixin(ShiftSourcesMixin, DatasetTask):
     effective_shift = None
     allow_empty_shift = True
 
+<<<<<<< HEAD
     # allow empty sources, i.e., using only nominal
+=======
+    # allow empty sources
+>>>>>>> origin/GhentAnalysis/upstream_merge_with_master
     allow_empty_shift_sources = True
 
 
@@ -2797,6 +2813,7 @@ class HistHookMixin(ConfigTask):
         ]
 
         return self.build_repr(names)
+<<<<<<< HEAD
 
 
 class MergeHistogramMixin(
@@ -2978,3 +2995,5 @@ class ParamsCacheMixin:
                     )
 
         return out if no_cached_params or first_call else list(cached_out.items())
+=======
+>>>>>>> origin/GhentAnalysis/upstream_merge_with_master

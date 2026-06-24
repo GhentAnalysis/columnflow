@@ -13,8 +13,8 @@ import json
 import pickle
 
 import awkward as ak
-import numpy as np  # noqa
 
+from columnflow.columnar_util import update_ak_array, ChunkedIOHandler
 from columnflow.util import ipython_shell
 from columnflow.types import Any
 
@@ -35,11 +35,9 @@ def _load_parquet(fname: str, **kwargs) -> ak.Array:
 
 def _load_nano_root(fname: str, treepath: str | None = None, **kwargs) -> ak.Array:
     import uproot
-    import coffea.nanoevents
-
-    source = uproot.open(fname)
 
     # get the default treepath
+    source = uproot.open(fname)
     if treepath is None:
         for treepath in ["events", "Events"] + list(source.keys()):
             treepath = treepath.split(";", 1)[0]
@@ -48,24 +46,13 @@ def _load_nano_root(fname: str, treepath: str | None = None, **kwargs) -> ak.Arr
                 break
         else:
             raise ValueError(f"no default treepath determined in {fname}")
-    try:
-        return coffea.nanoevents.NanoEventsFactory.from_root(
-            source,
-            treepath=treepath,
-            delayed=False,
-            runtime_cache=None,
-            persistent_cache=None,
-        ).events()
-    except:
-        return uproot.open(fname)
 
-    return coffea.nanoevents.NanoEventsFactory.from_root(
-        source,
-        treepath=treepath,
-        mode="eager",
-        runtime_cache=None,
-        persistent_cache=None,
-    ).events()
+    # load the tree
+    tree = source[treepath]
+
+    # use the io handler to load arrays and attach nano schema
+    chunk_pos = ChunkedIOHandler.create_chunk_position(tree.num_entries, tree.num_entries, 0)
+    return ChunkedIOHandler.read_coffea_root(tree, chunk_pos)
 
 
 def load(fname: str, **kwargs) -> Any:
@@ -112,12 +99,47 @@ if __name__ == "__main__":
     )
 
     ap.register("action", "help", argparse._HelpAction)
-    ap.add_argument("files", metavar="FILE", nargs="*", help="one or more supported files")
-    ap.add_argument("--events", "-e", action="store_true", help="assume files to contain event info")
-    ap.add_argument("--hists", "-h", action="store_true", help="assume files to contain histograms")
-    ap.add_argument("--treepath", "-t", type=str, help="name of the tree in ROOT files")
-    ap.add_argument("--list", "-l", action="store_true", help="list contents of the loaded file")
-    ap.add_argument("--help", action="help", help="show this help message and exit")
+    ap.add_argument(
+        "files",
+        metavar="FILE",
+        nargs="+",
+        help="one or more supported files",
+    )
+    ap.add_argument(
+        "--events",
+        "-e",
+        action="store_true",
+        help="assume files to contain event info",
+    )
+    ap.add_argument(
+        "--hists",
+        "-h",
+        action="store_true",
+        help="assume files to contain histograms",
+    )
+    ap.add_argument(
+        "--treepath",
+        "-t",
+        type=str,
+        help="name of the tree in ROOT files",
+    )
+    ap.add_argument(
+        "--list",
+        "-l",
+        action="store_true",
+        help="list contents of the loaded file",
+    )
+    ap.add_argument(
+        "--merge-columns",
+        "-m",
+        action="store_true",
+        help="merge columns of multiple files into one array",
+    )
+    ap.add_argument(
+        "--help",
+        action="help",
+        help="show this help message and exit",
+    )
 
     args = ap.parse_args()
 
@@ -125,6 +147,9 @@ if __name__ == "__main__":
         "treepath": args.treepath,
     }
     objects = [load(fname, **load_kwargs) for fname in args.files]
+
+    if len(objects) > 1 and args.merge_columns:
+        objects = [update_ak_array(objects[0], *objects[1:])]
     if len(objects) == 1:
         objects = objects[0]
     print("file content loaded into variable 'objects'")

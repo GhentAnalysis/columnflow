@@ -349,6 +349,8 @@ def normalization_weights_init(self: Producer, **kwargs) -> None:
     """
     Initializes the normalization weights producer by setting up the normalization weight column.
     """
+    super(normalization_weights, self).init_func(**kwargs)
+
     # declare the weight name to be a produced column
     self.produces.add(self.weight_name)
 
@@ -376,6 +378,8 @@ def normalization_weights_requires(
     """
     Adds the requirements needed by the underlying py:attr:`task` to access selection stats into *reqs*.
     """
+    super(normalization_weights, self).requires_func(task=task, reqs=reqs, **kwargs)
+
     # check that all datasets are known
     for dataset in self.required_datasets:
         if not self.config_inst.has_dataset(dataset):
@@ -410,10 +414,15 @@ def normalization_weights_setup(
             This weight is defined as the product of the luminosity, the cross section, divided by the sum of event
             weights per process.
         - py: attr: `known_process_ids`: A set of all process ids that are known by the lookup table.
-        - py: attr: `process_weight_table`: A sparse array serving as a lookup table for the calculated process weights.
-            This weight is defined as the product of the luminosity, the cross section, divided by the sum of event
-            weights per process.
     """
+    super(normalization_weights, self).setup_func(
+        task=task,
+        reqs=reqs,
+        inputs=inputs,
+        reader_targets=reader_targets,
+        **kwargs,
+    )
+
     import scipy.sparse
 
     # load the selection stats
@@ -489,7 +498,7 @@ def normalization_weights_setup(
         )
 
     # setup the event weight lookup table
-    process_weight_table = scipy.sparse.lil_matrix((max(process_ids) + 1, 1), dtype=np.float32)
+    process_weight_table = scipy.sparse.dok_matrix((max(process_ids) + 1, 1), dtype=np.float32)
 
     def fill_weight_table(process_inst: od.Process, xsec: float, sum_weights: float) -> None:
         if sum_weights == 0:
@@ -507,7 +516,13 @@ def normalization_weights_setup(
 
     # prepare info for the inclusive dataset
     inclusive_proc = self.inclusive_dataset.processes.get_first()
-    inclusive_xsec = inclusive_proc.get_xsec(self.config_inst.campaign.ecm).nominal
+    try:
+        inclusive_xsec = inclusive_proc.get_xsec(self.config_inst.campaign.ecm).nominal
+    except KeyError as e:
+        raise KeyError(
+            f"no cross section registered for inclusive process {inclusive_proc} for center-of-mass energy of "
+            f"{self.config_inst.campaign.ecm}",
+        ) from e
 
     # compute the weight the inclusive dataset would have on its own without stitching
     if self.allow_stitching and self.dataset_inst == self.inclusive_dataset:

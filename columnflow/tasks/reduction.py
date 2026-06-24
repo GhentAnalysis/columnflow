@@ -18,7 +18,7 @@ from columnflow.tasks.framework.remote import RemoteWorkflow
 from columnflow.tasks.framework.decorators import on_failure
 from columnflow.tasks.external import GetDatasetLFNs
 from columnflow.tasks.selection import CalibrateEvents, SelectEvents
-from columnflow.util import maybe_import, ensure_proxy, dev_sandbox, safe_div
+from columnflow.util import maybe_import, ensure_proxy, dev_sandbox, safe_div, DotDict
 from columnflow.types import Any
 
 ak = maybe_import("awkward")
@@ -63,21 +63,17 @@ class ReduceEvents(_ReduceEvents):
 
         reqs["lfns"] = self.reqs.GetDatasetLFNs.req(self)
 
-        if not self.pilot:
-            reqs["calibrations"] = [
-                self.reqs.CalibrateEvents.req(
-                    self,
-                    calibrator=calibrator_inst.cls_name,
-                    calibrator_inst=calibrator_inst,
-                )
-                for calibrator_inst in self.calibrator_insts
-                if calibrator_inst.produced_columns
-            ]
-            reqs["selection"] = self.reqs.SelectEvents.req(self)
-        else:
-            # pass-through pilot workflow requirements of upstream task
-            t = self.reqs.SelectEvents.req(self)
-            law.util.merge_dicts(reqs, t.workflow_requires(), inplace=True)
+        # depending on pilot flag, add upstream workflows or pass-through their own requirements only
+        reqs["calibrations"] = list(map(self.pilot_workflow_requires, (
+            self.reqs.CalibrateEvents.req(
+                self,
+                calibrator=calibrator_inst.cls_name,
+                calibrator_inst=calibrator_inst,
+            )
+            for calibrator_inst in self.calibrator_insts
+            if calibrator_inst.produced_columns
+        )))
+        reqs["selection"] = self.pilot_workflow_requires(self.reqs.SelectEvents.req(self))
 
         # add reducer dependent requirements
         reqs["reducer"] = law.util.make_unique(law.util.flatten(self.reducer_inst.run_requires(task=self)))
@@ -141,6 +137,19 @@ class ReduceEvents(_ReduceEvents):
             inputs=luigi.task.getpaths(reducer_reqs),
         )
 
+        # special case for reducers: issue a warning in case the upstream selector has shifts registered that are not
+        # known to the reducer, meaning that requested shifts would be known as global but not local ones, leading to
+        # the nominal behavior in the event chunk loop below, especially regarding alias handling
+        if (missing_reducer_shifts := self.selector_inst.all_shifts - self.reducer_inst.all_shifts):
+            self.logger.warning(
+                f"the upstream selector '{self.selector_inst.cls_name}' has {len(missing_reducer_shifts)} shifts "
+                f"registered that are not known to this reducer '{self.reducer_inst.cls_name}'; please check your "
+                "reducer as this is probably a misconfiguration and can lead to mismatches between event selection and "
+                "reduction, especially when shift-specific aliases are to be applied; missing shifts:\n"
+                f"{', '.join(sorted(missing_reducer_shifts))}",
+            )
+
+
         # create a temp dir for saving intermediate files
         tmp_dir = law.LocalDirectoryTarget(is_tmp=True)
         tmp_dir.touch()
@@ -176,11 +185,13 @@ class ReduceEvents(_ReduceEvents):
         n_all = 0
         n_reduced = 0
 
-        # let the lfn_task prepare the nano file (basically determine a good pfn)
-        [(lfn_index, input_file)] = lfn_task.iter_nano_files(self)
+        # let the lfn_task locate and prepare the nano file(s)
+        nano_input = [nano_target for _, nano_target in lfn_task.iter_nano_files(self)]
+        if len(nano_input) == 1:
+            nano_input = nano_input[0]
 
         # collect input targets
-        input_targets = [input_file]
+        input_targets = [nano_input]
         input_targets.append(inputs["selection"]["results"])
         input_targets.extend([inp["columns"] for inp in inputs["calibrations"]])
         if self.selector_inst.produced_columns:
@@ -191,7 +202,7 @@ class ReduceEvents(_ReduceEvents):
         with law.localize_file_targets(input_targets, mode="r") as inps:
             # iterate over chunks of events and diffs
             for (events, sel, *diffs), pos in self.iter_chunked_io(
-                [inp.abspath for inp in inps],
+                law.util.map_struct(law.target.file.get_path, inps),
                 source_type=["coffea_root"] + (len(inps) - 1) * ["awkward_parquet"],
                 read_columns=[read_columns, read_sel_columns] + (len(inps) - 2) * [read_columns],
                 chunk_size=self.reducer_inst.get_min_chunk_size(),
@@ -230,7 +241,7 @@ class ReduceEvents(_ReduceEvents):
                     self.raise_if_not_finite(events)
 
                 # save as parquet via a thread in the same pool
-                chunk = tmp_dir.child(f"file_{lfn_index}_{pos.index}.parquet", type="f")
+                chunk = tmp_dir.child(f"file_{pos.index}.parquet", type="f")
                 output_chunks[pos.index] = chunk
                 self.chunked_io.queue(sorted_ak_to_parquet, (ak.to_packed(events), chunk.abspath))
 
@@ -328,6 +339,14 @@ class MergeReductionStats(_MergeReductionStats):
 
         return params
 
+    def __init__(self, *args, **kwargs) -> None:
+        super().__init__(*args, **kwargs)
+
+        # cap n_inputs
+        n_merged_files = self.n_merged_files
+        if self.n_inputs < 0 or self.n_inputs > n_merged_files:
+            self.n_inputs = n_merged_files
+
     def create_branch_map(self):
         # single branch without payload
         return {0: None}
@@ -402,13 +421,17 @@ class MergeReductionStats(_MergeReductionStats):
         stats["max_size_merged"] = self.merged_size * 1024**2  # MB to bytes
 
         # determine the number of files after merging, allowing a possible ~15% increase per file
+        # TODO: merging: check n_files usage
         n_total = self.dataset_info_inst.n_files
         if n_total > 1:
-            extrapolation = n_total / n
-            n_merged_files = extrapolation * stats["tot_size"] / stats["max_size_merged"]
+            # get the expected number of files after merging
+            n_merged_files = n_total / n * stats["tot_size"] / stats["max_size_merged"]
+            # round using some heuristics
             rnd = math.ceil if n_merged_files % 1.0 > 0.15 else math.floor
             n_merged_files = max(int(rnd(n_merged_files)), 1)
+            # determine the merging factor and adjust the number of merged files accordingly for numeric edge cases
             stats["merge_factor"] = max(math.ceil(n_total / n_merged_files), 1)
+            n_merged_files = max(math.ceil(n_total / stats["merge_factor"]), 1)
         else:
             # trivial case, no merging needed
             n_merged_files = 1
@@ -420,13 +443,15 @@ class MergeReductionStats(_MergeReductionStats):
         # print them
         self.publish_message(f" stats of {n} input files ".center(40, "-"))
         self.publish_message(f"average size: {law.util.human_bytes(stats['avg_size'], fmt=True)}")
-        deviation = stats["std_size"] / stats["avg_size"]
-        self.publish_message(f"deviation   : {deviation * 100:.2f}% (std/avg)")
+        self.publish_message(f"deviation   : {law.util.human_bytes(stats['std_size'], fmt=True)}")
         self.publish_message(" merging info ".center(40, "-"))
         self.publish_message(f"target size : {self.merged_size} MB")
         self.publish_message(f"merging     : {stats['merge_factor']} into 1")
         self.publish_message(f"files before: {n_total}")
         self.publish_message(f"files after : {n_merged_files}")
+        tot_size = stats["avg_size"] * n_total
+        rel_err = stats["std_size"] / stats["avg_size"]
+        self.publish_message(f"total size  : {law.util.human_bytes(tot_size, fmt=True)} +- {rel_err * 100:.1f} %")
         self.publish_message(40 * "-")
 
 
@@ -491,6 +516,7 @@ class MergeReducedEvents(_MergeReducedEvents):
         reqs["stats"] = self.reqs.MergeReductionStats.req_different_branching(self)
         reqs["events"] = self.reqs.ReduceEvents.req_different_branching(
             self,
+            # TODO: merging: check n_files usage
             branches=((0, self.dataset_info_inst.n_files),),
         )
         return reqs
@@ -526,6 +552,12 @@ class MergeReducedEvents(_MergeReducedEvents):
             writer_opts=self.get_parquet_writer_opts(),
             target_row_group_size=self.merging_row_group_size,
         )
+
+        # log the number of events after merging
+        n_events = output.load(formatter="parquet").metadata.num_rows
+        self.publish_message(f"merged file contains {n_events:_} events")
+        if not n_events:
+            self.logger.warning("the merged file contains no events")
 
         # optionally remove initial inputs
         if not self.keep_reduced_events and self.is_leaf():
@@ -582,6 +614,7 @@ class ProvideReducedEvents(_ProvideReducedEvents):
 
     @law.workflow_property(setter=True, cache=True, empty_value=0)
     def file_merging(self):
+        # TODO: merging: check n_files usage
         if self.skip_merging or self.dataset_info_inst.n_files == 1:
             return 1
 
@@ -609,6 +642,7 @@ class ProvideReducedEvents(_ProvideReducedEvents):
         # - otherwise, always require the reduction stats as they are needed to make a decision
         # - when merging is forced, require it
         # - otherwise, and if the merging is already known, require either reduced or merged events
+        # TODO: merging: check n_files usage
         if self.skip_merging or (not self.force_merging and self.dataset_info_inst.n_files == 1):
             # reduced events are used directly without having to look into the file merging factor
             if not self.pilot:
@@ -629,11 +663,16 @@ class ProvideReducedEvents(_ProvideReducedEvents):
                 elif file_merging == 1 and not self.pilot:
                     reqs["events"] = self._req_reduced_events()
 
+        # move reduction stats requirement to the end
+        if "reduction_stats" in reqs:
+            reqs.move_to_end("reduction_stats")
+
         return reqs
 
     def requires(self):
         # same as for workflow requirements without optional pilot check
-        reqs = {}
+        reqs = DotDict()
+        # TODO: merging: check n_files usage
         if self.skip_merging or (not self.force_merging and self.dataset_info_inst.n_files == 1):
             reqs["events"] = self._req_reduced_events()
         else:
@@ -648,6 +687,10 @@ class ProvideReducedEvents(_ProvideReducedEvents):
                 elif file_merging == 1:
                     reqs["events"] = self._req_reduced_events()
 
+        # move reduction stats requirement to the end
+        if "reduction_stats" in reqs:
+            reqs.move_to_end("reduction_stats")
+
         return reqs
 
     @workflow_condition.output
@@ -661,6 +704,7 @@ class ProvideReducedEvents(_ProvideReducedEvents):
 
     def _yield_dynamic_deps(self):
         # do nothing if a decision was pre-set in which case requirements were already triggered
+        # TODO: merging: check n_files usage
         if self.skip_merging or (not self.force_merging and self.dataset_info_inst.n_files == 1):
             return
 
