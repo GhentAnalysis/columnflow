@@ -6,7 +6,7 @@ Backend for columnar, fully orchestrated HEP analyses with [law](https://github.
 
 - **01-pipeline.md** — task order, 5 TAF types, law.cfg module registration
 - **02-invariants.md** — set_ak_column, uses/produces, imports, Selector return type, MC guard, keep_columns, no loops
-- **linting.md** — respect `.flake8` rules while coding; run `bash tests/run_linting` before pushing and commit fixes as `linting fixes`
+- **linting.md** — respect `.flake8` rules while coding; before pushing run `bash tests/run_linting` (Python) + `bash tests/run_docs lint` (markdown) + `bash tests/run_tests` (unit tests); commit fixes as `linting fixes`
 - **github.md** — allowed/forbidden git actions; always ask before pushing or rebasing; never delete branches; never PR directly to main
 
 Path-scoped rules load automatically when Claude works with files in the corresponding directory:
