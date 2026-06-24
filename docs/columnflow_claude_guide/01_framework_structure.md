@@ -1,134 +1,206 @@
-# 01 — Columnflow Framework Structure
+# 01 — Columnflow Framework: The Big Picture
 
-## Overview
+## What is columnflow?
 
-Columnflow is a backend for columnar, fully orchestrated HEP analyses in pure Python.
+Columnflow is a Python framework for **fully orchestrated, columnar High Energy Physics analyses**. It sits between raw NanoAOD ROOT files and final statistical results (plots, datacards), handling the entire processing chain automatically.
 
-| Layer | Package | Role |
-|---|---|---|
-| Workflow orchestration | [law](https://github.com/riga/law) | Task graph, CLI, remote execution |
-| Metadata / bookkeeping | [order](https://github.com/riga/order) | Analysis, Campaign, Config, Dataset, Process, Variable, Shift |
-| Columnar data | [awkward-array](https://awkward-array.org) | Event arrays; all physics data |
-| Histogramming | [Hist](https://hist.readthedocs.io) | Histogram objects produced by `CreateHistograms` |
-| Physics objects | [coffea](https://coffeateam.github.io/coffea/) | Lorentz vector behaviour on awkward arrays |
+It solves three practical problems every HEP analyst faces:
+
+| Problem | How columnflow solves it |
+|---|---|
+| **Scalability** — datasets contain billions of events that do not fit in memory | Processes events in chunks; submits to HTCondor/Slurm automatically |
+| **Reproducibility** — analysts need to re-run with different settings and track intermediate results | Every task output is versioned and cached; re-running only re-processes what changed |
+| **Systematic uncertainties** — dozens of weight variations and kinematic corrections must be propagated consistently | First-class support for shifts; the task graph branches automatically per systematic |
 
 ---
 
-## Analysis Pipeline (Task Graph)
+## The Three Pillars
 
-The standard linear pipeline from raw data to plots:
+### 1. Law — Workflow orchestration
+
+[Law](https://github.com/riga/law) (built on [Luigi](https://luigi.readthedocs.io)) defines the **task graph**: every processing step is a `Task` object with declared outputs. When you run a downstream task (e.g. `PlotVariables1D`), law checks which upstream tasks are missing and runs them first — automatically.
+
+Key properties:
+- Tasks are **idempotent**: if the output already exists, the task is skipped.
+- Tasks run **locally** or on **HTCondor / Slurm** with a single flag change (`--workflow htcondor`).
+- The `--version` tag separates parallel analysis branches on disk — you can have `dev1` and `prod1` coexist.
+
+### 2. Order — Metadata management
+
+[Order](https://github.com/riga/order) provides Python objects for HEP bookkeeping: `Analysis`, `Campaign`, `Config`, `Dataset`, `Process`, `Variable`, `Shift`, `Category`. These objects replace scattered config files with a typed, queryable in-memory structure. Every analysis object (process colour, cross-section, dataset file count) lives here.
+
+### 3. Awkward-array — Columnar event data
+
+All event data is stored as [awkward arrays](https://awkward-array.org): irregular (jagged) arrays where each event can have a different number of jets, leptons, etc. Operations are vectorized — you never write a Python loop over events. The `events` array is the central object passed through the entire pipeline.
+
+---
+
+## The Analysis Pipeline
+
+The standard pipeline processes data from ROOT files to plots and datacards:
 
 ```
-GetDatasetLFNs
-     │
-CalibrateEvents          ← applies calibrations (e.g. JEC)
-     │
-SelectEvents             ← creates event and object masks; produces stats.json
-     │
-ReduceEvents             ← applies masks; writes reduced parquet files
-     │
-MergeReducedEvents       ← merges per-file reduced files into one file per dataset
-     │
-ProduceColumns           ← creates additional high-level columns
-     │
-CreateHistograms         ← fills Hist histograms per variable / category / shift
-     │
-MergeHistograms          ← merges per-dataset histograms
-     │
-MergeShiftedHistograms   ← merges nominal + shifted histograms for inference
-     │
-PlotVariables1D          ← produces matplotlib/mplhep plots
-CreateDatacards          ← produces CMS combine datacards + ROOT shape files
+Raw NanoAOD ROOT files
+         │
+         ▼
+GetDatasetLFNs          Resolves file paths (LFNs) from DAS or custom source
+         │
+         ▼
+CalibrateEvents         Applies corrections (JEC, MET corrections, tau ES, ...)
+         │
+         ▼
+SelectEvents            Defines event and object masks; saves selection statistics
+         │
+         ▼
+ReduceEvents            Applies masks; writes reduced Parquet files (~100× smaller)
+         │
+         ▼
+MergeReducedEvents      Merges per-file outputs into one file per dataset
+         │
+         ├──────────────────────────────────────────────────┐
+         ▼                                                  ▼
+ProduceColumns                                    CreateHistograms (directly)
+(creates extra columns)
+         │
+         ▼
+CreateHistograms        Fills Hist histograms for all variables / categories / shifts
+         │
+         ▼
+MergeHistograms         Merges histograms across branches (files) of a dataset
+         │
+         ├────────────────────────┐
+         ▼                        ▼
+  PlotVariables1D         CreateDatacards
+  (matplotlib plots)      (CMS combine format)
 ```
 
-Tasks with `cf.` prefix are columnflow built-ins; user-defined tasks live in `<analysis>/tasks/`.
+### What happens at each step
 
-### Key properties
+**GetDatasetLFNs** — Queries CMS DAS (or a custom function) to find the ROOT file paths for each dataset. Saves them as a JSON file used by all downstream tasks. Requires a valid GRID proxy for CMS data.
 
-- **Chunking**: events are processed in chunks of ≤100 000 events (set in `law.cfg` under `chunked_io_chunk_size`).
-- **Parallelism**: each file / chunk is a separate law task branch; submit to HTCondor/Slurm with `--workflow htcondor`.
-- **Reproducibility**: `--version` tags all intermediate outputs; different versions coexist on disk.
-- **Columnar storage**: intermediate results are stored as **Parquet** files (events) or **pickle** files (histograms).
+**CalibrateEvents** — Runs user-defined `Calibrator` objects on raw events. Calibrators add corrected columns (e.g. `Jet.pt` after JEC) without removing the originals. Multiple calibrators can run sequentially. For systematic variations that modify kinematics (e.g. JEC up/down), separate task branches are created.
+
+**SelectEvents** — Runs one `Selector` on the calibrated events. The selector produces:
+- Boolean event masks (one per selection step, e.g. `"trigger"`, `"muon"`, `"jet"`)
+- Index arrays for object collections (e.g. which jets pass `pt > 25 GeV && |eta| < 2.4`)
+- A `stats.json` file with event counts and MC weight sums (needed for normalization later)
+
+Masks are saved to Parquet — they are **not yet applied** here.
+
+**ReduceEvents** — Applies the masks from `SelectEvents` to all columns. Writes a compact Parquet file containing only selected events and selected objects. Columns not listed in `cfg.x.keep_columns["cf.ReduceEvents"]` are dropped here permanently.
+
+**MergeReducedEvents** — Merges the many small per-file Parquet outputs into larger files per dataset, targeting a configurable size (default ~512 MB, set via `cfg.x.reduced_file_size`).
+
+**ProduceColumns** — Runs `Producer` objects on the merged reduced events to create new high-level columns: `ht`, `n_bjet`, `mll`, category IDs, event weights, ML scores, etc. These are saved in separate Parquet files that are transparently merged with the reduced events by downstream tasks.
+
+**CreateHistograms** — Fills `Hist` histograms for all requested variables, categories, and systematic shifts. The `HistProducer` controls event weighting and histogram filling logic. Each histogram is labelled by dataset, shift, and category.
+
+**MergeHistograms** — Merges histograms from all branches (files) of a dataset. A second merge step (`MergeShiftedHistograms`) further combines nominal and shifted histograms across all datasets for a given process, ready for plotting or inference.
+
+**PlotVariables1D / 2D** — Creates matplotlib/mplhep-styled plots from merged histograms. Supports stacked MC + data overlays, ratio panels, and shifted variable comparisons.
+
+**CreateDatacards** — Produces CMS `combine`-compatible datacards (`.txt`) and shape ROOT files from the merged histograms, driven by an `InferenceModel` object.
 
 ---
 
 ## Five Task Array Function (TAF) Types
 
-| TAF type | Class | CLI parameter | Quantity | Task |
-|---|---|---|---|---|
-| Calibrator | `Calibrator` | `--calibrators` | 0..N | `CalibrateEvents` |
-| Selector | `Selector` | `--selector` | exactly 1 | `SelectEvents` |
-| Reducer | `Reducer` | `--reducer` | exactly 1 | `ReduceEvents` |
-| Producer | `Producer` | `--producers` | 0..N | `ProduceColumns` |
-| HistProducer | `HistProducer` | `--hist-producer` | exactly 1 | `CreateHistograms` |
+User-defined code hooks into the pipeline through **Task Array Functions**. Each TAF type slots into one specific task:
 
-All TAFs share the same decorator pattern — see [02 Coding Style](02_coding_style.md).
+| TAF | Class | Task | CLI parameter | Quantity |
+|---|---|---|---|---|
+| Calibrator | `Calibrator` | `CalibrateEvents` | `--calibrators` | 0 or more |
+| Selector | `Selector` | `SelectEvents` | `--selector` | exactly 1 |
+| Reducer | `Reducer` | `ReduceEvents` | `--reducer` | exactly 1 |
+| Producer | `Producer` | `ProduceColumns` | `--producers` | 0 or more |
+| HistProducer | `HistProducer` | `CreateHistograms` | `--hist-producer` | exactly 1 |
+
+All TAFs share the same decorator pattern and lifecycle. See [02 Coding Style](02_coding_style.md) for the full pattern.
 
 ---
 
-## Configuration Objects (order package)
+## Directory Structure of an Analysis
+
+```
+myanalysis/
+├── analysis/
+│   └── my_analysis.py        # Creates Analysis, Campaign, Config objects
+├── config/
+│   ├── processes.py          # Process definitions (name, xsec, colour)
+│   ├── datasets.py           # Dataset definitions (files, keys)
+│   ├── variables.py          # Variable definitions (binning, expression)
+│   └── categories.py        # Category and Categorizer definitions
+├── calibration/
+│   └── jets.py               # Custom Calibrator(s)
+├── selection/
+│   ├── default.py            # Exposed (top-level) Selector
+│   ├── objects.py            # Internal object-selection Selectors
+│   └── stats.py              # Stats-increment helper
+├── production/
+│   ├── default.py            # Main exposed Producer (called from CLI)
+│   ├── weights.py            # Event weight Producers
+│   └── features.py           # High-level variable Producers
+├── categorization/
+│   └── categories.py         # Categorizer definitions
+├── histogramming/
+│   └── default.py            # HistProducer
+├── inference/
+│   └── default.py            # InferenceModel for datacards
+├── tasks/                    # Custom analysis-specific law tasks
+├── law.cfg                   # Workflow configuration (must register all modules)
+└── setup.sh                  # Environment setup
+```
+
+---
+
+## Configuration Objects (order)
 
 ### Hierarchy
 
 ```
-Analysis
-  └── Config (links Analysis + Campaign)
-        └── Campaign
-              └── Dataset → DatasetInfo (files, events, keys)
+Analysis  ─── top-level container (rarely holds analysis logic itself)
+  └── Config  ─── analysis + campaign combination; carries all per-config settings
+        └── Campaign  ─── experimental period (year, energy, tier, file locations)
+              └── Dataset  ─── one Monte Carlo or data sample
 ```
 
 ### Analysis
 
-Top-level container; rarely holds analysis logic itself.
-
 ```python
 import order as od
-analysis = od.Analysis(name="my_analysis", id=1)
+analysis = od.Analysis(name="hbw", id=1)
 ```
 
 ### Campaign
 
-Experiment-period-specific information (year, energy, tier, file locations).
-
 ```python
 cpn = od.Campaign(
-    name="run3_2022",
-    id=1,
-    ecm=13.6,
+    name="run2_2018",
+    id=4,
+    ecm=13,
     aux={
         "tier": "NanoAOD",
-        "year": 2022,
-        "location": "root://...",
+        "year": 2018,
+        "location": "root://xrootd-cms.infn.it//",
     },
 )
 ```
 
-### Config
-
-Analysis + campaign combination; carries all per-config parameters.
-
-```python
-cfg = analysis.add_config(campaign, name="run3_2022", id=1)
-```
-
 ### Process
-
-Physical process with cross-section and plot metadata.
 
 ```python
 from scinum import Number
-proc = od.Process(
+
+tt = od.Process(
     name="tt",
     id=1000,
     label=r"$t\bar{t}$",
-    color=(128, 76, 153),
-    xsecs={13.6: Number(831.76, {"scale": (19.77, 29.20)})},
+    color=(205, 0, 9),
+    xsecs={13: Number(831.76, {"scale": (19.77, 29.20), "pdf": 35.06})},
 )
 ```
 
 ### Dataset
-
-A sample linked to a Campaign and one or more Processes.
 
 ```python
 cpn.add_dataset(
@@ -137,72 +209,51 @@ cpn.add_dataset(
     processes=[procs.tt],
     info={
         "nominal": od.DatasetInfo(
-            keys=["/TT.../NANOAODSIM"],
+            keys=["/TTTo2L2Nu.../RunIISummer20UL18NanoAODv9.../NANOAODSIM"],
             n_files=242,
             n_events=276079127,
+        ),
+        # For dedicated-dataset systematics, add extra info entries:
+        "tune_up": od.DatasetInfo(
+            keys=["/TTTo2L2Nu_TuneUp.../NANOAODSIM"],
+            n_files=30,
+            n_events=10000000,
         ),
     },
 )
 ```
 
-### Variable
+### Config
 
-Defines the column expression and histogram binning for `CreateHistograms`.
+The `Config` object links an Analysis and a Campaign and carries all per-config settings:
 
 ```python
+cfg = analysis.add_config(campaign, name="run2_2018", id=4)
+
+# --- Required order objects ---
+cfg.add_process(procs.tt)
+cfg.add_dataset(campaign.get_dataset("tt_dl_powheg"))
+cfg.add_shift(name="nominal", id=0)
+
+# Variable definition
 cfg.add_variable(
     name="jet1_pt",
     expression="Jet.pt[:,0]",
     null_value=EMPTY_FLOAT,
     binning=(40, 0.0, 400.0),
     unit="GeV",
-    x_title=r"Jet $p_{T}$",
+    x_title=r"Leading jet $p_T$",
 )
-```
 
-### Shift
-
-Systematic uncertainty variant (rate-only, weight-based, or dedicated dataset).
-
-```python
-cfg.add_shift(name="nominal", id=0)
-cfg.add_shift(name="mu_up", id=1, type=od.Shift.SHAPE)
-cfg.add_shift(name="mu_down", id=2, type=od.Shift.SHAPE)
-```
-
-### Category / Categorizer
-
-Analysis phase-space regions used in histogramming and plotting.
-
-```python
+# Category
 from columnflow.config_util import add_category
 add_category(cfg, name="incl", id=1, selection="cat_incl", label="Inclusive")
-```
 
----
-
-## Important Config Auxiliaries
-
-These `cfg.x.*` entries have special meaning in columnflow:
-
-| Key | Type | Purpose |
-|---|---|---|
-| `cfg.x.keep_columns` | `DotDict` of sets | Which columns survive `ReduceEvents` |
-| `cfg.x.luminosity` | `scinum.Number` | Luminosity with uncertainties |
-| `cfg.x.external_files` | `DotDict` | Paths/URLs to external scale-factor files |
-| `cfg.x.get_dataset_lfns` | callable | Custom LFN-retrieval function |
-| `cfg.x.default_calibrator` | str | Default `--calibrator` value |
-| `cfg.x.default_selector` | str | Default `--selector` value |
-| `cfg.x.default_producer` | str/tuple | Default `--producer` value |
-| `cfg.x.default_variables` | tuple | Default `--variables` value |
-| `cfg.x.reduced_file_size` | float | Target merged-file size in MB |
-| `cfg.x.versions` | dict | Pinned task versions |
-
-### keep_columns example
-
-```python
+# --- Auxiliary configuration (cfg.x.*) ---
 from columnflow.util import DotDict
 from columnflow.columnar_util import ColumnCollection
+
+cfg.x.luminosity = Number(59740, {"lumi_13TeV_2018": 0.025j})
 
 cfg.x.keep_columns = DotDict.wrap({
     "cf.ReduceEvents": {
@@ -213,66 +264,105 @@ cfg.x.keep_columns = DotDict.wrap({
         "event", "run", "luminosityBlock",
         ColumnCollection.ALL_FROM_SELECTOR,
     },
-    "cf.ProduceColumns": {
-        "ht", "n_jet",
-    },
 })
+
+cfg.x.default_calibrator = "default"
+cfg.x.default_selector = "default"
+cfg.x.default_producer = "default"
+cfg.x.default_variables = ("n_jet", "jet1_pt")
 ```
 
----
+### Important Config Auxiliaries
 
-## law.cfg Structure
-
-The `law.cfg` file drives the workflow. Critical sections:
-
-```ini
-[analysis]
-default_analysis: myanalysis.analysis.my_analysis.my_analysis
-default_config: run3_2022
-default_dataset: tt_dl_powheg
-
-# Register all Python modules columnflow should know about
-calibration_modules:   columnflow.calibration.cms.{jets,met}, myanalysis.calibration.default
-selection_modules:     columnflow.selection.empty, columnflow.selection.cms.{json_filter,met_filters}, myanalysis.selection.default
-reduction_modules:     columnflow.reduction.default
-production_modules:    columnflow.production.{categories,normalization,processes}, myanalysis.production.default
-categorization_modules: myanalysis.categorization.example
-hist_production_modules: columnflow.histogramming.default, myanalysis.histogramming.example
-inference_modules:     columnflow.inference, myanalysis.inference.example
-
-[outputs]
-# Map tasks to storage locations
-cf.CalibrateEvents: local, /path/to/store
-cf.SelectEvents:    local, /path/to/store
-cf.ReduceEvents:    local, /path/to/store
-cf.ProduceColumns:  local, /path/to/store
-cf.CreateHistograms: local, /path/to/store
-```
-
-**Critical**: after adding any new Python file (calibrator, selector, producer, etc.) you **must** register it in `law.cfg` under the correct `*_modules` key. No spaces after commas inside `{}` brace expansions.
+| Key | Type | Purpose |
+|---|---|---|
+| `cfg.x.keep_columns` | `DotDict` of sets | Columns that survive `ReduceEvents` |
+| `cfg.x.luminosity` | `scinum.Number` | Luminosity with uncertainties |
+| `cfg.x.external_files` | `DotDict` | Paths/URLs to external scale-factor files |
+| `cfg.x.get_dataset_lfns` | callable | Custom LFN-retrieval function |
+| `cfg.x.default_calibrator` | str | Default `--calibrators` value |
+| `cfg.x.default_selector` | str | Default `--selector` value |
+| `cfg.x.default_producer` | str/tuple | Default `--producers` value |
+| `cfg.x.default_variables` | tuple | Default `--variables` value |
+| `cfg.x.reduced_file_size` | float | Target merged-file size in MB |
+| `cfg.x.versions` | dict | Pinned task versions (see best_practices) |
 
 ---
 
 ## Systematic Uncertainties (Shifts)
 
-Three classes, ordered by complexity:
+Columnflow has first-class support for three classes of systematics:
 
-### 1. Rate-only uncertainties
-Only affect yields, not selection. Defined entirely in the inference model. No additional workflow steps needed.
+### Rate-only uncertainties
 
-### 2. Weight-based (shape) uncertainties
-Applied via event weights. Require:
-1. `cfg.add_shift(...)` for up/down variants
-2. `add_shift_aliases(cfg, "source_name", ...)` to map column names
-3. The `WeightProducer` / `HistProducer` must declare the shift in its `shifts` set
-4. Considered only from `CreateHistograms` onwards
+Affect the overall yield only (e.g. luminosity uncertainty). Defined entirely in the inference model — no extra task branches needed.
 
-### 3. Selection-modifying uncertainties (e.g. JEC)
-Propagate through the entire pipeline. Require:
-1. `cfg.add_shift(...)` for up/down variants with `tags={"selection_dependent"}`
-2. Column aliases for varied kinematic columns
-3. The `Selector` (and upstream `Calibrator`) must declare the shifts in their `shifts` set
-4. Separate task branches are run for each shift
+```python
+# In the inference model:
+model.add_parameter("lumi", type="lnN", effect=1.025)
+```
 
-### 4. Dedicated-dataset uncertainties (e.g. tune, hdamp)
-A completely separate dataset is processed for each variation. The dataset `info` dict key must match the shift name.
+### Weight-based uncertainties (shape)
+
+Applied as event weight variations (e.g. muon scale factors, pile-up weights). They produce separate histograms for up/down variations without re-running the selection.
+
+```python
+# In config:
+cfg.add_shift(name="mu_up", id=1, type=od.Shift.SHAPE)
+cfg.add_shift(name="mu_down", id=2, type=od.Shift.SHAPE)
+
+from columnflow.config_util import add_shift_aliases
+add_shift_aliases(cfg, "mu", {"muon_weight": "muon_weight_{direction}"})
+
+# In the weight Producer's init hook:
+from columnflow.config_util import get_shifts_from_sources
+self.shifts |= get_shifts_from_sources(self.config_inst, "mu")
+```
+
+### Selection-modifying uncertainties (e.g. JEC)
+
+Kinematic corrections that affect object selection. A separate task branch runs the complete pipeline (from `CalibrateEvents` onwards) for each variation.
+
+```python
+# In config:
+cfg.add_shift(name="jec_up", id=10, type=od.Shift.SHAPE, tags={"selection_dependent"})
+cfg.add_shift(name="jec_down", id=11, type=od.Shift.SHAPE, tags={"selection_dependent"})
+
+# Column aliases map "Jet.pt" → "Jet.pt_jec_up" when jec_up shift is active:
+add_shift_aliases(cfg, "jec", {"Jet.pt": "Jet.pt_{name}", "Jet.eta": "Jet.eta_{name}"})
+
+# In the Selector's init hook:
+from columnflow.config_util import get_shifts_from_sources
+self.shifts |= get_shifts_from_sources(self.config_inst, "jec", tags={"selection_dependent"})
+```
+
+### Dedicated-dataset uncertainties
+
+A completely separate Monte Carlo sample is processed (e.g. tune, hdamp variations). The dataset `info` dict key must match the shift name exactly.
+
+```python
+cfg.add_shift(name="tune_up", id=20, type=od.Shift.SHAPE, tags={"disjoint_from_nominal"})
+# The dataset info key "tune_up" automatically links this shift to the correct dataset.
+```
+
+---
+
+## Data Flow Summary
+
+```
+ROOT files  →  chunks of ak.Array named "events"
+                     │
+                [Calibrator]   adds corrected columns (never removes)
+                     │
+                [Selector]     creates boolean masks → stats.json + masks.parquet
+                     │
+                [Reducer]      applies masks → reduced_events.parquet
+                     │
+                [Producer]     adds columns → extra_columns.parquet
+                     │
+                [HistProducer] event weights + fills Hist → histograms.pkl
+                     │
+                [Plots / Datacards]
+```
+
+All intermediate data is stored in a directory tree under the path configured in `law.cfg`, organised by task family, version, config, dataset, and shift.

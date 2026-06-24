@@ -6,11 +6,12 @@ Read all five guide files before writing or modifying any code:
 
 | Guide | Contents |
 |---|---|
-| [01 Framework Structure](docs/columnflow_claude_guide/01_framework_structure.md) | Analysis pipeline, task graph, config objects (Analysis/Campaign/Config), Order objects |
+| [01 Framework Structure](docs/columnflow_claude_guide/01_framework_structure.md) | Big picture, analysis pipeline, task graph, config objects (Analysis/Campaign/Config), systematics |
 | [02 Coding Style](docs/columnflow_claude_guide/02_coding_style.md) | TAF decorators, uses/produces, imports, module registration, naming conventions |
-| [03 Task Commands](docs/columnflow_claude_guide/03_task_commands.md) | `law run` commands with all standard parameters for every task |
+| [03 Task User Guide](docs/columnflow_claude_guide/03_task_commands.md) | Per-task explanation, `law run` commands, key parameters, tips |
 | [04 Awkward Reference](docs/columnflow_claude_guide/04_awkward_reference.md) | Key `ak.*` functions used in columnflow code |
-| [05 Dos and Don'ts](docs/columnflow_claude_guide/05_dos_and_donts.md) | Explicit rules Claude must follow when writing columnflow code |
+| [05 Dos and Don'ts](docs/columnflow_claude_guide/05_dos_and_donts.md) | Common mistakes and best practices for new users |
+| [06 Custom Tasks](docs/columnflow_claude_guide/06_custom_tasks.md) | Writing Selectors, Producers, Calibrators, HistProducers, Categorizers, custom law tasks |
 
 ## Quick orientation
 
