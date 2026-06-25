@@ -149,7 +149,6 @@ class ReduceEvents(_ReduceEvents):
                 f"{', '.join(sorted(missing_reducer_shifts))}",
             )
 
-
         # create a temp dir for saving intermediate files
         tmp_dir = law.LocalDirectoryTarget(is_tmp=True)
         tmp_dir.touch()

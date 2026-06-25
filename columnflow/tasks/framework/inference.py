@@ -197,7 +197,6 @@ class SerializeInferenceModelBase(
     def _hist_requirement(self, **kwargs):
         return self.reqs.MergeShiftedHistograms.req_different_branching(self, **kwargs)
 
-
     def _hist_requirements(self, **kwargs):
         # gather data from inference model to define requirements in the structure
         # config_name -> dataset_name -> MergeHistogramsTask

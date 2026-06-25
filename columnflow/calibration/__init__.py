@@ -28,7 +28,6 @@ class TaskArrayFunctionWithCalibratorRequirements(TaskArrayFunction):
 
         super().__init__(*args, **kwargs)
 
-
     def _req_calibrator(self, task: law.Task, calibrator: str) -> Any:
         # hook to customize how required calibrators are requested
         from columnflow.tasks.calibration import CalibrateEvents
@@ -36,7 +35,6 @@ class TaskArrayFunctionWithCalibratorRequirements(TaskArrayFunction):
 
     def requires_func(self, task: law.Task, reqs: dict, **kwargs) -> None:
         super().requires_func(task=task, reqs=reqs, **kwargs)
-
 
         # no requirements for workflows in pilot mode
         if callable(getattr(task, "is_workflow", None)) and task.is_workflow() and getattr(task, "pilot", False):

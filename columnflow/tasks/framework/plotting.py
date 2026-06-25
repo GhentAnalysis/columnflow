@@ -473,7 +473,7 @@ class ProcessPlotSettingMixin(
         return params
 
 
-class VariablePlotSettingMixin(
+class VariableSettingMixin(
     PlotBase,
     VariablesMixin,
 ):

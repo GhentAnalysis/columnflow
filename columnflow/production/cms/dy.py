@@ -234,7 +234,6 @@ def dy_weights_requires(self: Producer, task: law.Task, reqs: dict, **kwargs) ->
     """
     super(dy_weights, self).requires_func(task=task, reqs=reqs, **kwargs)
 
-
     if "external_files" in reqs:
         return
 
@@ -257,7 +256,6 @@ def dy_weights_setup(
     correcter in the external file and is saved in the py:attr:`dy_unc_corrector` attribute.
     """
     super(dy_weights, self).setup_func(task=task, reqs=reqs, inputs=inputs, reader_targets=reader_targets, **kwargs)
-
 
     bundle = reqs["external_files"]
 
@@ -462,7 +460,6 @@ def recoil_corrected_met(self: Producer, events: ak.Array, **kwargs) -> ak.Array
 def recoil_corrected_met_init(self: Producer, **kwargs) -> None:
     super(recoil_corrected_met, self).init_func(**kwargs)
 
-
     if self.njet_column:
         self.uses.add(f"{self.njet_column}")
     else:
@@ -472,7 +469,6 @@ def recoil_corrected_met_init(self: Producer, **kwargs) -> None:
 @recoil_corrected_met.requires
 def recoil_corrected_met_requires(self: Producer, task: law.Task, reqs: dict, **kwargs) -> None:
     super(recoil_corrected_met, self).requires_func(task=task, reqs=reqs, **kwargs)
-
 
     if "external_files" in reqs:
         return

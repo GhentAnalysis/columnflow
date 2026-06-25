@@ -221,7 +221,7 @@ class SelectEvents(_SelectEvents):
                 events = update_ak_array(events, *cols)
 
                 # add veto
-                events = self.veto_producer(events, file=input_file)
+                events = self.veto_producer(events, file=nano_input)
 
                 # add aliases
                 events = add_ak_aliases(

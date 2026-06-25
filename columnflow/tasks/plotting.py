@@ -27,7 +27,7 @@ from columnflow.tasks.framework.decorators import view_output_plots
 from columnflow.tasks.framework.remote import RemoteWorkflow
 from columnflow.tasks.histograms import MergeHistograms, MergeShiftedHistograms
 from columnflow.util import DotDict, dev_sandbox, dict_add_strict
-from columnflow.hist_util import add_missing_shifts, sum_hists, select_category_bins
+from columnflow.hist_util import add_missing_shifts
 from columnflow.config_util import get_shift_from_configs, expand_shift_sources
 
 

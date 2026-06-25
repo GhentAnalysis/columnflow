@@ -7,6 +7,7 @@ Tasks dealing with external data.
 from __future__ import annotations
 
 import os
+import glob
 import time
 import shutil
 import subprocess
@@ -451,7 +452,6 @@ class ExternalFile:
                 return cls(location=resource[0], version=resource[1])
         raise ValueError(f"invalid resource type and format: {resource}")
 
-
     def __post_init__(self) -> None:
         # convert different types of subpaths to dict
         if isinstance(self.subpaths, str):
@@ -474,7 +474,6 @@ class ExternalFile:
             else:
                 sub = " / " + ",".join(f"{n}={p}" for n, p in self.subpaths.items())
         return f"{self.location}{sub} ({self.version})"
-
 
     def __getattr__(self, attr: str) -> str:
         if attr in self.subpaths:

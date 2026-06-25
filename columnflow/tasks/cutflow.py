@@ -11,14 +11,12 @@ import luigi
 import law
 import order as od
 
-from columnflow.types import Any
-
 from columnflow.tasks.framework.base import (
     Requirements, AnalysisTask, ShiftTask, wrapper_factory, RESOLVE_DEFAULT,
 )
 from columnflow.tasks.framework.mixins import (
     CalibratorsMixin, SelectorMixin, VariablesMixin, CategoriesMixin, ChunkedIOMixin,
-    DatasetsProcessesMixin,
+    DatasetsProcessesMixin, MergeHistogramMixin,
     CalibratorClassesMixin, SelectorClassMixin,
 )
 from columnflow.tasks.framework.plotting import (
@@ -32,7 +30,23 @@ from columnflow.hist_util import create_hist_from_variables, translate_hist_intc
 from columnflow.util import DotDict, dev_sandbox
 
 
+class SelectorStepsMixin:
+    selector_steps_all = ("ALL",)
+
+    selector_steps = law.CSVParameter(
+        default=(RESOLVE_DEFAULT,),
+        description="a subset of steps of the selector to apply; uses all steps when empty; "
+        f"Set to {selector_steps_all[0]} to apply all; "
+        "default: value of config.x.default_selector_steps",
+        brace_expand=True,
+        parse_empty=True,
+    )
+
+    selector_steps_order_sensitive = True
+
+
 class _CreateCutflowHistograms(
+    SelectorStepsMixin,
     CalibratorsMixin,
     SelectorMixin,
     ChunkedIOMixin,
@@ -47,15 +61,6 @@ class _CreateCutflowHistograms(
 
 class CreateCutflowHistograms(_CreateCutflowHistograms):
 
-    # overwrite selector steps to use default resolution
-    selector_steps = law.CSVParameter(
-        default=(RESOLVE_DEFAULT,),
-        description="a subset of steps of the selector to apply; uses all steps when empty; "
-        f"Set to {selector_steps_all[0]} to apply all."
-        "default: value of config.x.default_selector_steps",
-        brace_expand=True,
-        parse_empty=True,
-    )
     missing_selector_step_strategy = luigi.ChoiceParameter(
         significant=False,
         default=law.config.get_default("analysis", "missing_selector_step_strategy", "raise"),
@@ -350,6 +355,28 @@ class CreateCutflowHistograms(_CreateCutflowHistograms):
 CreateCutflowHistogramsWrapper = wrapper_factory(
     base_cls=AnalysisTask,
     require_cls=CreateCutflowHistograms,
+    enable=["configs", "skip_configs", "datasets", "skip_datasets", "shifts", "skip_shifts"],
+)
+
+
+class MergeCutflowHistograms(
+    SelectorStepsMixin,
+    MergeHistogramMixin,
+    CalibratorsMixin,
+    SelectorMixin,
+    RemoteWorkflow,
+):
+    sandbox = dev_sandbox(law.config.get("analysis", "default_columnar_sandbox"))
+
+    reqs = Requirements(
+        RemoteWorkflow.reqs,
+        CreateHistograms=CreateCutflowHistograms,
+    )
+
+
+MergeCutflowHistogramsWrapper = wrapper_factory(
+    base_cls=AnalysisTask,
+    require_cls=MergeCutflowHistograms,
     enable=["configs", "skip_configs", "datasets", "skip_datasets", "shifts", "skip_shifts"],
 )
 

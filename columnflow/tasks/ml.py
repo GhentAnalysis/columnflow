@@ -33,7 +33,6 @@ from columnflow.tasks.framework.decorators import view_output_plots, on_failure
 from columnflow.tasks.reduction import ReducedEventsUser
 from columnflow.tasks.production import ProduceColumns
 from columnflow.util import dev_sandbox, safe_div, DotDict, maybe_import
-from columnflow.columnar_util import set_ak_column
 
 ak = maybe_import("awkward")
 
@@ -659,7 +658,6 @@ class MLEvaluation(
             configs=(self.config_inst.name,),
             branch=-1,
         )
-
 
         if self.preparation_producer_inst:
             reqs["preparation_producer"] = self.preparation_producer_inst.run_requires(task=self)

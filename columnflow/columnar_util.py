@@ -3271,7 +3271,6 @@ class ChunkedParquetReader(object):
     where particular chunks need to be read more than once, another instance of this class should be used.
     """
 
-
     def __init__(self, path: str, open_options: dict | None = None) -> None:
         super().__init__()
 
@@ -3882,7 +3881,7 @@ class ChunkedIOHandler(object):
         source: str,
         open_options: dict | None = None,
         read_columns: set[str | Route] | None = None,
-    ) -> tuple[DaskArrayReader, int]:
+    ) -> tuple["DaskArrayReader", int]:  # noqa: F821
         """
         Opens a parquet file saved at *source*, loads the content as an dask awkward array, wrapped by a
         :py:class:`DaskArrayReader`, and returns a 2-tuple *(reader, length)*.
@@ -3902,14 +3901,14 @@ class ChunkedIOHandler(object):
             open_options["columns"] = filter_name
 
         # load the array wrapper
-        reader = DaskArrayReader(source, open_options)
+        reader = DaskArrayReader(source, open_options)  # noqa: F821
 
         return (reader, len(reader))
 
     @classmethod
     def close_dask_awkward_parquet(
         cls,
-        source_object: DaskArrayReader,
+        source_object: "DaskArrayReader",  # noqa: F821
     ) -> None:
         """
         Closes the chunked parquet reader referred to by *source_object*.
