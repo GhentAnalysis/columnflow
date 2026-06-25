@@ -7,22 +7,23 @@ Tasks dealing with external data.
 from __future__ import annotations
 
 import os
+import glob
 import time
 import shutil
 import subprocess
-from dataclasses import dataclass, field
-import glob
+import dataclasses
+import copy
 
 import luigi
 import law
 import order as od
 
-from columnflow import env_is_local
+from columnflow import env_is_local, flavor as cf_flavor
 from columnflow.tasks.framework.base import AnalysisTask, ConfigTask, DatasetTask, wrapper_factory
 from columnflow.tasks.framework.parameters import user_parameter_inst
 from columnflow.tasks.framework.decorators import only_local_env
-from columnflow.util import wget, DotDict
-from columnflow.types import Sequence
+from columnflow.util import wget, DotDict, UNSET
+from columnflow.types import Sequence, ClassVar
 
 
 logger = law.logger.get_logger(__name__)
@@ -197,8 +198,8 @@ class GetDatasetLFNs(DatasetTask, law.tasks.TransferLocalFile):
         :param lfn_indices: List of indices of LFNs that are processed by this *task* instance, defaults to None
         :param eager_lookup: Look at the next fs if stat takes too long, defaults to 1
         :param skip_fallback: Skip the fallback mechanism to fetch the LFN, defaults to False
-        :raises TypeError: If *task* is not of type :external+law:py:class:`~law.workflow.base.BaseWorkflow` or not
-            a task analyzing a single branch in the task tree
+        :raises TypeError: If *task* is not of type :external+law:py:class:`~law.workflow.base.BaseWorkflow` or not a
+            task analyzing a single branch in the task tree
         :raises Exception: If current task is not complete as indicated with ``self.complete()``
         :raises ValueError: If no fs is provided at call and none can be found in either the config instance or the law
             config.
@@ -233,8 +234,6 @@ class GetDatasetLFNs(DatasetTask, law.tasks.TransferLocalFile):
 
         # loop
         for lfn_index in lfn_indices:
-            task.publish_message(f"handling file {lfn_index}")
-
             # get the lfn of the file referenced by this file index
             lfn = str(lfns[lfn_index])
 
@@ -267,7 +266,7 @@ class GetDatasetLFNs(DatasetTask, law.tasks.TransferLocalFile):
                 input_stat = input_file.exists(stat=True)
                 duration = time.perf_counter() - t1
                 i += 1
-                logger.info(f"lfn {lfn} does{'' if input_stat else ' not'} exist at fs {selected_fs}")
+                logger.info(f"lfn {lfn} (lfn {lfn_index}) does{'' if input_stat else ' not'} exist at fs {selected_fs}")
 
                 # when the stat query took longer than some duration, eagerly try the next fs
                 # and check if it responds faster and if so, take it instead
@@ -293,16 +292,41 @@ class GetDatasetLFNs(DatasetTask, law.tasks.TransferLocalFile):
                 # stop when the stat was successful at this point
                 if input_stat:
                     task.publish_message(
-                        f"using fs {selected_fs}, stat responded in "
-                        f"{law.util.human_duration(seconds=duration)}",
+                        f"using fs {selected_fs}, stat responded in {law.util.human_duration(seconds=duration)}",
                     )
                     break
             else:
-                raise Exception(f"lfn {lfn} not found at any remote fs {fs}")
+                raise Exception(f"lfn {lfn} (lfn {lfn_index}) not found at any remote fs {fs}")
 
             # log the file size
             input_size = law.util.human_bytes(input_stat.st_size, fmt=True)
-            task.publish_message(f"lfn {lfn}, size is {input_size}")
+            task.publish_message(f"lfn {lfn} (lfn {lfn_index}), size is {input_size}")
+
+            # when cf is run in cms flavor, access to central files must be reported to a database for bookkeeping
+            if cf_flavor == "cms":
+                # the selected fs must have an option "rucio_report_access" in the config, which should be either a bool
+                # or the site name (rse) to report the access for
+                report_key = "rucio_report_access"
+                report_val = law.config.get_expanded(selected_fs, report_key, default=UNSET)
+                if report_val is UNSET:
+                    raise Exception(
+                        f"configuration section for selected fs '{selected_fs}' is missing an entry '{report_key}' "
+                        "which should be either a boolean flag or the name of a site (rse) to report the access for; "
+                        "this is required for reporting access to central files which is necessary for CMS bookkeeping",
+                    )
+                # check if the value is a bool, and otherwise assume a valid rse name
+                rse = None
+                try:
+                    report_val = law.config.Config.instance()._convert_to_boolean(report_val)
+                except ValueError:
+                    rse = report_val
+                    if not law.cms.Site.validate(rse):
+                        raise ValueError(
+                            f"entry '{report_key}' for selected fs '{selected_fs}' does not refer to a valid site ",
+                            f"name: {rse}",
+                        )
+                if report_val:
+                    law.cms.rucio_report_access(lfn, rse=rse)
 
             yield (lfn_index, input_file)
 
@@ -389,7 +413,7 @@ Wrapper task to get LFNs for multiple datasets.
 )
 
 
-@dataclass
+@dataclasses.dataclass
 class ExternalFile:
     """
     Container object to define an external file resource that is understood by (e.g.)
@@ -405,12 +429,11 @@ class ExternalFile:
     """
 
     location: str
-    subpaths: dict[str, str] = field(default_factory=dict)
+    subpaths: dict[str, str] = dataclasses.field(default_factory=dict)
     version: str = "v1"
 
-    def __str__(self) -> str:
-        sub = (" / " + ",".join(f"{n}={p}" for n, p in self.subpaths.items())) if self.subpaths else ""
-        return f"{self.location}{sub} ({self.version})"
+    single: bool = dataclasses.field(init=False, default=False)
+    single_key: ClassVar[str] = "_single_key"
 
     @classmethod
     def new(cls, resource: ExternalFile | str | tuple[str] | tuple[str, str]) -> ExternalFile:
@@ -428,6 +451,29 @@ class ExternalFile:
             if len(resource) == 2:
                 return cls(location=resource[0], version=resource[1])
         raise ValueError(f"invalid resource type and format: {resource}")
+
+    def __post_init__(self) -> None:
+        # convert different types of subpaths to dict
+        if isinstance(self.subpaths, str):
+            self.subpaths = DotDict({self.single_key: self.subpaths})
+            self.single = True
+        elif isinstance(self.subpaths, (list, tuple)):
+            self.subpaths = DotDict(zip(enumerate(self.subpaths)))
+        else:
+            self.subpaths = DotDict.wrap(copy.deepcopy(self.subpaths))
+        # remove None's
+        for key in list(self.subpaths.keys()):
+            if self.subpaths[key] is None:
+                del self.subpaths[key]
+
+    def __str__(self) -> str:
+        sub = ""
+        if self.subpaths:
+            if self.single:
+                sub = f"/{self.subpaths[self.single_key]}"
+            else:
+                sub = " / " + ",".join(f"{n}={p}" for n, p in self.subpaths.items())
+        return f"{self.location}{sub} ({self.version})"
 
     def __getattr__(self, attr: str) -> str:
         if attr in self.subpaths:
@@ -497,6 +543,11 @@ class BundleExternalFiles(ConfigTask, law.tasks.TransferLocalFile):
 
         # path must be an ExternalFile
         if path.subpaths:
+            # single mode
+            if path.single:
+                return cls.create_unique_basename(os.path.join(path.location, path.subpaths[path.single_key]))
+
+            # multiple subpaths
             return type(path.subpaths)(
                 (name, cls.create_unique_basename(os.path.join(path.location, subpath)))
                 for name, subpath in path.subpaths.items()
@@ -567,19 +618,18 @@ class BundleExternalFiles(ConfigTask, law.tasks.TransferLocalFile):
 
     @law.decorator.notify
     @law.decorator.log
-    @law.decorator.safe_output
     def run(self):
         outputs = self.output()
 
         # remove the bundle if recreating
-        if outputs["bundle"].exists() and self.recreate:
+        if self.recreate and outputs["bundle"].exists():
             outputs["bundle"].remove()
 
         # bundle only if needed
         if not outputs["bundle"].exists():
             if not env_is_local:
                 raise RuntimeError(
-                    f"the output bundle {outputs['bundle'].basename} is missing, but cannot be created in non-local "
+                    f"the output bundle {self.single_output().abspath} is missing, but cannot be created in non-local "
                     "environments",
                 )
 
@@ -629,9 +679,15 @@ class BundleExternalFiles(ConfigTask, law.tasks.TransferLocalFile):
                     else:
                         scratch_src = scratch_dst
                     # copy all subpaths
-                    basenames = self.create_unique_basename(ext_file)
-                    for name, subpath in ext_file.subpaths.items():
-                        fetch(os.path.join(scratch_src, subpath), os.path.join(tmp_dir.abspath, basenames[name]))
+                    if ext_file.single:
+                        fetch(
+                            os.path.join(scratch_src, ext_file.subpaths[ext_file.single_key]),
+                            os.path.join(tmp_dir.abspath, self.create_unique_basename(ext_file)),
+                        )
+                    else:
+                        basenames = self.create_unique_basename(ext_file)
+                        for name, subpath in ext_file.subpaths.items():
+                            fetch(os.path.join(scratch_src, subpath), os.path.join(tmp_dir.abspath, basenames[name]))
                 else:
                     # copy directly to the bundle dir
                     src = ext_file.location
@@ -657,19 +713,36 @@ class BundleExternalFiles(ConfigTask, law.tasks.TransferLocalFile):
             # transfer the result
             self.transfer(tmp, outputs["bundle"])
 
-        # unpack the bundle to have local files available
-        with self.publish_step(f"unpacking to {outputs['local_files'].dir.abspath} ..."):
+        # remove all local files if recreating or if only existing partially to do a full refresh
+        local_files_exist = outputs["local_files"].exists()
+        if (self.recreate and local_files_exist) or not local_files_exist:
             outputs["local_files"].dir.remove()
-            bundle = outputs["bundle"]
-            if isinstance(bundle, law.FileCollection):
-                bundle = bundle.random_target()
-            bundle.load(outputs["local_files"].dir, formatter="tar")
+            local_files_exist = False
 
-            # check if unpacked files/directories are described by the correct target class
-            for target in outputs["local_files"]._flat_target_list:
-                mismatch = (
-                    (isinstance(target, law.FileSystemFileTarget) and not os.path.isfile(target.abspath)) or
-                    (isinstance(target, law.FileSystemDirectoryTarget) and not os.path.isdir(target.abspath))
-                )
-                if mismatch:
-                    raise Exception(f"mismatching file/directory type of unpacked target {target!r}")
+        # unpack the bundle to have local files available if needed
+        if not local_files_exist:
+            with self.publish_step(f"unpacking to {outputs['local_files'].dir.abspath} ..."):
+                bundle = outputs["bundle"]
+                if isinstance(bundle, law.FileCollection):
+                    bundle = bundle.random_target()
+                bundle.load(outputs["local_files"].dir, formatter="tar")
+
+                # check if unpacked files/directories are described by the correct target class
+                for target in outputs["local_files"]._flat_target_list:
+                    mismatch = (
+                        (isinstance(target, law.FileSystemFileTarget) and not os.path.isfile(target.abspath)) or
+                        (isinstance(target, law.FileSystemDirectoryTarget) and not os.path.isdir(target.abspath))
+                    )
+                    if mismatch:
+                        raise Exception(f"mismatching file/directory type of unpacked target {target!r}")
+
+
+BundleExternalFilesWrapper = wrapper_factory(
+    base_cls=AnalysisTask,
+    require_cls=BundleExternalFiles,
+    enable=["configs", "skip_configs"],
+    attributes={"version": None},
+    docs="""
+Wrapper task trigger the BundleExternalFiles task for multiple configs.
+""",
+)

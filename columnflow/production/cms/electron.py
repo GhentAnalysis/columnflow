@@ -12,7 +12,7 @@ import law
 
 from columnflow.production import Producer, producer
 from columnflow.util import maybe_import, load_correction_set, DotDict
-from columnflow.columnar_util import set_ak_column, full_like, flat_np_view
+from columnflow.columnar_util import set_ak_column, full_like, flat_np_view, layout_ak_array
 from columnflow.types import Any, Callable
 
 np = maybe_import("numpy")
@@ -61,7 +61,7 @@ class ElectronSFConfig:
     use_supercluster_eta=True,
     # name of the saved weight column
     weight_name="electron_weight",
-    supported_versions={1, 2, 3},
+    supported_versions={1, 2, 3, 4, 5},
 )
 def electron_weights(
     self: Producer,
@@ -151,8 +151,7 @@ def electron_weights(
             sf = self.electron_sf_corrector.evaluate(*inputs)
         elif isinstance(wp, dict):
             # mapping of wps to masks, evaluate per wp and combine
-            sf = full_like(eta, 1.0)
-            sf_flat = flat_np_view(sf)
+            sf_flat = flat_np_view(full_like(eta, 1.0))
             for _wp, mask_fn in wp.items():
                 mask = mask_fn(variable_map)
                 variable_map_syst_wp = variable_map_syst | {"WorkingPoint": _wp}
@@ -166,6 +165,7 @@ def electron_weights(
                     for inp in self.electron_sf_corrector.inputs
                 ]
                 sf_flat[flat_np_view(mask)] = flat_np_view(self.electron_sf_corrector.evaluate(*inputs))
+            sf = layout_ak_array(sf_flat, eta)
         else:
             raise ValueError(f"unsupported working point type {type(variable_map['WorkingPoint'])}")
 
@@ -180,6 +180,8 @@ def electron_weights(
 
 @electron_weights.init
 def electron_weights_init(self: Producer, **kwargs) -> None:
+    super(electron_weights, self).init_func(**kwargs)
+
     # add the product of nominal and up/down variations to produced columns
     self.produces.add(f"{self.weight_name}{{,_up,_down}}")
 
@@ -191,6 +193,8 @@ def electron_weights_requires(
     reqs: dict[str, DotDict[str, Any]],
     **kwargs,
 ) -> None:
+    super(electron_weights, self).requires_func(task=task, reqs=reqs, **kwargs)
+
     if "external_files" in reqs:
         return
 
@@ -207,6 +211,14 @@ def electron_weights_setup(
     reader_targets: law.util.InsertableDict,
     **kwargs,
 ) -> None:
+    super(electron_weights, self).setup_func(
+        task=task,
+        reqs=reqs,
+        inputs=inputs,
+        reader_targets=reader_targets,
+        **kwargs,
+    )
+
     self.electron_config = self.get_electron_config()
 
     # load the corrector

@@ -34,8 +34,6 @@ def draw_stat_error_bands(
     norm: float | Sequence | np.ndarray = 1.0,
     **kwargs,
 ) -> None:
-    import hist
-
     assert len(h.axes) == 1
 
     # compute relative statistical errors
@@ -49,7 +47,7 @@ def draw_stat_error_bands(
     baseline[np.isnan(baseline)] = 0.0
 
     bar_kwargs = {
-        "x": h.axes[0].centers - (h.axes[0].edges[0] if type(h.axes[0]) is hist.axes.Integer else 0),
+        "x": h.axes[0].centers,
         "bottom": baseline * (1 - rel_stat_error),
         "height": baseline * 2 * rel_stat_error,
         "width": h.axes[0].edges[1:] - h.axes[0].edges[:-1],
@@ -279,6 +277,7 @@ def draw_errorbars(
     h: hist.Hist,
     norm: float | Sequence | np.ndarray = 1.0,
     error_type: str = "poisson_unweighted",
+    density: bool = False,
     **kwargs,
 ) -> None:
     import hist
@@ -303,7 +302,7 @@ def draw_errorbars(
                 "Error bars calculation only implemented for histograms with storage type WeightedSum "
                 "either change the Histogram storage_type or set yerr manually",
             )
-        yerr = calculate_stat_error(h, error_type)
+        yerr = calculate_stat_error(h, error_type, density=density)
         # normalize yerr to the histogram = error propagation on standard deviation
         yerr = abs(yerr / norm)
         # replace inf with nan for any bin where norm = 0 and calculate_stat_error returns a non zero value
@@ -392,29 +391,29 @@ def plot_all(
         # check if required fields are present
         if "method" not in cfg:
             raise ValueError(f"no method given in plot_cfg entry {key}")
-        if "hist" not in cfg:
-            raise ValueError(f"no histogram(s) given in plot_cfg entry {key}")
 
         # invoke the method
         method = cfg["method"]
-        h = cfg["hist"]
-
-        def get_method(method):
-            return method if callable(method) else plot_methods[method]
-
-        get_method(method)(ax, h, **cfg.get("kwargs", {}))
+        method_func = method if callable(method) else plot_methods[method]
+        args = (ax, cfg["hist"]) if "hist" in cfg else (ax,)
+        method_func(*args, **cfg.get("kwargs", {}))
 
         # repeat for ratio axes if configured
         if not skip_ratio and "ratio_kwargs" in cfg:
             # take ratio_method if the ratio plot requires a different plotting method
             method = cfg.get("ratio_method", method)
-            get_method(method)(rax, h, **cfg.get("ratio_kwargs", {}))
+            method_func = method if callable(method) else plot_methods[method]
+            args = (rax, cfg["hist"]) if "hist" in cfg else (rax,)
+            method_func(*args, **cfg.get("ratio_kwargs", {}))
 
     # axis styling
     ax_kwargs = {
         "ylabel": "Counts",
         "xlabel": "variable",
         "yscale": "linear",
+        "xticklabelformat": {"style": "sci", "useMathText": True},
+        "yticklabelformat": {"style": "sci", "useMathText": True},
+        "yoffsettext": {"horizontalalignment": "right", "fontsize": 18},
     }
 
     # some default ylim settings based on yscale
@@ -439,6 +438,7 @@ def plot_all(
             "ylabel": "Ratio",
             "xlabel": "Variable",
             "yscale": "linear",
+            "xticklabelformat": {"style": "sci", "useMathText": True},
         }
         rax_kwargs.update(style_config.get("rax_cfg", {}))
 
