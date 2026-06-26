@@ -7,6 +7,17 @@ paths:
 
 Custom tasks extend the columnflow pipeline for non-standard outputs (custom plots, derived datacards, scale factors, etc.).
 
+## When to add one, and where to hook it
+
+- Add a custom task **only** when no default columnflow task can reach the objective. Prefer
+  reusing/configuring an existing task first.
+- Base a new custom task on the existing columnflow task that most closely matches its goal,
+  and follow the same structure.
+- Make the task's `requires()` point **as late in the pipeline as possible**: if the task needs
+  histograms, require `cf.MergeHistograms` — do not re-produce histograms from `cf.ProduceColumns`
+  inside the task. A requirement earlier than `cf.ProduceColumns` is discouraged; confirm with
+  the user before introducing one.
+
 ## Skeleton
 
 ```python

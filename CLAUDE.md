@@ -4,7 +4,7 @@ Backend for columnar, fully orchestrated HEP analyses with [law](https://github.
 
 ## Always-loaded rules (in `.claude/rules/`)
 
-- **01-pipeline.md** — task order, 5 TAF types, law.cfg module registration
+- **01-pipeline.md** — task order, 5 TAF types, the role of each pipeline step, law.cfg module registration
 - **02-invariants.md** — set_ak_column, uses/produces, imports, Selector return type, MC guard, keep_columns, no loops
 - **running.md** — executing tasks: env setup, run/status flags, `--branch 0`, `--remove-output`, sandboxes, reading failures
 - **linting.md** — respect `.flake8` rules while coding; before pushing run `bash tests/run_linting` (Python) + `bash tests/run_docs lint` (markdown) + `bash tests/run_tests` (unit tests); commit fixes as `linting fixes`
