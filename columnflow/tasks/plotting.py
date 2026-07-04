@@ -178,6 +178,7 @@ class PlotVariablesBase(_PlotVariablesBase):
         ]
         plot_shifts = self.get_plot_shifts()
         plot_shift_names = set(shift_inst.name for shift_inst in plot_shifts)
+        print(plot_shift_names)
 
         # get assignment of processes to datasets and shifts
         config_process_map, process_shift_map = self.get_config_process_map()
@@ -528,7 +529,14 @@ class PlotVariablesBaseMultiShifts(
         seqs = [self.categories, self.variables]
         keys = ["category", "variable"]
         if not self.combine_shifts:
-            seqs.append(self.shift_sources)
+            shift_sources = set()
+            for s in self.shifts:
+                if not self.config_insts[0].has_shift(s):
+                    continue
+                shift_inst = self.config_insts[0].get_shift(s)
+                if "subshifts" not in shift_inst.aux:
+                    shift_sources.add(shift_inst.source)
+            seqs.append(shift_sources)
             keys.append("shift_source")
         return [DotDict(zip(keys, vals)) for vals in itertools.product(*map(sorted, seqs))]
 
@@ -546,9 +554,30 @@ class PlotVariablesBaseMultiShifts(
 
         for config_inst, datasets in zip(self.config_insts, self.datasets):
             reqs[config_inst.name] = {}
+            shift_names = filter(config_inst.has_shift, self.shifts)
+            shift_insts = list(map(config_inst.get_shift, shift_names))
+            ignore = []
+            keep = []
+            for shift_inst in shift_insts:
+                if (subshifts := shift_inst.x("subshifts", [])):
+                    ignore.extend(subshifts)
+                if shift_inst.name in ignore:
+                    if shift_inst.name in keep:
+                        keep.remove(shift_inst.name)
+                else:
+                    keep.append(shift_inst.name)
+
+            keep = [s.name for s in shift_insts if s.name not in ignore]
+            keep_sources = [s.source for s in shift_insts if s.name not in ignore]
+
             for d in datasets:
                 if d not in config_inst.datasets:
                     continue
+                _req_cls = req_cls(d, config_inst)
+                if hasattr(_req_cls, "shift_sources"):
+                    kwargs = dict(shift_sources=keep_sources)
+                else:
+                    kwargs = dict(shift=keep[0])
                 reqs[config_inst.name][d] = req_cls(d, config_inst).req(
                     self,
                     config=config_inst.name,
@@ -556,6 +585,7 @@ class PlotVariablesBaseMultiShifts(
                     branch=-1,
                     _exclude={"branches"},
                     _prefer_cli={"variables"},
+                    **kwargs,
                 )
 
         return reqs
@@ -601,8 +631,11 @@ class PlotVariablesBaseMultiShifts(
                 else:
                     shifts.append(get_shift_from_configs(self.config_insts, f"{source}_{direction}"))
 
+        hook_shifts = [od.Shift(hook_shift, id=0) for hook_shift in self.hist_hook_shifts]
+
         # add nominal
-        return [self.config_inst.get_shift("nominal"), *shifts]
+        shifts = [self.config_inst.get_shift("nominal"), *shifts, *hook_shifts]
+        return [s for s in shifts if not s.x("subshifts", [])]
 
     def get_plot_parameters(self):
         # convert parameters to usable values during plotting
