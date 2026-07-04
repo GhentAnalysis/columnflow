@@ -384,6 +384,11 @@ def jec(
             evaluator_key="jec_subset_type1_met",
         )
 
+        # store type1 met correctied
+        events = set_ak_column_f32(events, f"{jet_name}.pt_type1_met", events[jet_name].pt_raw * jec_factors_subset_type1_met)
+        events = set_ak_column_f32(events, f"{jet_name}.mass_type1_met", events[jet_name].mass_raw * jec_factors_subset_type1_met)
+
+
         # temporarily apply the new factors with only subset of corrections
         events = set_ak_column_f32(events, f"{jet_name}.pt", events[jet_name].pt_raw * jec_factors_subset_type1_met)
         events = set_ak_column_f32(events, f"{jet_name}.mass", events[jet_name].mass_raw * jec_factors_subset_type1_met)
