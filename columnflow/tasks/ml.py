@@ -704,6 +704,7 @@ class MLEvaluation(
 
         # run the setup of the optional producer
         reader_targets = {}
+        self._array_function_post_init()
         if self.preparation_producer_inst:
             reader_targets = self.preparation_producer_inst.run_setup(
                 task=self,
