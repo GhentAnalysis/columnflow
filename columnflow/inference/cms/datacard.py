@@ -80,6 +80,8 @@ class DatacardWriter(object):
         - :py:attr:`ParameterTransformation.flip_larger_if_one_sided`: Same as
             :py:attr:`ParameterTransformation.flip_smaller_if_one_sided`, but flips the larger effect. Rate-type
             parameters only.
+        - :py:attr:`ParameterTransformation.flip_up`: Use inverted up as down variation. Only applies to shape-type parameters.
+        - :py:attr:`ParameterTransformation.flip_down`: Use inverted down as up variation. Only applies to shape-type parameters.
 
     .. note::
 
@@ -324,7 +326,6 @@ class DatacardWriter(object):
                             d, u = effect
                             diff = 0.5 * (d + u) - 1.0
                             effect = (effect[0] - diff, effect[1] - diff)
-
                         elif (
                             trafo == ParameterTransformation.asymmetrize or
                             (
@@ -364,7 +365,16 @@ class DatacardWriter(object):
                                 # skip one-sided effects
                                 continue
                             effect = tuple(((2.0 - e) if i == flip_index else e) for i, e in enumerate(effect))
-
+                        elif trafo == ParameterTransformation.flip_up:
+                            if not isinstance(effect, tuple) or len(effect) != 2:
+                                continue
+                            _, u = effect
+                            effect = (1 / u, u)
+                        elif trafo == ParameterTransformation.flip_down:
+                            if not isinstance(effect, tuple) or len(effect) != 2:
+                                continue
+                            d, _ = effect
+                            effect = (1 / d, d)
                 elif param_obj.type.is_shape:
                     # apply transformations one by one
                     for trafo in param_obj.transformations:
@@ -797,6 +807,20 @@ class DatacardWriter(object):
                             v_down.value[down_mask] = v_nom.value[down_mask] - abs_diffs_down[down_mask]
                             v_down.value[up_mask] = v_nom.value[up_mask] - abs_diffs_up[up_mask]
                             v_down.variance[up_mask] = v_up.variance[up_mask]
+                        elif trafo == ParameterTransformation.flip_up:
+                            v_nom = h_nom.view()
+                            v_down = h_down.view()
+                            v_up = h_up.view()
+                            up_ratio = v_up.value / v_nom.value
+                            down_ratio = 1 / up_ratio
+                            v_down.value[:] = v_nom.value * down_ratio
+                        elif trafo == ParameterTransformation.flip_down:
+                            v_nom = h_nom.view()
+                            v_up = h_up.view()
+                            v_down = h_down.view()
+                            down_ratio = v_down.value / v_nom.value
+                            up_ratio = 1 / down_ratio
+                            v_up.value[:] = v_nom.value * up_ratio
 
                     # custom hook to modify the shapes
                     h_nom, h_down, h_up = self.modify_parameter_shape(

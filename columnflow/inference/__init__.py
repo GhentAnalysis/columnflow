@@ -108,6 +108,8 @@ class ParameterTransformation(enum.Enum):
         nominal value. Only applies to rate-type parameters.
     :cvar flip_larger_if_one_sided: Same as :py:attr:`flip_smaller_if_one_sided`, but flips the larger effect. Only
         applies to rate-type parameters.
+    :cvar flip_up:  Use inverted up as down variation. Only applies to shape-type parameters.
+    :cvar flip_down:  Use inverted down as up variation. Only applies to shape-type parameters.
     """
 
     none = "none"
@@ -123,6 +125,8 @@ class ParameterTransformation(enum.Enum):
     envelope_enforce_two_sided = "envelope_enforce_two_sided"
     flip_smaller_if_one_sided = "flip_smaller_if_one_sided"
     flip_larger_if_one_sided = "flip_larger_if_one_sided"
+    flip_up = "flip_up"
+    flip_down = "flip_down"
 
     def __repr__(self) -> str:
         return f"<{self.__class__.__name__}.{self.value}>"
@@ -506,6 +510,7 @@ class InferenceModel(Derivable, metaclass=InferenceModelMeta):
         effect: Any | None = 1.0,
         effect_precision: int = 4,
         is_dynamic: bool = False,
+        is_onesided: bool = False,
     ) -> DotDict:
         """
         Returns a dictionary representing a (nuisance) parameter, forwarding all arguments.
@@ -533,6 +538,7 @@ class InferenceModel(Derivable, metaclass=InferenceModelMeta):
             ("effect", effect),
             ("effect_precision", effect_precision),
             ("is_dynamic", bool(is_dynamic)),
+            ("is_onesided", bool(is_onesided)),
         ])
 
     @classmethod

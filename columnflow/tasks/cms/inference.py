@@ -213,19 +213,28 @@ class CreateDatacards(SerializeInferenceModelBase):
                                 if config_inst.name in param_obj.config_data
                                 else None
                             )
+
+                            found_one_side = False
                             for d in ["up", "down"]:
-                                shift_inst = config_inst.get_shift(f"{shift_source}_{d}")
+                                shift_inst = config_inst.get_shift(f"{shift_source}_{d}" if shift_source else "nominal")
                                 if shift_inst.has_tag("is_collection"):
                                     continue
                                 if shift_source and f"{shift_source}_{d}" not in h_proc.axes["shift"]:
-                                    raise ValueError(
-                                        f"cannot find '{shift_source}_{d}' in shift axis of histogram for process "
-                                        f"'{proc_obj.name}' in config '{config_inst.name}' while handling parameter "
-                                        f"'{param_obj.name}' in datacard category '{cat_obj.name}', available shifts "
-                                        f"are: {list(h_proc.axes['shift'])}",
+                                    if not param_obj.is_onesided or ((d == "down") and not found_one_side):
+                                        raise ValueError(
+                                            f"cannot find '{shift_source}_{d}' in shift axis of histogram for process "
+                                            f"'{proc_obj.name}' in config '{config_inst.name}' while handling parameter "
+                                            f"'{param_obj.name}' in datacard category '{cat_obj.name}', available shifts "
+                                            f"are: {list(h_proc.axes['shift'])}",
+                                        )
+                                    self.logger.warning(
+                                        f"using nominal for shift {shift_inst.name} for one-sided parameter {param_obj.name}",
                                     )
+                                    shift_inst = config_inst.get_shift("nominal")
+                                found_one_side = True
+
                                 shift_hists[(param_obj.name, d)] = _h = h_proc[{
-                                    "shift": hist.loc(f"{shift_source}_{d}" if shift_source else "nominal"),
+                                    "shift": hist.loc(shift_inst.name),
                                 }]
 
                                 nans = np.isnan(_h.values(flow=True))
