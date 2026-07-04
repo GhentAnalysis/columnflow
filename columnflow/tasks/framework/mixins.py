@@ -2824,6 +2824,33 @@ class HistHookMixin(ConfigTask):
         return self.build_repr(names)
 
 
+    @property
+    def hist_hook_shifts(self) -> list[str]:
+        """
+        Invoke hooks to modify histograms before further processing such as plotting.
+        """
+        if not self.hist_hooks:
+            return []
+
+        # apply hooks in order
+        shifts = set()
+        for hook in self.hist_hooks:
+            if hook in {None, "", law.NO_STR}:
+                continue
+
+            # get the hook
+            func = self._get_hist_hook(hook)
+
+            if hasattr(func, "shifts"):
+                if isinstance(func.shifts, dict):
+                    for cfg in self.config_insts:
+                        shifts.update(func.shifts[cfg.name])
+                else:
+                    shifts.update(func.shifts)
+
+        return sorted(shifts)
+
+
 class MergeHistogramMixin(
         VariablesMixin,
         law.LocalWorkflow,
