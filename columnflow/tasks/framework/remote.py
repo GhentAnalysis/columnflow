@@ -694,6 +694,12 @@ class HTCondorWorkflow(RemoteWorkflowMixin, law.htcondor.HTCondorWorkflow):
         description="number of GPUs to request; empty value leads to the cluster default setting; "
         "empty default",
     )
+    htcondor_prio = luigi.IntParameter(
+        default=law.NO_INT,
+        significant=False,
+        description="initial priority of jobs "
+        "empty default",
+    )
     htcondor_memory = law.BytesParameter(
         default=_default_htcondor_memory,
         unit="GB",
@@ -734,7 +740,7 @@ class HTCondorWorkflow(RemoteWorkflowMixin, law.htcondor.HTCondorWorkflow):
     # parameters that should not be passed from workflow to branches
     exclude_params_branch = {
         "max_runtime", "htcondor_logs", "htcondor_cpus", "htcondor_gpus", "htcondor_memory",
-        "htcondor_disk", "htcondor_flavor", "htcondor_share_software",
+        "htcondor_disk", "htcondor_flavor", "htcondor_share_software", "htcondor_prio",
     }
 
     # mapping of environment variables to render variables that are forwarded
@@ -767,6 +773,7 @@ class HTCondorWorkflow(RemoteWorkflowMixin, law.htcondor.HTCondorWorkflow):
         self.add_message_handler("htcondor_logs")
         self.add_message_handler("htcondor_cpus")
         self.add_message_handler("htcondor_gpus")
+        self.add_message_handler("htcondor_prio")
         self.add_message_handler("htcondor_memory")
         self.add_message_handler("htcondor_disk")
 
@@ -861,6 +868,10 @@ class HTCondorWorkflow(RemoteWorkflowMixin, law.htcondor.HTCondorWorkflow):
         # request memory
         if self.htcondor_memory is not None and self.htcondor_memory > 0:
             config.custom_content.append(("Request_Memory", f"{self.htcondor_memory} Gb"))
+
+        # request memory
+        if self.htcondor_prio is not None:
+            config.custom_content.append(("priority", self.htcondor_prio))
 
         # request disk space
         if self.htcondor_disk is not None and self.htcondor_disk > 0:
