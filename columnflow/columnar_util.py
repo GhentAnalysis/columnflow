@@ -817,6 +817,8 @@ def add_ak_alias(
         - ``"original"``: If existing, *dst_route* remains unchanged.
         - ``"remove"``: If existing, *dst_route* is removed.
         - ``"raise"``: A *ValueError* is raised.
+        - ``"warning_once"``: a warning is raised once.
+        - ``"warning"``: a warning is raised.
 
     Examples:
 
@@ -845,7 +847,7 @@ def add_ak_alias(
         # -> the destination column "Jet.pt" will be removed as there is no source column to alias
     """
     # check the strategy
-    strategies = ("original", "remove", "raise")
+    strategies = ("original", "remove", "raise", "warning_once", "warning")
     if missing_strategy not in strategies:
         raise ValueError(
             f"unknown missing_strategy '{missing_strategy}', valid values are {strategies}",
@@ -866,9 +868,12 @@ def add_ak_alias(
 
     else:
         # the source column does not exist, so apply the missing_strategy
+        warning = f"no column found in array for route '{src_route}'"
+        if "warning" in missing_strategy:
+            getattr(logger, missing_strategy)(warning)
         if missing_strategy == "raise":
             # complain
-            raise ValueError(f"no column found in array for route '{src_route}'")
+            raise ValueError(warning)
         if missing_strategy == "remove":
             # remove the actual destination column
             ak_array = remove_ak_column(ak_array, dst_route)
