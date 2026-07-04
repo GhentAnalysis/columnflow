@@ -666,6 +666,7 @@ def set_ak_column(
     route: Route | Sequence[str] | str,
     value: ak.Array,
     value_type: type | str | None = None,
+    use_zip=True,
 ) -> ak.Array:
     """
     Inserts a new column into awkward array *ak_array* and returns a new view with the column added
@@ -743,7 +744,7 @@ def set_ak_column(
 
     # use the remaining missing sub route to wrap the value via ak.zip, generating new sub fields
     while missing_sub_route:
-        value = ak.zip({missing_sub_route.pop(): value})
+        value = (ak.zip if use_zip else ak.Array)({missing_sub_route.pop(): value})
 
     # insert the value
     ak_array = ak.with_field(ak_array, value, sub_route.fields)
