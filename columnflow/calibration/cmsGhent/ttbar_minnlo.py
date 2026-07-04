@@ -104,6 +104,14 @@ def ttbar_minnlo_reweighting_producer(self: Calibrator, events: ak.Array, **kwar
     return events
 
 
+@ttbar_minnlo_reweighting_producer.init
+def ttbar_minnlo_reweighting_producer_init(self: Calibrator) -> bool:
+    if (dataset_inst := getattr(self, "dataset_inst", None)) is None:
+        return
+    if not dataset_inst.has_tag("is_ttbar"):
+        self.produces = set()
+
+
 @ttbar_minnlo_reweighting_producer.requires
 def ttbar_minnlo_reweighting_producer_requires(
     self: Calibrator,
@@ -131,3 +139,12 @@ def ttbar_minnlo_reweighting_producer_setup(
 
     file = bundle.files.ttbar_minnlo.path
     self.model = onnxruntime.InferenceSession(file)
+
+
+@ttbar_minnlo_reweighting_producer.skip
+def ttbar_minnlo_reweighting_producer_skip(self: Calibrator) -> bool:
+    # never skip when there is not dataset
+    if not getattr(self, "dataset_inst", None):
+        return False
+
+    return self.dataset_inst.is_data or not self.dataset_inst.has_tag("is_ttbar")
