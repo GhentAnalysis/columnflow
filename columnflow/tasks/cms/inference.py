@@ -109,9 +109,10 @@ class CreateDatacards(SerializeInferenceModelBase):
 
                 # step 4: hist hooks
                 _input_hists = self.invoke_hist_hooks(
-                    {config_inst: input_hists[config_inst].copy() for config_inst in config_insts},
+                    {config_inst: input_hists[config_inst].copy() for config_inst in input_hists},
                     hook_kwargs={"variable_name": variable, "category_name": category},
                 )
+                _input_hists = {config_inst: _input_hists[config_inst] for config_inst in config_insts}
 
                 # step 5: transform to datacard format
                 datacard_hists: DatacardHists = {cat_obj.name: {}}
