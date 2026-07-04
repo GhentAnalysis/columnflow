@@ -138,9 +138,10 @@ class CreateDatacards(SerializeInferenceModelBase):
                         # skip the process objects if it does not contribute to this config_inst
 
                         if proc_obj.name != "data" and config_inst.name not in proc_obj.config_data:
-                            self.logger.warning(
-                                f"{proc_obj.name} has no config data and will always be skipped",
-                            )
+                            if not proc_obj.config_data:
+                                self.logger.warning(
+                                    f"{proc_obj.name} has no config data and will always be skipped",
+                                )
                             continue
 
                         # get all process instances (keys in _input_hists) to be combined
@@ -187,7 +188,7 @@ class CreateDatacards(SerializeInferenceModelBase):
 
                         if np.any(np.isnan(shift_hists["nominal"].values(flow=True))):
                             raise ValueError(
-                                "Nan values found in nominal histogram for"
+                                "Nan values found in nominal histogram for "
                                 f"{proc_obj.name} in {cat_obj.name} (cfg {config_inst.name})",
                             )
 
@@ -241,7 +242,7 @@ class CreateDatacards(SerializeInferenceModelBase):
                                 nans = np.isnan(_h.values(flow=True))
                                 if np.any(nans):
                                     self.logger.warning(
-                                        f"Nan values found in {param_obj.name} ({d}) histogram for"
+                                        f"Nan values found in {param_obj.name} ({d}) histogram for "
                                         f"{proc_obj.name} in {cat_obj.name} (cfg {config_inst.name}). "
                                         "Set to nominal.",
                                     )
