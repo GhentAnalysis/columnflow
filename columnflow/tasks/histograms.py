@@ -364,7 +364,7 @@ class CreateHistograms(_CreateHistograms):
 
                     # let the hist producer fill it
                     self.hist_producer_inst.run_fill_hist(histograms[var_key], fill_data, task=self)
-                    logger.info("histogrammed " + var_key)
+                    logger.info_once("histogrammed " + var_key)
         # post-process the histograms
         for var_key in variable_tuples.keys():
             histograms[var_key] = self.hist_producer_inst.run_post_process_hist(histograms[var_key], task=self)
@@ -612,7 +612,8 @@ class MergeShiftedHistograms(_MergeShiftedHistograms):
         # optional dynamic behavior: determine not yet created variables and require only those
         if self.only_missing:
             missing = self.output(full=True)["hists"].count(existing=False, keys=True)[1]
-            variables = sorted(missing, key=variables.index)
+            if missing:
+                variables = sorted(missing, key=variables.index)
 
         return sorted(variables)
 
