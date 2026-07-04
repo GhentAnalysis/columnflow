@@ -18,12 +18,12 @@ maybe_import("coffea.nanoevents.methods.nanoaod")
 
 @calibrator(
     uses=four_vec("GenPart", "pdgId"),
-    produces={"hdamp_{up,down}"},
+    produces={"hdamp_weight_{up,down}"},
     sandbox="bash::$CF_BASE/sandboxes/venv_onnxruntime.sh",
     maxM=243.9517,
     default_hdamp=1.379,
 )
-def hdamp_reweighting_producer(self: Calibrator, events: ak.Array, **kwargs) -> ak.Array:
+def hdamp_reweighting_producer(self: Calibrator, events: ak.Array, task: law.Task, **kwargs) -> ak.Array:
     """
     Produces the hdamp reweighting scores.
     Based on https://twiki.cern.ch/twiki/pub/CMS/MLReweighting/ImplementationCMSSW.pdf
@@ -49,6 +49,12 @@ def hdamp_reweighting_producer(self: Calibrator, events: ak.Array, **kwargs) -> 
     ]
 
     """
+
+    if task.global_shift_inst.name != "nominal":
+        for variation in ["up", "down"]:
+            events = set_ak_column(events, f"hdamp_weight_{variation}", np.ones(len(events)))
+        return events
+
     input = []
     sum_top = None
     for pdgId in [6, -6]:
@@ -85,9 +91,23 @@ def hdamp_reweighting_producer(self: Calibrator, events: ak.Array, **kwargs) -> 
         pred = model.run([label_name], {input_name: input.astype(np.float32)})[0]
         out = np.ones(len(events))
         out[mask] = pred[:, 0] / pred[:, 1]
-        events = set_ak_column(events, f"hdamp_{variation}", out)
+        events = set_ak_column(events, f"hdamp_weight_{variation}", out)
 
     return events
+
+
+@hdamp_reweighting_producer.init
+def hdamp_reweighting_producer_init(self: Calibrator) -> bool:
+    if (dataset_inst := getattr(self, "dataset_inst", None)) is None:
+        return
+    if not dataset_inst.has_tag("is_ttbar"):
+        self.produces = set()
+
+
+@hdamp_reweighting_producer.post_init
+def hdamp_reweighting_producer_post_init(self: Calibrator, task: law.Task, **kwargs) -> bool:
+    if task.global_shift_inst.name != "nominal":
+        self.uses = {}
 
 
 @hdamp_reweighting_producer.requires
@@ -119,3 +139,13 @@ def hdamp_reweighting_producer_setup(
     for variation in ["up", "down"]:
         file = bundle.files.hdamp[variation].path
         self.models[variation] = onnxruntime.InferenceSession(file)
+
+
+@hdamp_reweighting_producer.skip
+def hdamp_reweighting_producer_skip(self: Calibrator) -> bool:
+    # never skip when there is not dataset
+    if not getattr(self, "dataset_inst", None):
+        return False
+
+    return self.dataset_inst.is_data or not self.dataset_inst.has_tag("is_ttbar")
+
