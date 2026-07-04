@@ -24,7 +24,7 @@ class PlotVariablesCatsPerProcessBase(PlotVariablesBaseSingleShift):
     )
 
     def create_branch_map(self):
-        cats = self.categories
+        cats = sorted(self.categories)
         if self.initial not in cats:
             cats = [self.initial, *cats]
         return [
