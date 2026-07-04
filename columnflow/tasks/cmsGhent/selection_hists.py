@@ -32,7 +32,7 @@ class CustomDefaultVariablesMixin(
             return params
         tag = ("_" if cls.tag_name else "") + cls.tag_name
 
-        return config_inst.x(f"default_{tag}_variables", tuple())
+        return config_inst.x(f"default{tag}_variables", tuple())
 
     @classmethod
     def resolve_param_values_pre_init(cls, params: dict[str, Any]) -> dict[str, Any]:
