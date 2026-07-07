@@ -167,6 +167,7 @@ class CreateDatacards(SerializeInferenceModelBase):
                                 f"found no histogram to model datacard process '{proc_obj.name}', please check your "
                                 f"inference model '{self.inference_model}'",
                             )
+                            breakpoint()
                             continue
 
                         # select relevant categories

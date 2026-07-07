@@ -412,9 +412,15 @@ class MergeSelectionStats(_MergeSelectionStats):
             if self.create_selection_hists:
                 try:
                     hists = inp["hists"].load(formatter="pickle", cache=False)
+                    if "process_ids" in hists:
+                        hists["process_ids"] = hists["process_ids"].sort(
+                            "variation", key=lambda x: (x != "nominal", x),
+                        )
                     self.merge_counts(merged_hists, hists)
                 except:
                     do_exit = True
+                    import traceback
+                    print(traceback.format_exc())
                     print(inp["hists"])
         if do_exit:
             exit()

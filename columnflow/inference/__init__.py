@@ -1346,6 +1346,7 @@ class InferenceModel(Derivable, metaclass=InferenceModelMeta):
         for category_name, _processes in processes.items():
             for process in _processes:
                 process.parameters.append(_copy.deepcopy(parameter))
+                # print(parameter.name, "added to\033[91m", process.name + "\033[00m", category_name)
 
         # add to groups if it was added to at least one process
         if group and processes and any(_processes for _processes in processes.values()):
