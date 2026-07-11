@@ -459,16 +459,20 @@ class PlotTriggerScaleFactors1D(
             kwargs["skip_ratio"] = len(hists) == 1
 
         vr_insts = self.get_variables(vrs)
-
-        fig, axes = self.call_plot_func(
-            self.plot_function,
-            hists=hists,
-            config_inst=self.config_inst,
-            category_inst=self.baseline_cat(),
-            variable_insts=vr_insts,
-            shift_insts=[self.config_inst.get_shift("nominal")],
-            **kwargs,
-        )
+        try:
+            fig, axes = self.call_plot_func(
+                self.plot_function,
+                hists=hists,
+                config_inst=self.config_inst,
+                category_inst=self.baseline_cat(),
+                variable_insts=vr_insts,
+                shift_insts=[self.config_inst.get_shift("nominal")],
+                **kwargs,
+            )
+        except:
+            import traceback
+            logger.error(traceback.format_exc())
+            breakpoint()
 
         for p in self.output():
             p.dump(fig, formatter="mpl")

@@ -270,7 +270,7 @@ class SerializeInferenceModelBase(
                     h_proc = h[{
                         "process": [hist.loc(p.name) for p in sub_process_insts if p.name in h.axes["process"]],
                     }]
-                    h_proc = h_proc[{"process": sum}]
+                    # h_proc = h_proc[{"process": sum}]
 
                     # additional custom reductions
                     h_proc = self.modify_process_hist(

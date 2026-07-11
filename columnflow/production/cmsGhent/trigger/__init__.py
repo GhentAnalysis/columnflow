@@ -87,8 +87,13 @@ class TriggerSFConfig:
         for unc in uncertainties:
             self.uncertainty(unc)
 
-    def copy(self, **changes):
-        return replace(self, **changes)
+    def copy(self, sf_name, config_name=None, **changes):
+        out = replace(self, sf_name=sf_name, config_name=config_name, **changes)
+        if out.config_name == self.config_name:
+            raise AssertionError("copy of {self.config_name} has same config name")
+        if out.sf_name == self.sf_name:
+            raise AssertionError("copy of {self.sf_name} has same sf_name")
+        return out
 
     def get_variable(self, var_name: str) -> od.Variable:
         return self._var_mapping[var_name]

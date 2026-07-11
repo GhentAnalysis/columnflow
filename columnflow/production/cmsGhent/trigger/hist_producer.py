@@ -85,11 +85,14 @@ def trigger_efficiency_hists(
             )
         hists[f"{self.config_name}_efficiencies"] = histogram.Weight()
 
-    fill_hist(
-        hists[f"{self.config_name}_efficiencies"],
-        fill_data,
-        last_edge_inclusive=False,
-    )
+    try:
+        fill_hist(
+            hists[f"{self.config_name}_efficiencies"],
+            fill_data,
+            last_edge_inclusive=False,
+        )
+    except:
+        breakpoint()
 
     return events
 
