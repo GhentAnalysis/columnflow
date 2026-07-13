@@ -52,3 +52,9 @@ def default_init(self: HistProducer) -> None:
 - Declare `self.shifts` in the `init` hook: the framework uses this to resolve column aliases when a shift is active (e.g. `muon_weight` → `muon_weight_up` under `mu_up`).
 - `Route(column).apply(events)` safely reads a column; use it instead of `events[column]` when the column name is a variable.
 - Register in `law.cfg` under `hist_production_modules`.
+
+## Matplotlib figures in custom law tasks
+
+In any custom law task that builds matplotlib figures in a loop, call `plt.close(fig)` immediately
+after each `output().dump(..., formatter="mpl")`. Unclosed figures accumulate and leak memory in
+batch/grid jobs.

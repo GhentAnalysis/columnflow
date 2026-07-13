@@ -98,3 +98,26 @@ cfg.x.external_files = DotDict.wrap({
 "n_jet"          # scalar column (from ProduceColumns)
 "MET.pt"         # scalar per-event field
 ```
+
+## Loop variable capture in registration lambdas
+
+In `add_variable`/`add_category` registration loops, capture the loop variable with a default
+argument in any lambda: `lambda events, flavor=flavor: ...`. A bare closure over `flavor` binds
+late and every registered object reads the final loop value.
+
+```python
+# WRONG — every registered category ends up using the last "flavor" in the loop
+for flavor in ("electron", "muon"):
+    add_category(cfg, name=flavor, selection=lambda events: select(events, flavor))
+
+# CORRECT
+for flavor in ("electron", "muon"):
+    add_category(cfg, name=flavor, selection=lambda events, flavor=flavor: select(events, flavor))
+```
+
+## Populate config.x values before registration reads them
+
+Config values read at module-registration time (e.g. `config.x.lepton_fo_grid` inside
+variable/category definitions) must be populated first — call the settings-population function
+(`add_lepton_settings(config)` etc.) before any registration that reads them, or you get
+`AttributeError` at import.

@@ -8,6 +8,9 @@ Always respect the `.flake8` settings when writing code — do not produce code 
 - `ignore = E128, E306, E402, E722, E731, W504, Q003`
 - `inline-quotes = double` — use `"..."` not `'...'` for strings
 - Never leave active `breakpoint()` calls (CI scans for them — add `# noqa` if intentional)
+- Do not add `maybe_import` lines (`np`, `json`, `defaultdict`, ...) by reflex — flake8 F401 flags
+  any that the module body never references. Import only what is actually used. Note: a name used
+  solely in a type annotation DOES count as used.
 
 ## Before pushing to GitHub / GitLab
 

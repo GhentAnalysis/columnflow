@@ -102,3 +102,10 @@ from columnflow.production.util import attach_coffea_behavior
 events = self[attach_coffea_behavior](events, **kwargs)
 mll = (events.Lepton[:, 0] + events.Lepton[:, 1]).mass
 ```
+
+## Scalar broadcast onto a per-object axis — only valid for exactly-1-object regions
+
+Broadcasting a per-event scalar onto a per-lepton axis (e.g. `mt_fixed[:, None]`) is only correct
+where each event has exactly one object of interest. In multi-object (e.g. closure ≥2-FO) regions
+the value silently duplicates across leptons. If a variable is defined globally, add a WHY comment
+tying it to the exactly-1-object region.

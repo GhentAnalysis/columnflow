@@ -189,3 +189,16 @@ law run hbw.CreateMultipleDatacards --version dev1 --inference-model default
 - Without `LocalWorkflow`, the task is a single-branch task — omit `create_branch_map()`.
 - For remote execution add `HTCondorWorkflow` or `SlurmWorkflow` as additional base classes.
 - Always register the module path in `law.cfg [modules]` so `law` can discover the task.
+
+## Custom-task pitfalls
+
+- Always pass `selector` / `producers` / `variables` explicitly to `.req(...)`; omitting them
+  makes law default to an unregistered producer (e.g. `main`) and the graph fails to resolve.
+- A task whose `run()` uses `yield`-based dynamic requirements must NOT set
+  `sandbox = dev_sandbox(...)` — the yielded worker executes in-sandbox and is "not granted run
+  permission" (exit 30). Post-processing tasks that only touch numpy/hist/matplotlib need no
+  columnar sandbox.
+- If new code imports a third-party package (e.g. `statsmodels`), confirm it exists in the target
+  sandbox/venv before running; if missing, point `law.cfg` at a sandbox that has it rather than
+  adding an ad-hoc import.
+- Verify a new custom task with `law run cf.<Task> --print-status -1` before a real run.

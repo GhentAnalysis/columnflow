@@ -1,5 +1,32 @@
 # Columnflow Coding Invariants
 
+## Column availability — uses vs. sub-TAF produces (most common runtime failure)
+
+A column read from `events` must be either (i) an upstream/NanoAOD input branch listed in this
+TAF's `uses`, or (ii) a column produced by a sub-TAF already invoked earlier in this function
+(`events = self[sub](events)`). This passes lint but crashes at run — check it before running.
+
+```python
+# WRONG — "loose" is produced by fo_selector; listing it in uses forces a disk load
+# and breaks ReduceEvents (it never survives keep_columns as a raw input column)
+@producer(uses={fo_selector, "loose"}, produces={fo_selector, "tight"})
+def my_producer(self, events, **kwargs):
+    events = self[fo_selector](events, **kwargs)   # fo_selector's own produces propagate "loose"
+    ...
+
+# CORRECT
+@producer(uses={fo_selector}, produces={fo_selector, "tight"})
+def my_producer(self, events, **kwargs):
+    events = self[fo_selector](events, **kwargs)
+    ...
+```
+
+NEVER list a runtime-produced column (e.g. `loose`, `pt_jet`, `FO`, `tight`) in `uses` — the
+sub-TAF's own `produces` propagates it. Before reading `Collection.field`, confirm which
+selector/producer writes it and that it survives `keep_columns`. Pre-flight: cross-check every
+`uses` entry against sub-TAF `produces` — anything a called sub-TAF makes must be removed from
+`uses`.
+
 ## Column writes — always use set_ak_column
 
 ```python
@@ -103,3 +130,18 @@ cfg.x.keep_columns = DotDict.wrap({
 events = self[other_producer](events, **kwargs)
 events, sub_result = self[sub_selector](events, **kwargs)
 ```
+
+## HistProducer statelessness
+
+HistProducers must be stateless between `__call__` and `fill_hist`. Never store per-fill arrays
+on `self` (e.g. `self._tight_flat`) to bridge the two hooks — the same instance handles multiple
+datasets/categories/shifts in unspecified order, so bridged state desyncs and raises IndexError.
+Thread all per-object state through the `data` dict, recomputed fresh in the fill hook.
+
+## coffea vector attribute shadowing
+
+Access lepton/jet kinematic fields by subscript (`events[flavor]["eta"]`, `["pt"]`, `["phi"]`),
+never by attribute (`.eta`, `.pt`) on collections with coffea vector behavior — attribute access
+can hit shadowed vector properties and raise `array does not have azimuthal coordinates`. Also
+avoid union-typed awkward arrays: guard with `ak.where`, not conditional slicing, before any
+broadcast/bitwise op (union types raise `cannot broadcast ListArray with NumpyArray`).
