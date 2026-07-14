@@ -915,17 +915,31 @@ def jer(self: Calibrator, events: ak.Array, **kwargs) -> ak.Array:
         match_pt = ak.concatenate([events[jet_name][pt_name][..., None] for pt_name in pt_names], axis=-1)
     pt_relative_diff = 1 - matched_gen_jet.pt / match_pt
 
-    # test if matched gen jets are within 3 * resolution
-    # (no check for Delta-R matching criterion; we assume this was done during nanoAOD production to get the genJetIdx)
+    # test if matched gen jets are within 3 * resolution and dR < cone_size / 2
     is_matched_pt = np.abs(pt_relative_diff) < 3 * jer
     is_matched_pt = ak.fill_none(is_matched_pt, False)  # masked values = no gen match
+
+    # assume cone size of 0.4 for 'Jet' and 0.8 for 'FatJet' (default)
+    if self.jet_name == "Jet":
+        jet_cone_size = 0.4
+    elif self.jet_name == "FatJet":
+        jet_cone_size = 0.8
+    else:
+        logger.warning_once(
+            f"{id(self)}_jer_cone_size",
+            f"no default cone size for jet collection '{self.jet_name}' is known. "
+            "Assuming 0.8 for the purpose of gen jet matching. "
+        )
+        jet_cone_size = 0.8
+    is_matched_dr = matched_gen_jet.delta_r(events[jet_name]) < 0.5 * jet_cone_size
+    is_matched = is_matched_pt & is_matched_dr
 
     # compute smearing factors (scaling method)
     smear_factors_scaling = 1.0 + (jersf - 1.0) * pt_relative_diff
 
     # -- hybrid smearing: take smear factors from scaling if there was a match,
     # otherwise take the stochastic ones
-    smear_factors = ak.where(is_matched_pt, smear_factors_scaling, smear_factors_stochastic)
+    smear_factors = ak.where(is_matched, smear_factors_scaling, smear_factors_stochastic)
 
     # ensure array with correctionlib output 'Nan' are set to 0.0 in the next line
     smear_factors = ak.nan_to_none(smear_factors)
