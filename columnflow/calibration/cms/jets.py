@@ -928,7 +928,7 @@ def jer(self: Calibrator, events: ak.Array, **kwargs) -> ak.Array:
         logger.warning_once(
             f"{id(self)}_jer_cone_size",
             f"no default cone size for jet collection '{self.jet_name}' is known. "
-            "Assuming 0.8 for the purpose of gen jet matching. "
+            "Assuming 0.8 for the purpose of gen jet matching. ",
         )
         jet_cone_size = 0.8
     is_matched_dr = matched_gen_jet.delta_r(events[jet_name]) < 0.5 * jet_cone_size
