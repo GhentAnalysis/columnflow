@@ -147,7 +147,7 @@ class TriggerSFConfig:
                         name: self.get_variable(name).x("reduce", sum)
                         for name in h.axes.name if name not in vrs
                     }
-                    histograms[dt] = reduce_hist(h, red_vrs)
+                    histograms[dt] = reduce_hist(h, red_vrs, keepdims=False)
                 kwargs |= unc_kwargs
                 out = func(histograms, self.tag, self.ref_tag, *args, **kwargs)
                 if not skip:

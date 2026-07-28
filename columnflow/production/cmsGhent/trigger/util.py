@@ -24,7 +24,7 @@ def reduce_hist(
     histogram: Hist,
     reduce: str | Collection[str] | dict[str, sum | int] | Ellipsis = Ellipsis,
     exclude: str | Collection[str] = tuple(),
-    keepdims=True,
+    keepdims=False,
 ):
     import hist
 
@@ -38,13 +38,18 @@ def reduce_hist(
         reduce = law.util.make_list(reduce)
 
     h_idx = {}
+    remove_flow = []
     for v in reduce:
         if v in exclude:
             continue
         if isinstance(reduce, dict):
             idx = reduce[v]
             if keepdims and isinstance(idx, int):
-                idx = [idx]
+                if isinstance(histogram.axes[v], (hist.axis.StrCategory, hist.axis.IntCategory)):
+                    idx = [idx]
+                else:
+                    idx = slice(idx, idx + 1)
+                    remove_flow.append(v)
             h_idx[v] = idx
         elif keepdims:
             n_bins = len(histogram.axes[v])
@@ -53,7 +58,12 @@ def reduce_hist(
         else:
             h_idx[v] = sum
 
-    return histogram[h_idx]
+    out = histogram[h_idx]
+    for v in remove_flow:
+        out[{v: hist.underflow}] = np.zeros_like(out[{v: hist.underflow}])
+        out[{v: hist.overflow}] = np.zeros_like(out[{v: hist.overflow}])
+
+    return out
 
 
 def loop_hists(*hists: Hist, exclude_axes: str | Collection[str] = tuple()) -> tuple[dict[str, int], list[Hist]]:

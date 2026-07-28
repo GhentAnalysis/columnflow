@@ -162,11 +162,16 @@ class TriggerScaleFactors(
         for vrs in self.loop_variables():
             key = "_".join(vrs)
 
+            # reduce histograms
+            red_hist = {}
+            for dt, h in collect_hists.items():
+                red_vrs = {
+                    name: self.trigger_config_inst.get_variable(name).x("reduce", sum)
+                    for name in h.axes.name if name not in vrs + triggers
+                }
+                red_hist[dt] = util.reduce_hist(h, red_vrs, keepdims=False)
+
             # calculate efficiency binned in given variables
-            red_hist = {
-                dt: util.reduce_hist(h, exclude=vrs + triggers, keepdims=False)
-                for dt, h in collect_hists.items()
-            }
             efficiencies[key] = eff = {dt: calc_eff(h) for dt, h in red_hist.items()}
 
             # calculate sf from efficiencies
@@ -178,7 +183,11 @@ class TriggerScaleFactors(
                 # full uncertainties for main binning
                 for unc_function in self.trigger_config_inst.uncertainties:
                     if (unc := unc_function(histograms, store_hists)) is not None:
-                        sf = sf + unc
+                        print(unc_function)
+                        try:
+                            sf = sf + unc
+                        except:
+                            breakpoint()
             elif tcfg.stat_unc is not None:
                 # statistical only for other binnings
                 sf = sf + tcfg.stat_unc(red_hist, store_hists)

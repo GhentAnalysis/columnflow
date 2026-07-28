@@ -146,7 +146,7 @@ def calc_corr(
     unred_corr_hist = mc_hist[{t: sum for t in triggers}]
 
     # Step 2: Reduce the histogram keeping only the trigger axes and variables in which the correlation is binned
-    mc_hist = util.reduce_hist(mc_hist, exclude=[*triggers, *corr_variables])
+    mc_hist = util.reduce_hist(mc_hist, exclude=[*triggers, *corr_variables], keepdims=True)
 
     # Step 3: Identify axes to keep for correlation histogram (i.e., variables in which the variables are binned)
     corr_vars = [ax.name for ax in mc_hist.axes if ax.name not in triggers]
