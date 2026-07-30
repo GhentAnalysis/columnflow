@@ -140,7 +140,11 @@ class GetDatasetLFNs(DatasetTask, law.tasks.TransferLocalFile):
         """
         base = law.config.get_expanded("custom_pnfs_fs", "base")
         base_v2 = law.config.get_expanded("custom_pnfs_fs_v2", "base")
-        if os.path.exists(f"{base_v2}{dataset_key}"):
+        base_v3 = law.config.get_expanded("custom_pnfs_fs_v3", "base")
+        if os.path.exists(f"{base_v3}{dataset_key}"):
+            print(f"Loading dataset from {base_v3}")
+            out = glob.glob(f"{base_v3}{dataset_key}/*/*/*.root")
+        elif os.path.exists(f"{base_v2}{dataset_key}"):
             print(f"Loading dataset from {base_v2}")
             out = glob.glob(f"{base_v2}{dataset_key}/*/*/*.root")
         else:

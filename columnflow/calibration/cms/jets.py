@@ -614,7 +614,8 @@ def jec_setup(
                 ]
 
         return [
-            f"{jec.campaign}_{jec_era}_{jec.version}_DATA_{name}_{jec.jet_type}"
+            f"{jec.campaign}_{jec.version}_DATA_{name}_{jec.jet_type}"
+            #f"{jec.campaign}_{jec_era}_{jec.version}_DATA_{name}_{jec.jet_type}"
             if is_data else
             f"{jec.campaign}_{jec.version}_MC_{name}_{jec.jet_type}"
             for name in names
@@ -832,13 +833,17 @@ def jer(self: Calibrator, events: ak.Array, **kwargs) -> ak.Array:
         inputs = [_variable_map[inp.name] for inp in self.evaluators["jer"].inputs]
         jerpt[jec_var] = ak_evaluate(self.evaluators["jer"], *inputs)
 
-    # extract scale factors
+    # nominal jer sf
     jersf = {}
-    for jer_var in self.jer_variations:
-        _variable_map = variable_map | {"systematic": jer_var}
-        inputs = [_variable_map[inp.name] for inp in self.evaluators["sf"].inputs]
-        jersf[jer_var] = ak_evaluate(self.evaluators["sf"], *inputs)
+    inputs = [variable_map[inp.name] for inp in self.evaluators["sf"].inputs]
+    jersf[jer_nom] = ak_evaluate(self.evaluators["sf"], *inputs)
 
+    # jer sf uncertainty
+    inputs = [variable_map[inp.name] for inp in self.evaluators["unc"].inputs]
+    jer_unc = ak_evaluate(self.evaluators["unc"], *inputs)
+    jersf[jer_up] = jersf[jer_nom] * ( 1.0 + jer_unc )
+    jersf[jer_down] = jersf[jer_nom] * ( 1.0 - jer_unc )
+    
     # extract scale factors for jec uncertainties
     for jec_var in self.jec_variations:
         _variable_map = variable_map | {"JetPt": events[jet_name][f"pt_{jec_var}"]}
@@ -1091,6 +1096,7 @@ def jer_setup(
     jer_keys = {
         "jer": f"{jer_cfg.campaign}_{jer_cfg.version}_MC_PtResolution_{jer_cfg.jet_type}",
         "sf": f"{jer_cfg.campaign}_{jer_cfg.version}_MC_ScaleFactor_{jer_cfg.jet_type}",
+        "unc": f"{jer_cfg.campaign}_{jer_cfg.version}_MC_SFUncertainty_{jer_cfg.jet_type}",
     }
 
     # store the evaluators
