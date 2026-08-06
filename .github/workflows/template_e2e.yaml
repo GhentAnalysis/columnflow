@@ -1,0 +1,195 @@
+name: Template E2E
+
+on:
+  workflow_dispatch:
+  pull_request:
+  push:
+
+jobs:
+  template_e2e:
+    name: ghent_template e2e 🚀
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    defaults:
+      run:
+        shell: bash
+    env:
+      # the analysis instance is created into this directory, relative to the checkout root
+      CF_ANALYSIS_DIR: citest
+      # standard task arguments shared by the calibration -> histogramming chain
+      TASK_ARGS: >-
+        --version ci --config l18 --dataset tt_dl_powheg --workers 1 --local-scheduler True
+    steps:
+      - name: Checkout ⬇️
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+          submodules: recursive
+
+      - name: Setup python 🐍
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.9"
+
+      - name: Prepare scratch directories 📁
+        run: |
+          # TMPDIR: the ghent_template setup.sh hardcodes /scratch/$USER/columnflow as a fallback,
+          # which does not exist on GitHub-hosted runners; pre-export it to something writable
+          echo "TMPDIR=${RUNNER_TEMP}/cf" >> "${GITHUB_ENV}"
+          mkdir -p "${RUNNER_TEMP}/cf"
+
+          # CF_SOFTWARE_BASE: pin explicitly so CF_VENV_BASE (CF_SOFTWARE_BASE/venvs) resolves to a
+          # deterministic, cacheable path instead of the interactively-queried default
+          echo "CF_SOFTWARE_BASE=${RUNNER_TEMP}/software" >> "${GITHUB_ENV}"
+
+      - name: Cache CI test-data bundle 💾
+        id: cache-testdata
+        uses: actions/cache@v4
+        with:
+          path: ${{ runner.temp }}/testdata
+          key: ci-testdata-v1
+
+      - name: Download CI test-data bundle 📥
+        if: steps.cache-testdata.outputs.cache-hit != 'true'
+        run: |
+          mkdir -p "${RUNNER_TEMP}/testdata"
+          # -f: fail loudly on a missing/private release asset instead of silently unpacking an
+          # HTML error page (see tests/ci/README.md for how this bundle is produced)
+          curl -fsSL "https://github.com/GhentAnalysis/columnflow/releases/download/ci-testdata-v1/ci-testdata-v1.tar.gz" \
+            | tar xz -C "${RUNNER_TEMP}/testdata"
+
+      - name: Export test-data location 🔧
+        run: echo "CF_CI_TESTDATA=${RUNNER_TEMP}/testdata" >> "${GITHUB_ENV}"
+
+      - name: Cache sandbox virtualenvs 💾
+        uses: actions/cache@v4
+        with:
+          path: ${{ runner.temp }}/software/venvs
+          key: ci-venvs-${{ runner.os }}-${{ hashFiles('sandboxes/cf.txt', 'sandboxes/columnar.txt', 'sandboxes/dev.txt') }}
+          restore-keys: |
+            ci-venvs-${{ runner.os }}-
+
+      - name: Instantiate ghent_template analysis 🏗️
+        run: |
+          # these must be the literal strings "true"/"false": the script evaluates them as
+          # commands (`if ${noninteractive}; then`), so a value of "1" would not work
+          export CF_CREATE_ANALYSIS_NONINTERACTIVE=true
+          export CF_CREATE_ANALYSIS_DEBUG=true
+          # CF_CREATE_ANALYSIS_DEBUG symlinks modules/columnflow to this checkout, so CI exercises
+          # this PR's columnflow code rather than fetching a tarball of a remote branch
+          export cf_analysis_name="${CF_ANALYSIS_DIR}"
+          export cf_module_name="${CF_ANALYSIS_DIR}"
+          export cf_short_name="${CF_ANALYSIS_DIR}"
+          export cf_analysis_flavor=ghent_template
+          export cf_use_ssh=False
+          bash create_analysis.sh
+
+      - name: Write law_user.cfg 📝
+        working-directory: ${{ env.CF_ANALYSIS_DIR }}
+        run: |
+          # law.cfg already declares `extend: $CITEST_BASE/law_user.cfg` as the gitignored override
+          # hook (see analysis_templates/ghent_template/law.cfg:6), so this file, not the generated
+          # law.cfg, is where CI-specific overrides belong.
+          #
+          # - skip_ensure_proxy: cf.CalibrateEvents.run is wrapped in @ensure_proxy
+          #   (columnflow/tasks/calibration.py:92), which raises "neither voms nor arc proxy valid"
+          #   (columnflow/util.py:366-371) since runners have no VOMS/arc proxy.
+          # - the generated law.cfg [outputs] section pins every cf.* task to
+          #   "local, /pnfs/iihe/cms/store/user/$CF_CERN_USER/..." (law.cfg:132-140), a path that
+          #   does not exist on a runner; switch each to plain "local" so outputs fall back to
+          #   CF_STORE_LOCAL (defaults to $CF_REPO_BASE/data/cf_store).
+          cat > law_user.cfg <<'EOF'
+          [analysis]
+          skip_ensure_proxy: True
+
+          [outputs]
+          lfn_sources: local_fs
+
+          cf.GetDatasetLFNs: local
+          cf.CalibrateEvents: local
+          cf.CreatePileupWeights: local
+          cf.SelectEvents: local
+          cf.MergeSelectionMasks: local
+          cf.ReduceEvents: local
+          cf.MergeReducedEvents: local
+          cf.ProduceColumns: local
+          cf.CreateHistograms: local
+
+          [local_fs]
+          base: /
+          rucio_report_access: False
+          EOF
+
+      - name: Setup environment ⚙️
+        working-directory: ${{ env.CF_ANALYSIS_DIR }}
+        run: source setup.sh ""
+
+      - name: law index 🔎
+        working-directory: ${{ env.CF_ANALYSIS_DIR }}
+        run: |
+          # CF_LOCAL_ENV is forced to false under GITHUB_ACTIONS (setup.sh:243-250), which gates the
+          # automatic "law index" call performed for local envs; without this explicit call no task
+          # family resolves and every "law run" below fails immediately.
+          source setup.sh ""
+          law index -q
+
+      - name: law run cf.CalibrateEvents 🛰️
+        working-directory: ${{ env.CF_ANALYSIS_DIR }}
+        run: |
+          source setup.sh ""
+          law run cf.CalibrateEvents ${TASK_ARGS}
+
+      - name: law run cf.SelectEvents 🛰️
+        working-directory: ${{ env.CF_ANALYSIS_DIR }}
+        run: |
+          source setup.sh ""
+          law run cf.SelectEvents ${TASK_ARGS}
+
+      - name: law run cf.ReduceEvents 🛰️
+        working-directory: ${{ env.CF_ANALYSIS_DIR }}
+        run: |
+          source setup.sh ""
+          law run cf.ReduceEvents ${TASK_ARGS}
+
+      - name: law run cf.ProduceColumns 🛰️
+        working-directory: ${{ env.CF_ANALYSIS_DIR }}
+        run: |
+          source setup.sh ""
+          law run cf.ProduceColumns ${TASK_ARGS}
+
+      - name: law run cf.CreateHistograms 🛰️
+        working-directory: ${{ env.CF_ANALYSIS_DIR }}
+        run: |
+          source setup.sh ""
+          law run cf.CreateHistograms ${TASK_ARGS} --variables jet1_pt
+
+      - name: law run cf.PlotVariables1D 🎨
+        working-directory: ${{ env.CF_ANALYSIS_DIR }}
+        run: |
+          source setup.sh ""
+          law run cf.PlotVariables1D \
+            --version ci --config l18 --datasets tt_dl_powheg \
+            --processes tt --variables jet1_pt --categories incl \
+            --workers 1 --local-scheduler True
+
+      - name: Assert plot output exists ✅
+        working-directory: ${{ env.CF_ANALYSIS_DIR }}
+        run: |
+          shopt -s nullglob globstar
+          plots=( data/cf_store/**/*.pdf data/cf_store/**/*.png )
+          if [ "${#plots[@]}" -eq 0 ]; then
+            echo "::error::no plot files found under data/cf_store; cf.PlotVariables1D produced nothing"
+            exit 1
+          fi
+          echo "found plot output:"
+          printf ' - %s\n' "${plots[@]}"
+
+      - name: Upload artifacts 📤
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: template-e2e-outputs
+          path: |
+            ${{ env.CF_ANALYSIS_DIR }}/data/cf_store/**
+          if-no-files-found: warn
+          retention-days: 7
