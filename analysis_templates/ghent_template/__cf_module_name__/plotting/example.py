@@ -36,7 +36,7 @@ def my_plot1d_func(
     variable_settings: dict | None = None,
     example_param: str | float | bool | None = None,
     **kwargs,
-) -> tuple(plt.Figure, tuple(plt.Axis,)):
+) -> tuple[plt.Figure, tuple[plt.Axis]]:
     """
     This is an exemplary custom plotting function.
 
@@ -55,12 +55,12 @@ def my_plot1d_func(
     print(f"The example_param has been set to '{example_param}' (type: {type(example_param)})")
 
     # call helper function to remove shift axis from histogram
-    remove_residual_axis(hists, "shift")
+    hists = remove_residual_axis(hists, "shift")
 
     # call helper functions to apply the variable_settings and process_settings
     variable_inst = variable_insts[0]
-    hists = apply_variable_settings(hists, variable_insts, variable_settings)
-    hists = apply_process_settings(hists, process_settings)
+    hists, _ = apply_variable_settings(hists, variable_insts, variable_settings)
+    hists, _ = apply_process_settings(hists, process_settings)
 
     # use the mplhep CMS stype
     plt.style.use(mplhep.style.CMS)
