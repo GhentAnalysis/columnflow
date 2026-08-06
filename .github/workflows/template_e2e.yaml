@@ -1,4 +1,4 @@
-name: Template E2E
+name: Ghent Template
 
 on:
   workflow_dispatch:
@@ -7,7 +7,7 @@ on:
 
 jobs:
   template_e2e:
-    name: ghent_template e2e 🚀
+    name: Ghent Template 🚀
     runs-on: ubuntu-latest
     timeout-minutes: 45
     defaults:
@@ -16,6 +16,8 @@ jobs:
     env:
       # the analysis instance is created into this directory, relative to the checkout root
       CF_ANALYSIS_DIR: citest
+      # release tag of the CI test-data bundle; bump together with the release (tests/ci/README.md)
+      TESTDATA_TAG: ci-testdata-v1
       # standard task arguments shared by the calibration -> histogramming chain
       TASK_ARGS: >-
         --version ci --config l18 --dataset tt_dl_powheg --workers 1 --local-scheduler True
@@ -47,16 +49,28 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ${{ runner.temp }}/testdata
-          key: ci-testdata-v1
+          key: ${{ env.TESTDATA_TAG }}
 
       - name: Download CI test-data bundle 📥
         if: steps.cache-testdata.outputs.cache-hit != 'true'
         run: |
           mkdir -p "${RUNNER_TEMP}/testdata"
-          # -f: fail loudly on a missing/private release asset instead of silently unpacking an
-          # HTML error page (see tests/ci/README.md for how this bundle is produced)
-          curl -fsSL "https://github.com/GhentAnalysis/columnflow/releases/download/ci-testdata-v1/ci-testdata-v1.tar.gz" \
-            | tar xz -C "${RUNNER_TEMP}/testdata"
+          url="https://github.com/GhentAnalysis/columnflow/releases/download/${TESTDATA_TAG}/${TESTDATA_TAG}.tar.gz"
+
+          # check the asset is reachable before piping into tar, so a missing release surfaces as
+          # an actionable message rather than "curl: (22) 404" followed by gzip/tar noise
+          if ! curl -fsSL --head "${url}" > /dev/null 2>&1; then
+            echo "::error::CI test-data bundle not found at ${url}"
+            echo "The end-to-end job needs a test-data bundle published as a public GitHub Release"
+            echo "asset. It cannot be generated on a runner: it contains the POG correctionlib"
+            echo "JSONs (only available via /cvmfs, which is not mounted here, and with no"
+            echo "anonymous public mirror) plus a truncated NanoAOD file."
+            echo ""
+            echo "Build and publish it once by following tests/ci/README.md, then re-run this job."
+            exit 1
+          fi
+
+          curl -fsSL "${url}" | tar xz -C "${RUNNER_TEMP}/testdata"
 
       - name: Export test-data location 🔧
         run: echo "CF_CI_TESTDATA=${RUNNER_TEMP}/testdata" >> "${GITHUB_ENV}"
@@ -83,6 +97,19 @@ jobs:
           export cf_analysis_flavor=ghent_template
           export cf_use_ssh=False
           bash create_analysis.sh
+
+      - name: Apply CI-only config overlay 🩹
+        run: |
+          # tests/ci/ci_config_patch.py monkeypatches the generated analysis's add_config to
+          # redirect /cvmfs, DAS and grid access to the self-contained CF_CI_TESTDATA bundle
+          # (see tests/ci/README.md). It is deliberately NOT part of analysis_templates/, so that
+          # a user-deployed analysis never ships with CI-specific configuration; it is copied in
+          # and wired up here, in the workflow, instead.
+          cp tests/ci/ci_config_patch.py "${CF_ANALYSIS_DIR}/${CF_ANALYSIS_DIR}/"
+          {
+            echo "from ${CF_ANALYSIS_DIR}.ci_config_patch import apply as _apply_ci_config"
+            echo "_apply_ci_config(\"${CF_ANALYSIS_DIR}\", \"${CF_ANALYSIS_DIR}\")"
+          } >> "${CF_ANALYSIS_DIR}/${CF_ANALYSIS_DIR}/__init__.py"
 
       - name: Write law_user.cfg 📝
         working-directory: ${{ env.CF_ANALYSIS_DIR }}

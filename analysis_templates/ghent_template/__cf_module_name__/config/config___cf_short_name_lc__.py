@@ -5,9 +5,6 @@ Configuration of the __cf_short_name_lc__ analysis.
 """
 from __future__ import annotations
 
-import os
-
-import law
 import order as od
 from scinum import Number
 
@@ -93,15 +90,7 @@ def add_config(
     cfg.x.minbias_xs = Number(69.2, 0.046j)
 
     # external files
-    # when running in CI, all external inputs are served from a self-contained test data bundle
-    # (see tests/ci/README.md); /cvmfs and the grid are not reachable from a GitHub runner
-    ci_data = os.environ.get("CF_CI_TESTDATA")
-
-    json_mirror = (
-        f"{ci_data}/jsonpog"
-        if ci_data
-        else "/cvmfs/cms.cern.ch/rsync/cms-nanoAOD/jsonpog-integration"
-    )
+    json_mirror = "/cvmfs/cms.cern.ch/rsync/cms-nanoAOD/jsonpog-integration"
     year_short = str(year)[2:]  # 20XX > XX
     lumi_cert_site = f"https://cms-service-dqmdc.web.cern.ch/CAF/certification/Collisions{year_short}/{ecm:g}TeV"
 
@@ -146,14 +135,6 @@ def add_config(
     # custom method and sandbox for determining dataset lfns
     cfg.x.get_dataset_lfns = None
     cfg.x.get_dataset_lfns_sandbox = None
-
-    if ci_data:
-        # serve a single local nano file instead of querying DAS via dasgoclient
-        nano_file = os.path.join(ci_data, "nano", "tt_dl_powheg_2018_nano_v9_2k.root")
-        cfg.x.get_dataset_lfns = lambda task, key: [nano_file]
-        cfg.x.get_dataset_lfns_sandbox = law.NO_STR
-        # keep BTagEfficiency from fanning out over the full tt dataset group
-        cfg.x.btag_dataset_groups = {"tt": ["tt_dl_powheg"]}
 
     # whether to validate the number of obtained LFNs in GetDatasetLFNs
     # (currently set to false because the number of files per dataset is truncated to 2)

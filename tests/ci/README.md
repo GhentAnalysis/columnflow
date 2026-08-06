@@ -10,11 +10,12 @@ plain `/cvmfs/...` paths, and there is no anonymous public mirror of the POG cor
 itself normally comes from `dasgoclient` + a grid proxy, neither of which exists in CI either.
 
 So the workflow does not talk to CVMFS, DAS, or the grid at all. Instead it downloads a small,
-self-contained tarball from a public GitHub Release and points the analysis config at it via the
-`CF_CI_TESTDATA` environment variable. **This document is how that tarball gets built.** It is a
-manual, one-time (or once-per-bump) step that requires IIHE/cvmfs access — the CI job is useless
-without a bundle behind the release asset it downloads, so read this fully before touching the
-workflow.
+self-contained tarball from a public GitHub Release, exports its location as the `CF_CI_TESTDATA`
+environment variable, and redirects the generated analysis at it via a CI-only overlay (see
+"Redirecting the analysis at the bundle" below). **This document is how that tarball gets built.**
+It is a manual, one-time (or once-per-bump) step that requires IIHE/cvmfs access — the CI job is
+useless without a bundle behind the release asset it downloads, so read this fully before touching
+the workflow.
 
 Do not try to "simplify" this back into fetching the JSONs from a `gitlab.cern.ch` raw URL at CI
 run time — that was tried conceptually and rejected: unauthenticated requests to those raw URLs
@@ -24,8 +25,8 @@ inside `correctionlib`.
 ## Bundle layout
 
 The workflow unpacks the tarball to `$RUNNER_TEMP/testdata` and exports that directory as
-`CF_CI_TESTDATA`. The template config reads this env var directly (see `config___cf_short_name_lc__.py`,
-around the `external_files` block) and expects exactly this layout:
+`CF_CI_TESTDATA`. `tests/ci/ci_config_patch.py` (see below) reads this env var and expects exactly
+this layout:
 
 ```text
 ci-testdata-v1.tar.gz
@@ -42,9 +43,45 @@ ci-testdata-v1.tar.gz
 ```
 
 Both the directory names (`jsonpog`, `nano`) and the NanoAOD filename
-(`tt_dl_powheg_2018_nano_v9_2k.root`) are read verbatim from the config file — if you rename
-anything here, update the config (and vice versa), or `cf.CalibrateEvents` will fail to find its
-inputs.
+(`tt_dl_powheg_2018_nano_v9_2k.root`) are read verbatim from `tests/ci/ci_config_patch.py` — if you
+rename anything here, update that module (and vice versa), or `cf.CalibrateEvents` will fail to
+find its inputs.
+
+## Redirecting the analysis at the bundle
+
+The template config (`config___cf_short_name_lc__.py`) is completely CI-free: it always reads
+correctionlib inputs from `/cvmfs`, always resolves dataset LFNs via DAS, and never mentions
+`CF_CI_TESTDATA`. That is deliberate — anything CI-specific baked into the template would ship into
+every analysis a user deploys with `create_analysis.sh`, whether or not they ever run this
+workflow.
+
+Instead, the redirection lives entirely in `tests/ci/ci_config_patch.py`, a module in the
+columnflow repository itself (outside `analysis_templates/`, so `create_analysis.sh` never copies
+it into a generated analysis). The workflow (`.github/workflows/template_e2e.yaml`, step
+"Apply CI-only config overlay") wires it in after instantiating the template, by:
+
+1. copying `tests/ci/ci_config_patch.py` into the generated analysis package directory
+   (`${CF_ANALYSIS_DIR}/${CF_ANALYSIS_DIR}/`), and
+2. appending two lines to the generated package's `__init__.py` that import and call its `apply()`
+   function.
+
+`__init__.py` runs first when the analysis package is imported — before `create_analysis()` runs
+and calls the config's `add_config()` — so `apply()` gets a chance to monkeypatch `add_config`
+before it is ever invoked. If `CF_CI_TESTDATA` is unset, `apply()` is a no-op, so the exact same
+module is harmless to import in a normal, non-CI deployment.
+
+Once patched, every config built by `add_config()` gets post-processed to:
+
+- recursively rewrite every `cfg.x.external_files` entry rooted at
+  `/cvmfs/cms.cern.ch/rsync/cms-nanoAOD/jsonpog-integration` to `$CF_CI_TESTDATA/jsonpog` instead
+  (non-cvmfs entries, such as the golden JSON `https://` URL, are left untouched),
+- set `cfg.x.get_dataset_lfns` to return the single trimmed NanoAOD file from the bundle instead of
+  querying DAS,
+- set `cfg.x.get_dataset_lfns_sandbox` to `law.NO_STR` (not `None` — see
+  `columnflow/tasks/external.py`, where `None` falls back to sourcing the cvmfs
+  `cmsset_default.sh`, which is unreachable in CI), and
+- restrict `cfg.x.btag_dataset_groups` to just the dataset used in CI, so `BTagEfficiency` does not
+  fan out over a dataset group whose other members were never selected/reduced.
 
 ## 1. Copy the correctionlib JSONs (`jsonpog/`)
 
