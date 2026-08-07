@@ -30,9 +30,3 @@ def stylize_processes(config: od.Config) -> None:
         if color := default_process_colors.get(proc.name, None):
             proc.color1 = color
             proc.color2 = "#000000"
-
-    config.x.default_legend_cfg = {
-        "ncol": 2,
-        "loc": "upper right",
-        "fontsize": 15,
-    }

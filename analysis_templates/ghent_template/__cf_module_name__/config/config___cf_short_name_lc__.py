@@ -103,7 +103,6 @@ def add_config(
         # lumi files (golden run 2 only!!)
         "lumi": {
             "golden": (f"{lumi_cert_site}/Legacy_{year}/{goldenjsons[year]}", "v1"),
-            "normtag": ("modules/Normtags/normtag_PHYSICS.json", "v1"),
         },
 
         # jet energy correction
