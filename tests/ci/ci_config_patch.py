@@ -65,29 +65,77 @@ def _redirect_cvmfs_paths(node: object, old_prefix: str, new_prefix: str, _ctx: 
     return n_rewritten
 
 
+def _make_get_dataset_lfns(ci_data: str) -> callable:
+    """
+    Builds a ``cfg.x.get_dataset_lfns`` implementation that resolves a local NanoAOD file per
+    dataset *name*, from a small hardcoded mapping rooted at *ci_data*. Deliberately not a
+    catch-all: a resolver that silently returned the same tt file for *any* dataset key would push
+    e.g. a ``data_*`` dataset added to CI later through the MC code path without anyone noticing.
+    Add new datasets to the mapping below as CI grows to cover them.
+    """
+    dataset_lfns = {
+        "tt_dl_powheg": os.path.join(ci_data, "nano", "tt_dl_powheg_2018_nano_v9.root"),
+    }
+
+    def get_dataset_lfns(task: object, key: str) -> list[str]:
+        # called as cfg.x.get_dataset_lfns(task, key) by GetDatasetLFNs.run; "task" is the
+        # GetDatasetLFNs task instance itself, so task.dataset_inst.name is the dataset being asked
+        # for, and "key" is one of that dataset's declared dataset_info keys
+        dataset_name = task.dataset_inst.name
+        if dataset_name not in dataset_lfns:
+            raise RuntimeError(
+                f"no CI test-data file mapped for dataset '{dataset_name}' (requested via key "
+                f"'{key}'); add an entry to the dataset_lfns mapping in "
+                "_make_get_dataset_lfns (tests/ci/ci_config_patch.py)",
+            )
+        return [dataset_lfns[dataset_name]]
+
+    return get_dataset_lfns
+
+
 def _patch_config(cfg: object, ci_data: str) -> None:
     """
     Post-processes a freshly built config object *cfg*, redirecting external files, dataset LFN
-    resolution and btag dataset grouping to the CI test data bundle rooted at *ci_data*.
+    resolution and btag dataset grouping to the CI test data bundle rooted at *ci_data*. Raises
+    loudly (instead of logging and continuing) whenever a redirection would silently be a no-op,
+    since a no-op here means the pipeline goes on to run against un-redirected /cvmfs or DAS
+    access that does not exist on the runner, failing much later with a confusing error.
     """
     external_files = getattr(cfg.x, "external_files", None)
-    if external_files is not None:
-        n_rewritten = _redirect_cvmfs_paths(external_files, CVMFS_JSONPOG_PREFIX, f"{ci_data}/jsonpog")
-        logger.info(f"redirected {n_rewritten} external_files entries under {CVMFS_JSONPOG_PREFIX} to {ci_data}/jsonpog")
-    else:
-        logger.warning(f"config '{cfg.name}' has no cfg.x.external_files; nothing to redirect")
+    if external_files is None:
+        raise RuntimeError(
+            f"config '{cfg.name}' has no cfg.x.external_files; the CI overlay has nothing to "
+            "redirect, which means the template config changed shape and this overlay needs "
+            "updating (tests/ci/ci_config_patch.py::_patch_config)",
+        )
+    n_rewritten = _redirect_cvmfs_paths(external_files, CVMFS_JSONPOG_PREFIX, f"{ci_data}/jsonpog")
+    if n_rewritten == 0:
+        raise RuntimeError(
+            f"no cfg.x.external_files entries under prefix '{CVMFS_JSONPOG_PREFIX}' were found to "
+            f"redirect to '{ci_data}/jsonpog'; either the template no longer uses that cvmfs "
+            "prefix, or the CI test-data bundle layout changed - either way the overlay is "
+            "silently not doing its job",
+        )
+    logger.info(f"redirected {n_rewritten} external_files entries under {CVMFS_JSONPOG_PREFIX} to {ci_data}/jsonpog")
 
-    # serve a single local nano file instead of querying DAS via dasgoclient
+    # serve a local nano file per dataset instead of querying DAS via dasgoclient
     nano_file = os.path.join(ci_data, "nano", "tt_dl_powheg_2018_nano_v9.root")
-    cfg.x.get_dataset_lfns = lambda task, key: [nano_file]
+    if not os.path.exists(nano_file):
+        raise FileNotFoundError(
+            f"CI test-data NanoAOD file not found at '{nano_file}'; check that the "
+            "CF_CI_TESTDATA bundle layout matches tests/ci/README.md and that the filename here "
+            "still matches the bundle contents",
+        )
+    cfg.x.get_dataset_lfns = _make_get_dataset_lfns(ci_data)
     # NO_STR (not None!): None is replaced by the cvmfs cmsset_default.sh sandbox in
     # columnflow/tasks/external.py, which is unreachable in CI
     cfg.x.get_dataset_lfns_sandbox = law.NO_STR
-    logger.info(f"redirected cfg.x.get_dataset_lfns to a single local file: {nano_file}")
+    logger.info(f"redirected cfg.x.get_dataset_lfns to a local file mapping rooted at {ci_data}/nano")
 
-    # the lambda above serves exactly one file, but the branch map of every file-based workflow is
-    # built from the dataset's declared n_files. Without clamping, branches >= 1 index past the end
-    # of the lfn list and die with "IndexError: list index out of range" in iter_nano_files.
+    # the resolver above serves exactly one file per known dataset, but the branch map of every
+    # file-based workflow is built from the dataset's declared n_files. Without clamping, branches
+    # >= 1 index past the end of the lfn list and die with "IndexError: list index out of range"
+    # in iter_nano_files.
     for dataset in cfg.datasets:
         for info in dataset.info.values():
             info.n_files = 1

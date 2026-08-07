@@ -206,12 +206,20 @@ in a way that's harder to diagnose than a clean 404).
 
 ## Bumping the bundle version
 
-The tag (`ci-testdata-v1`), the workflow's cache key, and the download URL all encode the version
-string and must be changed together:
+The tag (`ci-testdata-v1`), the workflow's cache key, the download URL, and the expected digest all
+encode the version/content and must be changed together:
 
-- `.github/workflows/template_e2e.yaml`: the `actions/cache@v4` step for the test-data bundle
-  (`key: ci-testdata-v1`) and the `curl` URL
-  (`.../releases/download/ci-testdata-v1/ci-testdata-v1.tar.gz`).
+- `.github/workflows/template_e2e.yaml`: the `TESTDATA_TAG` job env var (which drives both the
+  `actions/cache@v4` key and the `curl` URL), and the `TESTDATA_SHA256` job env var next to it —
+  the workflow downloads the asset to a file and verifies it with `sha256sum -c` before unpacking,
+  so an unbumped digest makes every run of the new bundle fail closed rather than silently
+  unpacking the wrong (or a corrupted) archive. Get the new digest with:
+
+  ```bash
+  gh release view <new-tag> -R GhentAnalysis/columnflow --json assets \
+    --jq '.assets[0].digest'
+  ```
+
 - The release tag itself, created with `gh release create <new-tag> ...` above.
 
 Bump the version (e.g. to `ci-testdata-v2`) whenever the bundle contents change — reusing an
