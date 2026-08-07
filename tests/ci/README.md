@@ -3,19 +3,22 @@
 `.github/workflows/template_e2e.yaml` runs the `ghent_template` analysis end to end
 (`cf.CalibrateEvents` → `cf.PlotVariables1D`) on a GitHub-hosted `ubuntu-latest` runner. That
 runner has no CERN credentials, no VOMS/arc proxy, and — critically — no `/cvmfs` mount. Five of
-the seven `cfg.x.external_files` entries in
+the six leaf `cfg.x.external_files` entries in
 `analysis_templates/ghent_template/__cf_module_name__/config/config___cf_short_name_lc__.py` are
 plain `/cvmfs/...` paths, and there is no anonymous public mirror of the POG correctionlib JSONs
 (the `gitlab.cern.ch` raw URLs redirect to an SSO login page, not the file). The NanoAOD input
 itself normally comes from `dasgoclient` + a grid proxy, neither of which exists in CI either.
 
-So the workflow does not talk to CVMFS, DAS, or the grid at all. Instead it downloads a small,
-self-contained tarball from a public GitHub Release, exports its location as the `CF_CI_TESTDATA`
-environment variable, and redirects the generated analysis at it via a CI-only overlay (see
-"Redirecting the analysis at the bundle" below). **This document is how that tarball gets built.**
-It is a manual, one-time (or once-per-bump) step that requires IIHE/cvmfs access — the CI job is
-useless without a bundle behind the release asset it downloads, so read this fully before touching
-the workflow.
+So the workflow downloads a small tarball from a public GitHub Release, exports its location as the
+`CF_CI_TESTDATA` environment variable, and redirects the five cvmfs-backed entries at it via a
+CI-only overlay (see "Redirecting the analysis at the bundle" below). The sixth entry,
+`cfg.x.external_files["lumi"]["golden"]`, is deliberately left alone: it is an
+`https://cms-service-dqmdc.web.cern.ch/...` URL, not a `/cvmfs/...` path, so
+`_redirect_cvmfs_paths` never touches it, and `cf.BundleExternalFiles` fetches it live over the
+network on every run (see "What is still fetched live" below) — the bundle is not fully
+self-contained. **This document is how the tarball gets built.** It is a manual, one-time (or
+once-per-bump) step that requires IIHE/cvmfs access — the CI job is useless without a bundle behind
+the release asset it downloads, so read this fully before touching the workflow.
 
 Do not try to "simplify" this back into fetching the JSONs from a `gitlab.cern.ch` raw URL at CI
 run time — that was tried conceptually and rejected: unauthenticated requests to those raw URLs
@@ -96,6 +99,36 @@ access with a local file, the runner really is the local environment steering th
 law step of the workflow sources `tests/ci/setup_ci_env.sh` instead of `setup.sh` directly. That
 script sources `setup.sh` and then re-exports `CF_LOCAL_ENV=true`; its header explains why the
 override comes *after* sourcing and why sandboxed tasks are unaffected.
+
+## What is still fetched live
+
+The bundle is *not* fully self-contained. Exactly one `cfg.x.external_files` entry,
+`cfg.x.external_files["lumi"]["golden"]` (the golden-JSON luminosity certification file), is an
+`https://cms-service-dqmdc.web.cern.ch/...` URL rather than a `/cvmfs/...` path, so
+`_redirect_cvmfs_paths` in `tests/ci/ci_config_patch.py` deliberately leaves it untouched (see
+`_patch_config`). `cf.BundleExternalFiles` therefore downloads it from that CERN service over the
+network on **every** run — `data/cf_store` is not cached between CI runs, so there is no
+run-to-run reuse. The consequence: an outage or slowdown of that CERN service reddens this job on
+PRs that have nothing to do with the change being tested. If that becomes a recurring problem, the
+golden JSON is the obvious next file to fold into a future `ci-testdata-v2` bundle (see "Bumping
+the bundle version" below) — it is small and rarely changes.
+
+## Coverage gaps
+
+Two things the overlay deliberately does not reproduce faithfully, so a green run should not be
+read as full coverage:
+
+- **`cfg.x.btag_dataset_groups` is cut to a single dataset** (`_patch_config` restricts it to
+  `{"tt": ["tt_dl_powheg"]}`). The multi-dataset merge path inside `BTagEfficiency` — combining
+  several datasets that belong to the same process group — is therefore never exercised by this
+  job, even though it is real production code used outside CI.
+- **`cmsdb` is added as an unpinned, moving branch.** `create_analysis.sh` adds it via
+  `git submodule add -b "${fetch_cmsdb_branch}" ...` with `fetch_cmsdb_branch="GhentAnalysis/master"`
+  (`create_analysis.sh:33`) — a branch, not a pinned SHA. A commit landing on that branch can
+  therefore redden a columnflow PR that never touched `cmsdb`, and a run that was green once is not
+  guaranteed to stay reproducible later. Pinning it to a SHA would fix this but is a maintainer
+  call (it trades reproducibility for staying in sync with `cmsdb` development), so it is left
+  unpinned here — just be aware of it when this job fails for no apparent reason.
 
 ## 1. Copy the correctionlib JSONs (`jsonpog/`)
 

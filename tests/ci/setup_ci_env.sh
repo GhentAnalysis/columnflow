@@ -26,10 +26,20 @@
 # Leaving the flag false during sourcing preserves that, and flips only the runtime task guards.
 #
 # Sandboxed tasks (everything from cf.CalibrateEvents onwards runs in venv_columnar) re-source
-# setup.sh in their subshell and see CF_LOCAL_ENV=false again. That is harmless: no env_is_local
-# check runs inside a sandbox, and the two tasks above are unsandboxed
-# (cfg.x.get_dataset_lfns_sandbox is set to law.NO_STR by the overlay, and BundleExternalFiles is
-# a plain ConfigTask).
+# setup.sh in their subshell, but do NOT see CF_LOCAL_ENV=false again: sandboxes/_setup_venv.sh:62
+# sources it as `CF_SKIP_SETUP="true" source .../setup.sh ""`, and setup.sh's entry point is
+# `if ! ${CF_SKIP_SETUP}; then main "$@"; fi` (setup.sh:1181), so main() - and with it
+# cf_detect_envs() (setup.sh:238-257), the function that would reset CF_LOCAL_ENV - never runs
+# inside a sandbox. CF_LOCAL_ENV is therefore simply inherited from this script's export, i.e. it
+# is "true" in every sandboxed subprocess too. That is harmless here regardless, because the only
+# consumers of columnflow.env_is_local are:
+#   - columnflow/tasks/external.py: the @only_local_env decorator on GetDatasetLFNs.run (line 94)
+#     and the bundle-missing guard in BundleExternalFiles.run (line 647), both unsandboxed tasks
+#     this workflow already accounts for above, and
+#   - five @only_local_env-decorated remote-submission methods in
+#     columnflow/tasks/framework/remote.py (BundleGitRepository.run, BundleSoftware.run,
+#     BuildBashSandbox.run, BundleBashSandbox.run, BundleCMSSWSandbox.run), none of which this
+#     workflow ever triggers since it never submits remote jobs.
 
 source setup.sh "" || return "$?"
 

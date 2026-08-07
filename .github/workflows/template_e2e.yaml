@@ -41,7 +41,9 @@ jobs:
           mkdir -p "${RUNNER_TEMP}/cf"
 
           # CF_SOFTWARE_BASE: pin explicitly so CF_VENV_BASE (CF_SOFTWARE_BASE/venvs) resolves to a
-          # deterministic, cacheable path instead of the interactively-queried default
+          # deterministic, cacheable path. "source setup.sh \"\"" runs the non-interactive default
+          # setup (setup.sh's query() only prompts for a *named* setup), so nothing is queried
+          # either way; without this the default would silently be $CF_DATA/software (setup.sh:385).
           echo "CF_SOFTWARE_BASE=${RUNNER_TEMP}/software" >> "${GITHUB_ENV}"
 
       - name: Cache CI test-data bundle 💾
@@ -118,13 +120,21 @@ jobs:
           # hook (see analysis_templates/ghent_template/law.cfg:6), so this file, not the generated
           # law.cfg, is where CI-specific overrides belong.
           #
-          # - skip_ensure_proxy: cf.CalibrateEvents.run is wrapped in @ensure_proxy
-          #   (columnflow/tasks/calibration.py:92), which raises "neither voms nor arc proxy valid"
+          # - skip_ensure_proxy: cf.CalibrateEvents.run, cf.SelectEvents.run and cf.ReduceEvents.run
+          #   are all wrapped in @ensure_proxy (columnflow/tasks/calibration.py:94, selection.py:134,
+          #   reduction.py:106), which raises "neither voms nor arc proxy valid"
           #   (columnflow/util.py:366-371) since runners have no VOMS/arc proxy.
-          # - the generated law.cfg [outputs] section pins every cf.* task to
+          # - the generated law.cfg [outputs] section pins exactly nine cf.* tasks to
           #   "local, /pnfs/iihe/cms/store/user/$CF_CERN_USER/..." (law.cfg:132-140), a path that
-          #   does not exist on a runner; switch each to plain "local" so outputs fall back to
-          #   CF_STORE_LOCAL (defaults to $CF_REPO_BASE/data/cf_store).
+          #   does not exist on a runner (and $CF_CERN_USER is unset here, so an unpinned task would
+          #   write to /pnfs/iihe/cms/store/user//...). Rather than hand-mirroring that list - which
+          #   silently rots if a tenth entry is added upstream - override it with a single pattern
+          #   key (patterns are supported here, see the commented example just above that block in
+          #   the template law.cfg) so every cf.* task, present or future, falls back to plain
+          #   "local", i.e. CF_STORE_LOCAL (defaults to $CF_REPO_BASE/data/cf_store).
+          # - [local_fs] base/rucio_report_access are omitted below: they are already set to the
+          #   same values by analysis_templates/ghent_template/law.cfg's own [local_fs] section
+          #   (law.cfg:190-193), so repeating them here was redundant.
           cat > law_user.cfg <<'EOF'
           [analysis]
           skip_ensure_proxy: True
@@ -132,19 +142,7 @@ jobs:
           [outputs]
           lfn_sources: local_fs
 
-          cf.GetDatasetLFNs: local
-          cf.CalibrateEvents: local
-          cf.CreatePileupWeights: local
-          cf.SelectEvents: local
-          cf.MergeSelectionMasks: local
-          cf.ReduceEvents: local
-          cf.MergeReducedEvents: local
-          cf.ProduceColumns: local
-          cf.CreateHistograms: local
-
-          [local_fs]
-          base: /
-          rucio_report_access: False
+          cf.*: local
           EOF
 
       - name: Setup environment ⚙️
