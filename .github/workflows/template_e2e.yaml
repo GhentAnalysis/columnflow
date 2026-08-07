@@ -253,7 +253,11 @@ jobs:
           print(f"num_events_selected: {num_events_selected}")
           print(f"selection efficiency: {efficiency:.4f}")
 
-          expected_num_events = 66000
+          # 66000 events in the bundled NanoAOD file, served N_LFN_REPEATS (=2) times by
+          # tests/ci/ci_config_patch.py, so cf.SelectEvents runs two branches over the same file
+          # and cf.MergeSelectionStats sums them. Bumping N_LFN_REPEATS means bumping this too.
+          expected_num_events = 66000 * 2
+          # unaffected by the repetition: both branches see the same events
           eff_low, eff_high = 0.10, 0.25
 
           if num_events != expected_num_events:
