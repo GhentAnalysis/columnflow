@@ -162,13 +162,18 @@ jobs:
           #   reduction.py:106), which raises "neither voms nor arc proxy valid"
           #   (columnflow/util.py:366-371) since runners have no VOMS/arc proxy.
           # - the generated law.cfg [outputs] section pins exactly nine cf.* tasks to
-          #   "local, /pnfs/iihe/cms/store/user/$CF_CERN_USER/..." (law.cfg:132-140), a path that
-          #   does not exist on a runner (and $CF_CERN_USER is unset here, so an unpinned task would
-          #   write to /pnfs/iihe/cms/store/user//...). Rather than hand-mirroring that list - which
-          #   silently rots if a tenth entry is added upstream - override it with a single pattern
-          #   key (patterns are supported here, see the commented example just above that block in
-          #   the template law.cfg) so every cf.* task, present or future, falls back to plain
-          #   "local", i.e. CF_STORE_LOCAL (defaults to $CF_REPO_BASE/data/cf_store).
+          #   "local, %(shared_location)s" (law.cfg:132-140), which expands to
+          #   /pnfs/iihe/cms/store/user/$CF_CERN_USER/... - a path that does not exist on a runner
+          #   (and $CF_CERN_USER is unset here, so it collapses to /pnfs/iihe/cms/store/user//...).
+          #   Each of the nine keys must be overridden by name. A single "cf.*: local" catch-all
+          #   does NOT work and was tried: the lookup in AnalysisTask._dfs_key_lookup
+          #   (columnflow/tasks/framework/base.py:392-449) returns the *first* entry whose pattern
+          #   matches, in config order, so law.cfg's specific "cf.GetDatasetLFNs" key still wins
+          #   over a "cf.*" added later via the extend hook - the task then tried to mkdir /pnfs
+          #   and died with PermissionError.
+          #   To keep this from silently rotting when a tenth entry is added upstream,
+          #   shared_location is *also* redirected below: any future pinned task inherits a
+          #   writable path instead of /pnfs even before its key is mirrored here.
           # - [local_fs] base/rucio_report_access are omitted below: they are already set to the
           #   same values by analysis_templates/ghent_template/law.cfg's own [local_fs] section
           #   (law.cfg:190-193), so repeating them here was redundant.
@@ -185,7 +190,18 @@ jobs:
           [outputs]
           lfn_sources: local_fs
 
-          cf.*: local
+          # catch-all for any task pinned upstream that is not mirrored below
+          shared_location: $CITEST_BASE/data/cf_store
+
+          cf.GetDatasetLFNs: local
+          cf.CalibrateEvents: local
+          cf.CreatePileupWeights: local
+          cf.SelectEvents: local
+          cf.MergeSelectionMasks: local
+          cf.ReduceEvents: local
+          cf.MergeReducedEvents: local
+          cf.ProduceColumns: local
+          cf.CreateHistograms: local
           EOF
 
       - name: Setup environment ⚙️
