@@ -78,15 +78,19 @@ Once patched, every config built by `add_config()` gets post-processed to:
 - recursively rewrite every `cfg.x.external_files` entry rooted at
   `/cvmfs/cms.cern.ch/rsync/cms-nanoAOD/jsonpog-integration` to `$CF_CI_TESTDATA/jsonpog` instead
   (non-cvmfs entries, such as the golden JSON `https://` URL, are left untouched),
-- set `cfg.x.get_dataset_lfns` to return the single trimmed NanoAOD file from the bundle instead of
-  querying DAS,
+- set `cfg.x.get_dataset_lfns` to return the trimmed NanoAOD file from the bundle, repeated
+  `N_LFN_REPEATS` (currently 2) times, instead of querying DAS — the bundle only ships one physical
+  file, but returning it "twice" keeps `cf.MergeReducedEvents` and `cf.MergeSelectionMasks` (both
+  skipped by columnflow whenever a dataset has exactly one file) in the CI run, so their merge
+  logic is exercised too,
 - set `cfg.x.get_dataset_lfns_sandbox` to `law.NO_STR` (not `None` — see
   `columnflow/tasks/external.py`, where `None` falls back to sourcing the cvmfs
   `cmsset_default.sh`, which is unreachable in CI),
-- clamp `n_files` to 1 for every dataset info: branch maps of file-based workflows are built from
-  the dataset's *declared* `n_files`, so without this, branches ≥ 1 index past the end of the
-  single-entry LFN list above and fail with `IndexError: list index out of range` in
-  `iter_nano_files`, and
+- clamp `n_files` to `N_LFN_REPEATS` for every dataset info (safe only because
+  `cfg.x.validate_dataset_lfns` is `False` in the template config): branch maps of file-based
+  workflows are built from the dataset's *declared* `n_files`, so without this, branches beyond
+  what `get_dataset_lfns` actually returns index past the end of the LFN list and fail with
+  `IndexError: list index out of range` in `iter_nano_files`, and
 - restrict `cfg.x.btag_dataset_groups` to just the dataset used in CI, so `BTagEfficiency` does not
   fan out over a dataset group whose other members were never selected/reduced.
 

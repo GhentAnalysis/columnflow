@@ -172,9 +172,15 @@ jobs:
           # - [local_fs] base/rucio_report_access are omitted below: they are already set to the
           #   same values by analysis_templates/ghent_template/law.cfg's own [local_fs] section
           #   (law.cfg:190-193), so repeating them here was redundant.
+          # - chunked_io_chunk_size: lowered from the template default of 100000 (law.cfg:82).
+          #   tests/ci/ci_config_patch.py now serves the bundled NanoAOD file twice (N_LFN_REPEATS),
+          #   so this run processes ~132000 events; at the default chunk size that would still fit
+          #   in a single chunk, leaving chunk-boundary bugs - a common columnflow failure mode -
+          #   untested by this job. 20000 forces several chunks per file.
           cat > law_user.cfg <<'EOF'
           [analysis]
           skip_ensure_proxy: True
+          chunked_io_chunk_size: 20000
 
           [outputs]
           lfn_sources: local_fs

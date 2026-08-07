@@ -28,6 +28,13 @@ logger = law.logger.get_logger(__name__)
 # prefix used by the template config for all correctionlib inputs in a normal (non-CI) run
 CVMFS_JSONPOG_PREFIX = "/cvmfs/cms.cern.ch/rsync/cms-nanoAOD/jsonpog-integration"
 
+# number of times the single bundled NanoAOD file is repeated as a "distinct" LFN. The bundle only
+# ships one physical file, but returning it twice (rather than once) keeps cf.MergeReducedEvents
+# and cf.MergeSelectionMasks - both skipped entirely when a dataset has exactly one file - in the
+# CI run, and (combined with the smaller chunked_io_chunk_size set in the workflow's law_user.cfg)
+# exercises multi-chunk processing instead of the single chunk that 66000 events alone would be.
+N_LFN_REPEATS = 2
+
 
 def _redirect_cvmfs_paths(node: object, old_prefix: str, new_prefix: str, _ctx: str = "external_files") -> int:
     """
@@ -72,6 +79,10 @@ def _make_get_dataset_lfns(ci_data: str) -> callable:
     catch-all: a resolver that silently returned the same tt file for *any* dataset key would push
     e.g. a ``data_*`` dataset added to CI later through the MC code path without anyone noticing.
     Add new datasets to the mapping below as CI grows to cover them.
+
+    The bundle only ships one physical file per dataset, so each is repeated
+    :py:data:`N_LFN_REPEATS` times (see there for why) - this is deliberate duplication, not a
+    bug, and must stay in sync with the ``info.n_files`` clamp in :py:func:`_patch_config`.
     """
     dataset_lfns = {
         "tt_dl_powheg": os.path.join(ci_data, "nano", "tt_dl_powheg_2018_nano_v9.root"),
@@ -88,7 +99,7 @@ def _make_get_dataset_lfns(ci_data: str) -> callable:
                 f"'{key}'); add an entry to the dataset_lfns mapping in "
                 "_make_get_dataset_lfns (tests/ci/ci_config_patch.py)",
             )
-        return [dataset_lfns[dataset_name]]
+        return [dataset_lfns[dataset_name]] * N_LFN_REPEATS
 
     return get_dataset_lfns
 
@@ -132,14 +143,19 @@ def _patch_config(cfg: object, ci_data: str) -> None:
     cfg.x.get_dataset_lfns_sandbox = law.NO_STR
     logger.info(f"redirected cfg.x.get_dataset_lfns to a local file mapping rooted at {ci_data}/nano")
 
-    # the resolver above serves exactly one file per known dataset, but the branch map of every
-    # file-based workflow is built from the dataset's declared n_files. Without clamping, branches
-    # >= 1 index past the end of the lfn list and die with "IndexError: list index out of range"
-    # in iter_nano_files.
+    # the resolver above serves exactly N_LFN_REPEATS "files" (the same physical file, repeated)
+    # per known dataset, but the branch map of every file-based workflow is built from the
+    # dataset's declared n_files. Without clamping to match, branches >= N_LFN_REPEATS index past
+    # the end of the lfn list and die with "IndexError: list index out of range" in
+    # iter_nano_files. N_LFN_REPEATS=2 (rather than 1) is deliberate: it keeps
+    # cf.MergeReducedEvents and cf.MergeSelectionMasks - both skipped by columnflow whenever
+    # n_files == 1 - in the CI run. This clamping is safe only because
+    # cfg.x.validate_dataset_lfns is False in the template config (GetDatasetLFNs would otherwise
+    # complain that the declared n_files does not match the dataset's real file count).
     for dataset in cfg.datasets:
         for info in dataset.info.values():
-            info.n_files = 1
-    logger.info(f"clamped n_files to 1 for {len(cfg.datasets)} datasets")
+            info.n_files = N_LFN_REPEATS
+    logger.info(f"clamped n_files to {N_LFN_REPEATS} for {len(cfg.datasets)} datasets")
 
     # keep BTagEfficiency from fanning out over the full tt/dy dataset groups
     cfg.x.btag_dataset_groups = {"tt": ["tt_dl_powheg"]}
