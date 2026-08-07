@@ -78,12 +78,20 @@ def _patch_config(cfg: object, ci_data: str) -> None:
         logger.warning(f"config '{cfg.name}' has no cfg.x.external_files; nothing to redirect")
 
     # serve a single local nano file instead of querying DAS via dasgoclient
-    nano_file = os.path.join(ci_data, "nano", "tt_dl_powheg_2018_nano_v9_2k.root")
+    nano_file = os.path.join(ci_data, "nano", "tt_dl_powheg_2018_nano_v9.root")
     cfg.x.get_dataset_lfns = lambda task, key: [nano_file]
     # NO_STR (not None!): None is replaced by the cvmfs cmsset_default.sh sandbox in
     # columnflow/tasks/external.py, which is unreachable in CI
     cfg.x.get_dataset_lfns_sandbox = law.NO_STR
     logger.info(f"redirected cfg.x.get_dataset_lfns to a single local file: {nano_file}")
+
+    # the lambda above serves exactly one file, but the branch map of every file-based workflow is
+    # built from the dataset's declared n_files. Without clamping, branches >= 1 index past the end
+    # of the lfn list and die with "IndexError: list index out of range" in iter_nano_files.
+    for dataset in cfg.datasets:
+        for info in dataset.info.values():
+            info.n_files = 1
+    logger.info(f"clamped n_files to 1 for {len(cfg.datasets)} datasets")
 
     # keep BTagEfficiency from fanning out over the full tt/dy dataset groups
     cfg.x.btag_dataset_groups = {"tt": ["tt_dl_powheg"]}

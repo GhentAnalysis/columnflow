@@ -154,46 +154,50 @@ jobs:
       - name: law index 🔎
         working-directory: ${{ env.CF_ANALYSIS_DIR }}
         run: |
-          # CF_LOCAL_ENV is forced to false under GITHUB_ACTIONS (setup.sh:243-250), which gates the
-          # automatic "law index" call performed for local envs; without this explicit call no task
-          # family resolves and every "law run" below fails immediately.
-          source setup.sh ""
+          # every law step below sources tests/ci/setup_ci_env.sh rather than setup.sh directly; it
+          # sources setup.sh and then declares the runner a local columnflow env, which two tasks of
+          # the chain require to run at all (see the header of that file).
+          #
+          # the explicit "law index" is needed because the automatic one performed during sourcing is
+          # gated on CF_LOCAL_ENV, which is still false at that point (setup.sh:833); without it no
+          # task family resolves and every "law run" below fails immediately.
+          source "${GITHUB_WORKSPACE}/tests/ci/setup_ci_env.sh"
           law index -q
 
       - name: law run cf.CalibrateEvents 🛰️
         working-directory: ${{ env.CF_ANALYSIS_DIR }}
         run: |
-          source setup.sh ""
+          source "${GITHUB_WORKSPACE}/tests/ci/setup_ci_env.sh"
           law run cf.CalibrateEvents ${TASK_ARGS}
 
       - name: law run cf.SelectEvents 🛰️
         working-directory: ${{ env.CF_ANALYSIS_DIR }}
         run: |
-          source setup.sh ""
+          source "${GITHUB_WORKSPACE}/tests/ci/setup_ci_env.sh"
           law run cf.SelectEvents ${TASK_ARGS}
 
       - name: law run cf.ReduceEvents 🛰️
         working-directory: ${{ env.CF_ANALYSIS_DIR }}
         run: |
-          source setup.sh ""
+          source "${GITHUB_WORKSPACE}/tests/ci/setup_ci_env.sh"
           law run cf.ReduceEvents ${TASK_ARGS}
 
       - name: law run cf.ProduceColumns 🛰️
         working-directory: ${{ env.CF_ANALYSIS_DIR }}
         run: |
-          source setup.sh ""
+          source "${GITHUB_WORKSPACE}/tests/ci/setup_ci_env.sh"
           law run cf.ProduceColumns ${TASK_ARGS}
 
       - name: law run cf.CreateHistograms 🛰️
         working-directory: ${{ env.CF_ANALYSIS_DIR }}
         run: |
-          source setup.sh ""
+          source "${GITHUB_WORKSPACE}/tests/ci/setup_ci_env.sh"
           law run cf.CreateHistograms ${TASK_ARGS} --variables jet1_pt
 
       - name: law run cf.PlotVariables1D 🎨
         working-directory: ${{ env.CF_ANALYSIS_DIR }}
         run: |
-          source setup.sh ""
+          source "${GITHUB_WORKSPACE}/tests/ci/setup_ci_env.sh"
           law run cf.PlotVariables1D \
             --version ci --config l18 --datasets tt_dl_powheg \
             --processes tt --variables jet1_pt --categories incl \

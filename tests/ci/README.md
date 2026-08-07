@@ -39,11 +39,11 @@ ci-testdata-v1.tar.gz
     │       ├── BTV/2018_UL/btagging.json.gz
     │       └── LUM/2018_UL/puWeights.json.gz
     └── nano/
-        └── tt_dl_powheg_2018_nano_v9_2k.root
+        └── tt_dl_powheg_2018_nano_v9.root
 ```
 
 Both the directory names (`jsonpog`, `nano`) and the NanoAOD filename
-(`tt_dl_powheg_2018_nano_v9_2k.root`) are read verbatim from `tests/ci/ci_config_patch.py` — if you
+(`tt_dl_powheg_2018_nano_v9.root`) are read verbatim from `tests/ci/ci_config_patch.py` — if you
 rename anything here, update that module (and vice versa), or `cf.CalibrateEvents` will fail to
 find its inputs.
 
@@ -79,9 +79,23 @@ Once patched, every config built by `add_config()` gets post-processed to:
   querying DAS,
 - set `cfg.x.get_dataset_lfns_sandbox` to `law.NO_STR` (not `None` — see
   `columnflow/tasks/external.py`, where `None` falls back to sourcing the cvmfs
-  `cmsset_default.sh`, which is unreachable in CI), and
+  `cmsset_default.sh`, which is unreachable in CI),
+- clamp `n_files` to 1 for every dataset info: branch maps of file-based workflows are built from
+  the dataset's *declared* `n_files`, so without this, branches ≥ 1 index past the end of the
+  single-entry LFN list above and fail with `IndexError: list index out of range` in
+  `iter_nano_files`, and
 - restrict `cfg.x.btag_dataset_groups` to just the dataset used in CI, so `BTagEfficiency` does not
   fan out over a dataset group whose other members were never selected/reduced.
+
+## Declaring the runner a local environment
+
+Redirecting the *inputs* is not enough on its own: `setup.sh` detects `GITHUB_ACTIONS=true` and
+sets `CF_LOCAL_ENV=false`, and `cf.GetDatasetLFNs` and `cf.BundleExternalFiles` both refuse to run
+in a non-local environment. Since the overlay above has already replaced every DAS/grid/cvmfs
+access with a local file, the runner really is the local environment steering this run, so each
+law step of the workflow sources `tests/ci/setup_ci_env.sh` instead of `setup.sh` directly. That
+script sources `setup.sh` and then re-exports `CF_LOCAL_ENV=true`; its header explains why the
+override comes *after* sourcing and why sandboxed tasks are unaffected.
 
 ## 1. Copy the correctionlib JSONs (`jsonpog/`)
 
@@ -115,30 +129,30 @@ UL campaign, and every extra file only bloats the release asset.
 ## 2. Trim the NanoAOD file (`nano/`)
 
 Take a `tt_dl_powheg` 2018 UL NanoAODv9 file (found via DAS/dasgoclient on a machine with grid
-access) and cut it down to roughly 2000 events. **Keep every branch** — do not select a subset. The
-template reads `Jet`, `Electron`, `Muon`, `MET`, `Pileup`, `LHE*`, `genWeight`, and various trigger
-bits (`HLT_*`) across calibration, selection, and production; dropping any of these surfaces later
-as a confusing `KeyError`/`FieldNotFoundError` several tasks downstream of where the branch was
-actually needed, not at read time. Keeping the full branch list costs a bit of disk space but saves
-debugging time.
+access) and cut it down to a single file of roughly 66000 events. **Keep every branch** — do not
+select a subset. The template reads `Jet`, `Electron`, `Muon`, `MET`, `Pileup`, `LHE*`,
+`genWeight`, and various trigger bits (`HLT_*`) across calibration, selection, and production;
+dropping any of these surfaces later as a confusing `KeyError`/`FieldNotFoundError` several tasks
+downstream of where the branch was actually needed, not at read time. Keeping the full branch list
+costs a bit of disk space but saves debugging time.
 
 ```python
 import uproot
 
 # any single NanoAODv9 file for tt_dl_powheg, 2018 UL, e.g. resolved via dasgoclient + xrootd
 src = "root://cms-xrd-global.cern.ch//store/mc/RunIISummer20UL18NanoAODv9/.../NANOAODSIM/.../0000/xxxx.root"
-n_events = 2000
+n_events = 66000
 
 with uproot.open(src) as fin:
     events = fin["Events"]
     # library="ak" preserves the jagged (per-object) structure of collections like Jet, Electron, ...
     arrays = events.arrays(library="ak", entry_stop=n_events)
 
-with uproot.recreate("tt_dl_powheg_2018_nano_v9_2k.root") as fout:
+with uproot.recreate("tt_dl_powheg_2018_nano_v9.root") as fout:
     fout["Events"] = arrays
 ```
 
-Move the result into `nano/tt_dl_powheg_2018_nano_v9_2k.root` inside the build directory from step 1.
+Move the result into `nano/tt_dl_powheg_2018_nano_v9.root` inside the build directory from step 1.
 
 ## 3. Package and publish the release
 
@@ -149,7 +163,7 @@ cd ..
 
 gh release create ci-testdata-v1 ci-testdata-v1.tar.gz -R GhentAnalysis/columnflow \
   --title "CI test data v1" \
-  --notes "Trimmed tt_dl_powheg 2018 UL NanoAOD (~2k events) + 2018 UL correctionlib JSONs, used by .github/workflows/template_e2e.yaml"
+  --notes "Trimmed tt_dl_powheg 2018 UL NanoAOD (~66k events) + 2018 UL correctionlib JSONs, used by .github/workflows/template_e2e.yaml"
 ```
 
 The release (and therefore the asset) **must be public**. The workflow downloads it with a plain
