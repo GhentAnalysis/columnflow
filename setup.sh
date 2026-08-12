@@ -670,9 +670,10 @@ EOF
                     "python=${pyv}" \
                     git \
                     git-lfs \
-                    gfal2 \
+                    "gfal2=2.23.1" \
                     gfal2-util \
-                    python-gfal2 \
+                    "python-gfal2=1.13.0" \
+                    "xrootd=5.8.4" \
                     myproxy \
                     conda-pack \
                     || return "$?"
