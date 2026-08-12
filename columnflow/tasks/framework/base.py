@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import os
 import abc
+import math
 import enum
 import importlib
 import itertools
@@ -197,7 +198,10 @@ class AnalysisTask(BaseTask, law.SandboxTask):
             not law.parser.global_cmdline_values().get(f"{cls.task_family}_version") and
             (
                 cls.task_family != inst.task_family or
-                freeze(cls.get_config_lookup_keys(params)) != freeze(inst.get_config_lookup_keys(inst))
+                (
+                    freeze(cls.get_config_lookup_keys(params, significant=True)) !=
+                    freeze(inst.get_config_lookup_keys(inst, significant=True))
+                )
             )
         ):
             default_version = cls.get_default_version(inst, params)
@@ -352,12 +356,14 @@ class AnalysisTask(BaseTask, law.SandboxTask):
     def get_config_lookup_keys(
         cls,
         inst_or_params: AnalysisTask | dict[str, Any],
+        significant: bool = False,
     ) -> law.util.InsertiableDict:
         """
         Returns a dictionary with keys that can be used to lookup state specific values in a config or dictionary, such
         as default task versions or output locations.
 
         :param inst_or_params: The tasks instance or its parameters.
+        :param significant: Whether only significant keys should be returned.
         :return: A dictionary with keys that can be used for nested lookup.
         """
         keys = law.util.InsertableDict()
@@ -556,7 +562,8 @@ class AnalysisTask(BaseTask, law.SandboxTask):
                 object_names.append(name)
             elif groups_str and name in (object_groups := container.x(groups_str, {})):
                 # a key in the object group dict
-                lookup.extend(list(object_groups[name]))
+                for entry in list(object_groups[name]):
+                    lookup.extend(law.util.brace_expand(entry))
             elif accept_patterns:
                 # must eventually be a pattern, perform an object traversal
                 found = []
@@ -582,6 +589,7 @@ class AnalysisTask(BaseTask, law.SandboxTask):
         container: str | od.AuxDataMixin | Sequence[od.AuxDataMixin],
         default_str: str | None = None,
         multi_strategy: str = "first",
+        debug: bool = False,
     ) -> Any | list[Any] | dict[od.AuxDataMixin, Any]:
         """
         Resolves a given parameter value *param*, checks if it should be placed with a default value when empty, and in
@@ -702,11 +710,12 @@ class AnalysisTask(BaseTask, law.SandboxTask):
             return params
         if multi_strategy == "first":
             return params[container[0]]
-        # NOTE: in there two strategies, we loose all order information
-        if multi_strategy == "union":
-            return list(set.union(*map(set, params.values())))
-        if multi_strategy == "intersection":
-            return list(set.intersection(*map(set, params.values())))
+        if multi_strategy in {"union", "intersection"}:
+            union = law.util.make_unique(sum(map(list, params.values()), []))
+            if multi_strategy == "union":
+                return union
+            # for intersection, use ordered union as index for sorting
+            return sorted(set.intersection(*map(set, params.values())), key=union.index)
         # "same", so check that values are identical
         first = params[container[0]]
         if not all(params[c] == first for c in container[1:]):
@@ -724,7 +733,7 @@ class AnalysisTask(BaseTask, law.SandboxTask):
         groups_str: str,
         default_str: str | None = None,
         multi_strategy: str = "first",
-        debug=False,
+        debug: bool = False,
     ) -> Any | list[Any] | dict[od.AuxDataMixin, Any]:
         """
         This method is similar to :py:meth:`~.resolve_config_default` in that it checks if a parameter value *param* is
@@ -819,7 +828,7 @@ class AnalysisTask(BaseTask, law.SandboxTask):
                         raise Exception(
                             f"definition of '{groups_str}' contains circular references involving group '{value}'",
                         )
-                    lookup.extendleft(law.util.make_list(param_groups[value]))
+                    lookup.extendleft(law.util.make_list(param_groups[value])[::-1])
                     handled_groups.add(value)
                 else:
                     _values.append(value)
@@ -832,10 +841,12 @@ class AnalysisTask(BaseTask, law.SandboxTask):
             return values
         if multi_strategy == "first":
             return values[container[0]]
-        if multi_strategy == "union":
-            return list(set.union(*map(set, values.values())))
-        if multi_strategy == "intersection":
-            return list(set.intersection(*map(set, values.values())))
+        if multi_strategy in {"union", "intersection"}:
+            union = law.util.make_unique(sum(map(list, values.values()), []))
+            if multi_strategy == "union":
+                return union
+            # for intersection, use ordered union as index for sorting
+            return sorted(set.intersection(*map(set, values.values())), key=union.index)
         # "same", so check that values are identical
         first = values[container[0]]
         if not all(values[c] == first for c in container[1:]):
@@ -883,7 +894,7 @@ class AnalysisTask(BaseTask, law.SandboxTask):
                 not (0 < max_len < (len(r) + sum(map(len, objects[:max_count])) + len(sep) * max_count + hash_len))
             ):
                 r += sep.join(objects[:max_count])
-                r += f"{sep}{law.util.create_hash(objects[max_count:], l=hash_len)}"
+                r += f"{sep}{law.util.create_hash(objects[max_count:], hash_len)}"
             else:
                 r += sep.join(objects)
         else:
@@ -891,7 +902,7 @@ class AnalysisTask(BaseTask, law.SandboxTask):
 
         # handle overall truncation
         if max_len > 0 and len(r) > max_len:
-            r = f"{r[:max_len - hash_len - len(sep)]}{sep}{law.util.create_hash(r, l=hash_len)}"
+            r = f"{r[:max_len - hash_len - len(sep)]}{sep}{law.util.create_hash(r, hash_len)}"
 
         return r
 
@@ -1131,6 +1142,20 @@ class AnalysisTask(BaseTask, law.SandboxTask):
             )
 
         raise Exception(f"cannot determine output location based on '{location}'")
+
+    def pilot_workflow_requires(self, task: law.Task) -> Any:
+        """
+        Helper for situtations where *this* task is a workflow with ``--pilot`` activated to decide if an upstream task
+        itself should be required, or its own upstream dependencies.
+
+        :param task: The task to be required.
+        :return: Either the task itself or the result of its :py:meth:`~.workflow_requires` method.
+        """
+        return (
+            task.workflow_requires()
+            if self.pilot and isinstance(task, law.BaseWorkflow) and task.is_workflow()
+            else task
+        )
 
     def get_parquet_writer_opts(self, repeating_values: bool = False) -> dict[str, Any]:
         """
@@ -1492,8 +1517,9 @@ class ConfigTask(AnalysisTask):
     def get_config_lookup_keys(
         cls,
         inst_or_params: ConfigTask | dict[str, Any],
+        significant: bool = False,
     ) -> law.util.InsertiableDict:
-        keys = super().get_config_lookup_keys(inst_or_params)
+        keys = super().get_config_lookup_keys(inst_or_params, significant=significant)
 
         # add the config name in front of the task family
         config = (
@@ -1673,8 +1699,9 @@ class ShiftTask(ConfigTask):
     def get_config_lookup_keys(
         cls,
         inst_or_params: ShiftTask | dict[str, Any],
+        significant: bool = False,
     ) -> law.util.InsertiableDict:
-        keys = super().get_config_lookup_keys(inst_or_params)
+        keys = super().get_config_lookup_keys(inst_or_params, significant=significant)
 
         # add the (global) shift name
         shift = (
@@ -1780,8 +1807,9 @@ class DatasetTask(ShiftTask):
     def get_config_lookup_keys(
         cls,
         inst_or_params: DatasetTask | dict[str, Any],
+        significant: bool = False,
     ) -> law.util.InsertiableDict:
-        keys = super().get_config_lookup_keys(inst_or_params)
+        keys = super().get_config_lookup_keys(inst_or_params, significant=significant)
 
         # add the dataset name before the shift name
         dataset = (
@@ -1838,18 +1866,29 @@ class DatasetTask(ShiftTask):
         Consecutive merging steps are not handled yet.
         """
         n_files = self.dataset_info_inst.n_files
+        file_merging = self.file_merging
 
-        if isinstance(self.file_merging, int):
+        if isinstance(file_merging, int):
             # interpret the file_merging attribute as the merging factor itself
             # zero means "merge all in one"
-            if self.file_merging < 0:
-                raise ValueError(f"invalid file_merging value {self.file_merging}")
-            n_merge = n_files if self.file_merging == 0 else self.file_merging
+            if file_merging < 0:
+                raise ValueError(f"invalid file_merging value {file_merging}")
+            n_merge = n_files if file_merging == 0 else file_merging
         else:
             # no merging at all
             n_merge = 1
 
         return n_merge
+
+    @property
+    def n_merged_files(self) -> int:
+        """
+        Returns the number of files that are expected after merging, making use of :py:attr:`file_merging_factor` which
+        can depend on dynamic, dataset-dependent information.
+        """
+        n_files = self.dataset_info_inst.n_files
+        n_merge = self.file_merging_factor
+        return int(math.ceil((1.0 * n_files / n_merge)))
 
     def create_branch_map(self):
         """
@@ -1858,8 +1897,8 @@ class DatasetTask(ShiftTask):
         branches to one or more input file indices. E.g. `1 -> [3, 4, 5]` would mean that branch 1
         is simultaneously handling input file indices 3, 4 and 5.
         """
-        n_merge = self.file_merging_factor
         n_files = self.dataset_info_inst.n_files
+        n_merge = self.file_merging_factor
 
         # use iter_chunks which splits a list of length n_files into chunks of maximum size n_merge
         chunks = law.util.iter_chunks(n_files, n_merge)
@@ -1999,6 +2038,7 @@ def wrapper_factory(
     cls_name: str | None = None,
     attributes: dict | None = None,
     docs: str | None = None,
+    port_parameters: bool | Sequence[str] = True,
 ) -> law.task.base.Register:
     """
     Factory function creating wrapper task classes, inheriting from *base_cls* and
@@ -2050,6 +2090,8 @@ def wrapper_factory(
         class
     :param docs: Manually set the documentation string `__doc__` of the new :py:class:`~law.task.base.WrapperTask` class
         instance
+    :param port_parameters: Whether to port the parameters of the `require_cls`. When a sequence of strings is passed,
+        only parameters with these names are ported.
     :raises ValueError: If a parameter provided with `enable` is not in the list of known parameters
     :raises TypeError: If any parameter in `enable` is incompatible with the :py:class:`~law.task.base.WrapperTask`
         class instance or the inheritance structure of corresponding classes
@@ -2315,8 +2357,42 @@ def wrapper_factory(
     # overwrite __name__
     Wrapper.__name__ = cls_name or f"{require_cls.__name__}Wrapper"
 
+    # use same task family
+    Wrapper.task_namespace = require_cls.task_namespace
+
     # set docs
     if docs:
         Wrapper.__docs__ = docs
+
+    # port parameters from require_cls
+    if port_parameters:
+        # define which parameters to port
+        upstream_params = dict(require_cls.get_params())
+        if isinstance(port_parameters, bool):
+            port_params = (
+                # start from all non-private upstream parameters
+                set(
+                    name for name, param in upstream_params.items()
+                    if param.visibility != luigi.parameter.ParameterVisibility.PRIVATE
+                ) -
+                # skip existing parameters
+                set(dict(Wrapper.get_params())) -
+                # skip interactive parameters
+                set(require_cls.interactive_params) -
+                # skip with some heuristics
+                {"config", "dataset", "shift", "effective_workflow", "local_shift", "known_shifts"}
+            )
+        else:
+            # take sequence as is, but check for existence
+            port_params = law.util.make_unique(port_parameters)
+            for name in port_params:
+                if name not in upstream_params:
+                    raise ValueError(
+                        f"cannot port parameter '{name}' to '{Wrapper.__name__}': not existing in "
+                        f"'{require_cls.__name__}'",
+                    )
+        # actual porting
+        for name in port_params:
+            setattr(Wrapper, name, upstream_params[name])
 
     return Wrapper

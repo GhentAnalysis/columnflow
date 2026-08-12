@@ -22,7 +22,12 @@ from columnflow.tasks.reduction import ReducedEventsUser
 from columnflow.tasks.production import ProduceColumns
 from columnflow.tasks.ml import MLEvaluation
 from columnflow.hist_util import update_ax_labels, sum_hists
-from columnflow.util import dev_sandbox
+from columnflow.config_util import expand_shift_sources
+from columnflow.util import maybe_import, dev_sandbox
+from columnflow.types import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    hist = maybe_import("hist")
 
 
 class VariablesMixinWorkflow(
@@ -89,6 +94,24 @@ class CreateHistograms(_CreateHistograms):
     def workflow_requires(self):
         reqs = super().workflow_requires()
 
+        # depending on pilot flag, add upstream workflows or pass-through their own requirements only
+        reqs["producers"] = list(map(self.pilot_workflow_requires, (
+            self.reqs.ProduceColumns.req(
+                self,
+                producer=producer_inst.cls_name,
+                producer_inst=producer_inst,
+            )
+            for producer_inst in self.producer_insts
+            if producer_inst.produced_columns
+        )))
+        reqs["ml"] = list(map(self.pilot_workflow_requires, (
+            self.reqs.MLEvaluation.req(self, ml_model=ml_model_inst.cls_name)
+            for ml_model_inst in self.ml_model_insts
+        )))
+
+        # add hist producer dependent requirements
+        reqs["hist_producer"] = law.util.make_unique(law.util.flatten(self.hist_producer_inst.run_requires(task=self)))
+
         # require the full merge forest
         reqs["events"] = self.reqs.ProvideReducedEvents.req(self)
 
@@ -119,7 +142,7 @@ class CreateHistograms(_CreateHistograms):
         return reqs
 
     def requires(self):
-        reqs = {"events": self.reqs.ProvideReducedEvents.req(self)}
+        reqs = {}
 
         if self.producer_insts:
             reqs["producers"] = [
@@ -142,6 +165,9 @@ class CreateHistograms(_CreateHistograms):
             self.hist_producer_inst.run_requires(task=self),
         ))
 
+        # require merged events
+        reqs["events"] = self.reqs.ProvideReducedEvents.req(self)
+
         return reqs
 
     workflow_condition = ReducedEventsUser.workflow_condition.copy()
@@ -159,7 +185,7 @@ class CreateHistograms(_CreateHistograms):
         import numpy as np
         import awkward as ak
         from columnflow.columnar_util import (
-            Route, update_ak_array, add_ak_aliases, has_ak_column, attach_coffea_behavior,
+            Route, update_ak_array, add_ak_aliases, has_ak_column, attach_coffea_behavior, ak_concatenate_safe,
         )
         from columnflow.columnar_util_Ghent import remove_obj_overlap
 
@@ -256,7 +282,7 @@ class CreateHistograms(_CreateHistograms):
                     continue
 
                 # merge category ids and check that they are defined as leaf categories
-                category_ids = ak.concatenate(
+                category_ids = ak_concatenate_safe(
                     [Route(c).apply(events) for c in self.category_id_columns],
                     axis=-1,
                 )
@@ -471,8 +497,11 @@ class MergeHistograms(_MergeHistograms):
             if not self.hist_producer_inst.skip_compatibility_check:
                 CreateHistograms.check_histogram_compatibility(merged)
 
+            # do not overwrite permissions when the file was already existing
+            perm = 0 if outputs["hists"][variable_name].exists() else None
+
             # write the output
-            outputs["hists"][variable_name].dump(merged, formatter="pickle")
+            outputs["hists"][variable_name].dump(merged, perm=perm, formatter="pickle")
 
         # optionally remove inputs
         if self.remove_previous:
@@ -503,10 +532,23 @@ class _MergeShiftedHistograms(
 
 class MergeShiftedHistograms(_MergeShiftedHistograms):
 
+    shift_source_chunk_size = luigi.IntParameter(
+        default=law.NO_INT,
+        description="maximum number of shift sources to be processed by a single branch task; when > 0, sources are "
+        "split into chunks of that size and processed separately by multiple branch tasks; shifts in histograms are "
+        "consequently split across multiple output files; when empty or <= 0, no shift source splitting is applied and "
+        "there will only be a single branch; default: empty",
+    )
+
     sandbox = dev_sandbox(law.config.get("analysis", "default_columnar_sandbox"))
 
     # use the MergeHistograms task to trigger upstream TaskArrayFunction initialization
     resolution_task_cls = MergeHistograms
+
+    output_collection_cls = law.FileCollection
+
+    # do not allow empty shift sources
+    allow_empty_shift_sources = False
 
     # upstream requirements
     reqs = Requirements(
@@ -515,15 +557,15 @@ class MergeShiftedHistograms(_MergeShiftedHistograms):
     )
 
     def create_branch_map(self):
-        # create a dummy branch map so that this task can run as a job
-        return {0: None}
+        # each chunk of shift sources is assigned its own branch
+        return list(law.util.iter_chunks(self.shift_sources, self.shift_source_chunk_size))
 
     def workflow_requires(self):
         reqs = super().workflow_requires()
 
         if not self.pilot:
             # add nominal and both directions per shift source
-            for shift in ["nominal"] + self.shifts:
+            for shift in expand_shift_sources(self.shift_sources):
                 reqs[shift] = self.reqs.MergeHistograms.req(self, shift=shift, _prefer_cli={"variables"})
 
         return reqs
@@ -531,16 +573,31 @@ class MergeShiftedHistograms(_MergeShiftedHistograms):
     def requires(self):
         return {
             shift: self.reqs.MergeHistograms.req(self, shift=shift, _prefer_cli={"variables"})
-            for shift in ["nominal"] + self.shifts
+            for shift in expand_shift_sources(self.branch_data)
         }
+
+    def store_parts(self) -> law.util.InsertableDict:
+        parts = super().store_parts()
+
+        if self.is_branch() and self.shift_source_chunk_size > 0:
+            shifts_repr = self._shift_sources_repr(self.branch_data, self.enforce_nominal_shift_source)
+            parts["shift_sources"] = f"shifts__{shifts_repr}"
+
+        return parts
 
     def output(self):
         return {
             "hists": law.SiblingFileCollection({
-                variable_name: self.target(f"hists__{variable_name}.pickle")
-                for variable_name in self.variables
+                variable: self.target(f"hists__{variable}.pickle")
+                for variable in self.variables
             }),
         }
+
+    def control_output_postfix(self) -> str:
+        postfix = super().control_output_postfix()
+        if self.shift_source_chunk_size > 0:
+            postfix += f"__sscs{self.shift_source_chunk_size}"
+        return postfix
 
     @law.decorator.notify
     @law.decorator.log
@@ -549,20 +606,59 @@ class MergeShiftedHistograms(_MergeShiftedHistograms):
         inputs = self.input()
         outputs = self.output()["hists"].targets
 
+        shifts_msg = ""
+        if self.shift_source_chunk_size > 0:
+            shifts_msg = f" for {len(self.branch_data)} shift sources {','.join(self.branch_data)}"
+
         for variable_name, outp in self.iter_progress(outputs.items(), len(outputs)):
-            with self.publish_step(f"merging histograms for '{variable_name}' ..."):
-                # load hists
-                variable_hists = [
-                    coll["hists"].targets[variable_name].load(formatter="pickle")
-                    for coll in inputs.values()
-                ]
+            # verbosely load input histograms
+            with self.publish_step(f"loading '{variable_name}' histograms{shifts_msg} ..."):
+                variable_hists = []
+                for shift_name, inp in inputs.items():
+                    try:
+                        h = inp["hists"].targets[variable_name].load(formatter="pickle")
+                    except:
+                        self.logger.error(
+                            f"cannot read file {inp['hists'].targets[variable_name].abspath} for with inputs for "
+                            f"shift '{shift_name}'",
+                        )
+                        raise
 
-                # update axis labels from variable insts for consistency
+                    # invoke modification hook, then save
+                    h = self.modify_input_hist(shift_name, variable_name, h)
+                    variable_hists.append(h)
+
+            # merge and write the output
+            with self.publish_step(f"merging '{variable_name}' histograms{shifts_msg} ..."):
                 update_ax_labels(variable_hists, self.config_inst, variable_name)
-
-                # merge and write the output
                 merged = sum_hists(variable_hists)
+
+                # invoke modification hook, then save
+                merged = self.modify_merged_hist(variable_name, merged)
                 outp.dump(merged, formatter="pickle")
+
+    def modify_input_hist(self, shift: str, variable: str, h: hist.Hist) -> hist.Hist:
+        """
+        Hook to modify an input histogram for a shift after it has been loaded. This can be helpful to reduce memory
+        early on.
+
+        :param shift: The shift name the histogram corresponds to.
+        :param variable: The variable name the histogram corresponds to.
+        :param h: The histogram to modify.
+        :return: The modified histogram.
+        """
+        return h
+
+    def modify_merged_hist(self, variable: str, h: hist.Hist) -> hist.Hist:
+        """
+        Hook to modify the histogram merged for different shifts right before it is saved. This can be helpful to
+        reduce memory early on.
+
+        :param variable: The variable name the histogram corresponds to.
+        :param h: The histogram to modify.
+        :return: The modified histogram.
+        """
+        return h
 
 
 MergeShiftedHistogramsWrapper = wrapper_factory(

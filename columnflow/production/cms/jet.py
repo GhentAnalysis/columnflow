@@ -12,7 +12,7 @@ import law
 
 from columnflow.production import Producer, producer
 from columnflow.util import maybe_import, load_correction_set
-from columnflow.columnar_util import set_ak_column, layout_ak_array, flat_np_view
+from columnflow.columnar_util import set_ak_column, layout_ak_array, flat_np_view, ak_concatenate_safe
 
 np = maybe_import("numpy")
 ak = maybe_import("awkward")
@@ -109,7 +109,7 @@ def jet_id(self: Producer, events: ak.Array, **kwargs) -> ak.Array:
         jet_id_flat[valid_mask] |= id_flag << (pass_bit - 1)
 
     # apply correct layout
-    jet_id = layout_ak_array(jet_id_flat, events[self.jet_name].eta)
+    jet_id = layout_ak_array(jet_id_flat, events[self.jet_name])
 
     # store them
     events = set_ak_column(events, f"{self.jet_name}.jetId", jet_id, value_type=np.uint8)
@@ -122,6 +122,8 @@ def jet_id_init(self: Producer, **kwargs) -> None:
     """
     Dynamically add the names of the used and produced columns depending on the jet name.
     """
+    super(jet_id, self).init_func(**kwargs)
+
     self.jet_columns = ["eta", "chHEF", "neHEF", "chEmEF", "neEmEF", "muEF", "chMultiplicity", "neMultiplicity"]
     self.uses.update(f"{self.jet_name}.{col}" for col in self.jet_columns)
     self.produces.add(f"{self.jet_name}.jetId")
@@ -132,6 +134,8 @@ def jet_id_requires(self: Producer, task: law.Task, reqs: dict, **kwargs) -> Non
     """
     Adds the requirements needed the underlying task to recompute the jet id into *reqs*.
     """
+    super(jet_id, self).requires_func(task=task, reqs=reqs, **kwargs)
+
     if "external_files" in reqs:
         return
 
@@ -151,6 +155,8 @@ def jet_id_setup(
     """
     Sets up the correction sets needed for the jet id using the external files.
     """
+    super(jet_id, self).setup_func(task=task, reqs=reqs, inputs=inputs, reader_targets=reader_targets, **kwargs)
+
     bundle = reqs["external_files"]
 
     # get the jet id config
@@ -208,8 +214,8 @@ def msoftdrop(self: Producer, events: ak.Array, **kwargs) -> ak.Array:
         valid_subjet = padded_subjet[valid_subjet_idxs]
         valid_subjets.append(ak.singletons(valid_subjet, axis=-1))
 
-    # merge lists for all sibjet index columns
-    valid_subjets = ak.concatenate(valid_subjets, axis=-1)
+    # merge lists for all subjet index columns
+    valid_subjets = ak_concatenate_safe(valid_subjets, axis=-1)
 
     # attach coffea behavior so we can do LV arithmetic
     valid_subjets = ak.with_name(
@@ -243,6 +249,8 @@ def msoftdrop_init(self: Producer, **kwargs) -> None:
     """
     Dynamically add `uses` and `produces`.
     """
+    super(msoftdrop, self).init_func(**kwargs)
+
     # input columns
     self.uses |= {
         f"{collection}.{var}"
@@ -262,6 +270,7 @@ def msoftdrop_init(self: Producer, **kwargs) -> None:
 
 @msoftdrop.setup
 def msoftdrop_setup(self: Producer, task: law.Task, reqs: dict, **kwargs) -> None:
-    import coffea
+    super(msoftdrop, self).setup_func(task=task, reqs=reqs, **kwargs)
 
+    import coffea
     self.nano_behavior = coffea.nanoevents.NanoAODSchema.behavior()
