@@ -170,9 +170,7 @@ class GetDatasetLFNs(DatasetTask, law.tasks.TransferLocalFile):
             raise Exception(f"dasgoclient query failed:\n{out}")
 
         if not out:
-            logger.warning(
-                f"global dasgoclient query failed for {dataset_key}. Trying to query with prod/phys03 instance.",
-            )
+            logger.warning(f"global dasgoclient query failed for {dataset_key}. Trying to query with prod/phys03 instance.")
 
             code, out, _ = law.util.interruptable_popen(
                 f"dasgoclient --query='file dataset={dataset_key} instance=prod/phys03' --limit=0",

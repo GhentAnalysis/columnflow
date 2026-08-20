@@ -28,7 +28,7 @@ class BTagEfficiencyBase:
     tag_name = "btag"
     flav_name = "hadronFlavour"
     flavours = {0: "light", 4: "charm", 5: "bottom"}
-    wps = ["L", "M", "T"]
+    wps = ["L", "M", "T", "XT", "XXT"]
 
     single_config = True
 
