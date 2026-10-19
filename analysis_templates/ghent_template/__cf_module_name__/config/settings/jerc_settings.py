@@ -79,6 +79,8 @@ def add_jerc_settings(config: od.Config) -> None:
                 "CorrelationGroupFlavor",
                 "CorrelationGroupUncorrelated",
             ],
+            # whether the JECs for data should be era-specific
+            "data_per_era": True,
         })
     }
 

@@ -193,9 +193,9 @@ def post_selection(
 
 
 @post_selection.init
-def post_selection_init(self: Selector) -> None:
+def post_selection_init(self: Selector, **kwargs) -> None:
 
-    if not getattr(self, "dataset_inst", None) or self.dataset_inst.is_data:
+    if self.dataset_inst.is_data:
         return
 
     self.uses.add(event_weights_to_normalize)

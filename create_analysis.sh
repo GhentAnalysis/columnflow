@@ -7,6 +7,18 @@
 #
 # A few variables are queried at the beginning of the project creation and inserted into a template
 # analysis. For more insights, checkout the "analysis_templates" directory.
+#
+# Optionally preconfigured environment variables:
+#   CF_CREATE_ANALYSIS_DEBUG
+#       When true-ish, columnflow is symlinked from the local checkout instead of being fetched,
+#       and verbose output is enabled.
+#   CF_CREATE_ANALYSIS_VERBOSE
+#       When true-ish, the received input values are printed after the queries.
+#   CF_CREATE_ANALYSIS_NONINTERACTIVE
+#       When true-ish, all queries are skipped and their values are taken from already-exported
+#       shell variables of the same name as the queried key (e.g. "cf_analysis_name"), falling
+#       back to the default when such a variable is unset or empty. Useful for running this
+#       script non-interactively, e.g. in CI.
 
 create_analysis() {
     #
@@ -19,9 +31,9 @@ create_analysis() {
     local exec_dir="$( pwd )"
     local fetch_cf_branch="GhentAnalysis/master"
     local fetch_cmsdb_branch="GhentAnalysis/master"
-    local fetch_normtag_branch="master"
     local verbose="${CF_CREATE_ANALYSIS_VERBOSE:-false}"
     local debug="${CF_CREATE_ANALYSIS_DEBUG:-false}"
+    local noninteractive="${CF_CREATE_ANALYSIS_NONINTERACTIVE:-false}"
     ${debug} && verbose="true"
 
     # zsh options
@@ -103,43 +115,75 @@ create_analysis() {
         ${opened_parenthesis} && input_line="${input_line})"
         input_line="${input_line}: "
 
-        # first query
-        printf "${input_line}"
-        read query_response
-
-        # input checks
-        while true; do
-            # handle empty responses
+        if ${noninteractive}; then
+            # non-interactive mode: take the value from an already-exported shell variable of the
+            # same name as the queried variable, falling back to the default; since there is no
+            # way to re-query, invalid values are fatal errors instead of yellow re-prompts
+            eval "query_response=\"\${${varname}:-}\""
             if [ "${query_response}" = "" ]; then
-                # re-query empty values without defaults
                 if [ "${default}" = "-" ]; then
-                    echo_color yellow "a value is required"
-                    printf "${input_line}"
-                    read query_response
-                    continue
-                else
-                    query_response="${default}"
+                    >&2 echo_color red "a value is required for '${varname}' but the corresponding" \
+                        "environment variable is unset (or empty) and no default is defined"
+                    return "1"
                 fi
+                query_response="${default}"
             fi
 
             # compare to choices when given
             if [ ! -z "${choices}" ] && [[ ! ",${choices}," =~ ",${query_response}," ]]; then
-                echo_color yellow "invalid choice"
-                printf "${input_line}"
-                read query_response
-                continue
+                >&2 echo_color red "invalid value '${query_response}' for '${varname}'," \
+                    "valid choices are: ${choices}"
+                return "1"
             fi
 
             # check characters
             if [[ ! "${query_response}" =~ ^[a-zA-Z0-9_]*$ ]]; then
-                echo_color yellow "only alpha-numeric characters and underscores are allowed"
-                printf "${input_line}"
-                read query_response
-                continue
+                >&2 echo_color red "invalid value '${query_response}' for '${varname}', only" \
+                    "alpha-numeric characters and underscores are allowed"
+                return "1"
             fi
 
-            break
-        done
+            # echo the chosen value so ci logs show what was used
+            echo_color cyan "${input_line}${query_response}"
+        else
+            # first query
+            printf "${input_line}"
+            read query_response
+
+            # input checks
+            while true; do
+                # handle empty responses
+                if [ "${query_response}" = "" ]; then
+                    # re-query empty values without defaults
+                    if [ "${default}" = "-" ]; then
+                        echo_color yellow "a value is required"
+                        printf "${input_line}"
+                        read query_response
+                        continue
+                    else
+                        query_response="${default}"
+                    fi
+                fi
+
+                # compare to choices when given
+                if [ ! -z "${choices}" ] && [[ ! ",${choices}," =~ ",${query_response}," ]]; then
+                    echo_color yellow "invalid choice"
+                    printf "${input_line}"
+                    read query_response
+                    continue
+                fi
+
+                # check characters
+                if [[ ! "${query_response}" =~ ^[a-zA-Z0-9_]*$ ]]; then
+                    echo_color yellow "only alpha-numeric characters and underscores are allowed"
+                    printf "${input_line}"
+                    read query_response
+                    continue
+                fi
+
+                break
+            done
+        fi
 
         # strip " and ' on both sides
         query_response="${query_response%\"}"
@@ -158,15 +202,15 @@ create_analysis() {
     echo_color bright "start creating columnflow-based analysis in local directory"
     echo
 
-    query_input "cf_analysis_name" "Name of the analysis" "-"
+    query_input "cf_analysis_name" "Name of the analysis" "-" || return "$?"
     echo
-    query_input "cf_module_name" "Name of the python module in the analysis directory" "$( str_lc "${cf_analysis_name}" )"
+    query_input "cf_module_name" "Name of the python module in the analysis directory" "$( str_lc "${cf_analysis_name}" )" || return "$?"
     echo
-    query_input "cf_short_name" "Short name for environment variables, pre- and suffixes" "${cf_module_name}"
+    query_input "cf_short_name" "Short name for environment variables, pre- and suffixes" "${cf_module_name}" || return "$?"
     echo
-    query_input "cf_analysis_flavor" "The flavor of the analysis to setup" "ghent_template" "cms_minimal,ghent_template"
+    query_input "cf_analysis_flavor" "The flavor of the analysis to setup" "ghent_template" "cms_minimal,ghent_template" || return "$?"
     echo
-    query_input "cf_use_ssh" "Use ssh for git submodules" "True" "True,False"
+    query_input "cf_use_ssh" "Use ssh for git submodules" "True" "True,False" || return "$?"
     echo
 
     # changes
@@ -261,11 +305,9 @@ create_analysis() {
     echo_color cyan "setup submodules"
 
     local gh_prefix="https://github.com/"
-    local gl_prefix="https://gitlab.cern.ch/"
 
 
     $( str_lc "${cf_use_ssh}" ) && gh_prefix="git@github.com:"
-    $( str_lc "${cf_use_ssh}" ) && gl_prefix="ssh://git@gitlab.cern.ch:7999/"
 
 
     mkdir -p modules
@@ -274,13 +316,7 @@ create_analysis() {
     else
         git submodule add -b "${fetch_cf_branch}" "${gh_prefix}GhentAnalysis/columnflow.git" modules/columnflow
     fi
-    if [ "${cf_analysis_flavor}" = "cms_minimal" ]; then
-        git submodule add -b "${fetch_cmsdb_branch}" "${gh_prefix}Ghentanalysis/cmsdb.git" modules/cmsdb
-    fi
-    if [ "${cf_analysis_flavor}" = "ghent_template" ]; then
-        git submodule add -b "${fetch_normtag_branch}" "${gl_prefix}CMS-LUMI-POG/Normtags.git" modules/Normtags
-        git submodule add -b "${fetch_cmsdb_branch}" "${gh_prefix}Ghentanalysis/cmsdb.git" modules/cmsdb
-    fi
+    git submodule add -b "${fetch_cmsdb_branch}" "${gh_prefix}Ghentanalysis/cmsdb.git" modules/cmsdb
 
     git submodule update --init --recursive
     echo_color green "done"
