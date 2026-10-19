@@ -53,9 +53,7 @@ def cutflow_features(
 
 
 @cutflow_features.init
-def cutflow_features_init(self: Producer) -> None:
-    if hasattr(self, "dataset_inst"):
-        if self.dataset_inst.is_mc:
-            self.uses |= four_vec({"GenPart"}, {"pdgId", "status"})
-            self.produces |= four_vec({"genTop"})
-    return
+def cutflow_features_init(self: Producer, **kwargs) -> None:
+    if self.dataset_inst.is_mc:
+        self.uses |= four_vec({"GenPart"}, {"pdgId", "status"})
+        self.produces |= four_vec({"genTop"})

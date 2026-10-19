@@ -18,14 +18,14 @@ def add_variables(config: od.Config) -> None:
         expression=lambda events: np.zeros(len(events), dtype=int),
         binning=(1, 0, 1),
         x_title="Event number",
-        discrete_x=True,
+        x_discrete=True,
     )
     config.add_variable(
         name="n_jet",
         expression="n_jet",
         binning=(6, 1, 7),
         x_title="Number of jets",
-        discrete_x=True,
+        x_discrete=True,
     )
     config.add_variable(
         "jet1_pt",

@@ -14,7 +14,7 @@ from columnflow.calibration import Calibrator, calibrator
 from columnflow.calibration.util import ak_random, propagate_met, sum_transverse
 from columnflow.production.util import attach_coffea_behavior
 from columnflow.util import UNSET, maybe_import, DotDict, load_correction_set
-from columnflow.columnar_util import set_ak_column, layout_ak_array, optional_column as optional
+from columnflow.columnar_util import set_ak_column, layout_ak_array, optional_column as optional, ak_concatenate_safe
 from columnflow.types import TYPE_CHECKING, Any
 
 np = maybe_import("numpy")
@@ -36,6 +36,7 @@ set_ak_column_f32 = functools.partial(set_ak_column, value_type=np.float32)
 def get_evaluators(
     correction_set: correctionlib.highlevel.CorrectionSet,
     names: list[str],
+    attrs: list[dict[str, Any]] | None = None,
 ) -> list[Any]:
     """
     Helper function to get a list of correction evaluators from a
@@ -45,6 +46,7 @@ def get_evaluators(
 
     :param correction_set: evaluator provided by :external+correctionlib:doc:`index`
     :param names: List of names of corrections to be applied
+    :param: attrs: List of dictionaries containing attributes to be added to each evaluator.
     :raises RuntimeError: If a requested correction in *names* is not available
     :return: List of compounded corrections, see
         :external+correctionlib:py:class:`correctionlib.highlevel.CorrectionSet`
@@ -59,13 +61,27 @@ def get_evaluators(
             f"\n  - {name}" for name in sorted(available_keys)
         ))
 
+    if attrs and len(attrs) != len(names):
+        raise ValueError(
+            f"number of attribute dictionaries ({len(attrs)}) does not match number of evaluator names ({len(attrs)})",
+        )
+
     # retrieve the evaluators
-    return [
-        correction_set.compound[name]
-        if name in correction_set.compound
-        else correction_set[name]
-        for name in names
-    ]
+    evaluators = []
+    for i, name in enumerate(names):
+        e = (
+            correction_set.compound[name]
+            if name in correction_set.compound
+            else correction_set[name]
+        )
+        # attach attributes if given
+        if attrs:
+            for attr, value in attrs[i].items():
+                setattr(e, attr, value)
+        # save
+        evaluators.append(e)
+
+    return evaluators
 
 
 def ak_evaluate(evaluator: correctionlib.highlevel.Correction, *args) -> float:
@@ -251,6 +267,8 @@ def get_jec_config_default(self: Calibrator) -> DotDict:
     get_jec_file=get_jerc_file_default,
     # function to determine the jec configuration dict
     get_jec_config=get_jec_config_default,
+    # function to update variables before jec corrector call
+    update_corrector_variables=(lambda self, corrector, variables: variables),
 )
 def jec(
     self: Calibrator,
@@ -333,9 +351,6 @@ def jec(
     events = set_ak_column_f32(events, f"{jet_name}.pt_raw", events[jet_name].pt * (1 - events[jet_name].rawFactor))
     events = set_ak_column_f32(events, f"{jet_name}.mass_raw", events[jet_name].mass * (1 - events[jet_name].rawFactor))
 
-    # run number for each jet required in 2023 L2L3Residual jec corrections for data
-    jet_run = ak.broadcast_arrays(events.run, events[jet_name].pt_raw)[0]
-
     def correct_jets(*, pt, eta, phi, area, rho, run, evaluator_key="jec"):
         # variable naming convention
         variable_map = {
@@ -350,13 +365,15 @@ def jec(
         # apply all correctors sequentially, updating the pt each time
         full_correction = ak.ones_like(pt, dtype=np.float32)
         for corrector in self.evaluators[evaluator_key]:
+            # optionally update variables for this corrector call
+            _variable_map = variable_map
+            if callable(self.update_corrector_variables):
+                _variable_map = variable_map.copy()
+                _variable_map = self.update_corrector_variables(corrector, _variable_map)
             # determine correct inputs (change depending on corrector)
-            inputs = [
-                variable_map[inp.name]
-                for inp in corrector.inputs
-            ]
+            inputs = [_variable_map[inp.name] for inp in corrector.inputs]
             correction = ak_evaluate(corrector, *inputs)
-            # update pt for subsequent correctors
+            # update pt in original variable map for subsequent correctors
             variable_map["JetPt"] = variable_map["JetPt"] * correction
             full_correction = full_correction * correction
 
@@ -380,7 +397,7 @@ def jec(
             phi=events[jet_name].phi,
             area=events[jet_name].area,
             rho=rho,
-            run=jet_run,
+            run=events.run,
             evaluator_key="jec_subset_type1_met",
         )
 
@@ -403,7 +420,7 @@ def jec(
         phi=events[jet_name].phi,
         area=events[jet_name].area,
         rho=rho,
-        run=jet_run,
+        run=events.run,
         evaluator_key="jec",
     )
 
@@ -489,6 +506,8 @@ def jec(
 
 @jec.init
 def jec_init(self: Calibrator, **kwargs) -> None:
+    super(jec, self).init_func(**kwargs)
+
     jec_cfg = self.get_jec_config()
 
     sources = self.uncertainty_sources
@@ -531,6 +550,8 @@ def jec_requires(
     reqs: dict[str, DotDict[str, Any]],
     **kwargs,
 ) -> None:
+    super(jec, self).requires_func(task=task, reqs=reqs, **kwargs)
+
     if "external_files" in reqs:
         return
 
@@ -599,6 +620,8 @@ def jec_setup(
     :param inputs: Additional inputs, currently not used
     :param reader_targets: TODO: add documentation
     """
+    super(jec, self).setup_func(task=task, reqs=reqs, inputs=inputs, reader_targets=reader_targets, **kwargs)
+
     # import the correction sets from the external file
     jec_file = self.get_jec_file(reqs["external_files"].files)
     correction_set = load_correction_set(jec_file)
@@ -644,8 +667,16 @@ def jec_setup(
 
     # store the evaluators
     self.evaluators = {
-        "jec": get_evaluators(correction_set, jec_keys),
-        "jec_subset_type1_met": get_evaluators(correction_set, jec_keys_subset_type1_met),
+        "jec": get_evaluators(
+            correction_set,
+            jec_keys,
+            attrs=[{"level": level} for level in jec_cfg.levels],
+        ),
+        "jec_subset_type1_met": get_evaluators(
+            correction_set,
+            jec_keys_subset_type1_met,
+            attrs=[{"level": level} for level in jec_cfg.levels_for_type1_met],
+        ),
         "junc": dict(zip(self.uncertainty_sources, get_evaluators(correction_set, junc_keys))),
     }
 
@@ -867,11 +898,11 @@ def jer(self: Calibrator, events: ak.Array, **kwargs) -> ak.Array:
 
     # array with all JER scale factor variations as an additional axis
     # (note: axis needs to be regular for broadcasting to work correctly)
-    jer = ak.concatenate(
+    jer = ak_concatenate_safe(
         [jer[v][..., None] for v in self.jer_variations + self.jec_variations],
         axis=-1,
     )
-    jersf = ak.concatenate(
+    jersf = ak_concatenate_safe(
         [jersf[v][..., None] for v in self.jer_variations + self.jec_variations],
         axis=-1,
     )
@@ -912,7 +943,7 @@ def jer(self: Calibrator, events: ak.Array, **kwargs) -> ak.Array:
     else:
         # concatenate varied pt values for broadcasting
         pt_names = ["pt" for _ in self.jer_variations] + [f"pt_{jec_var}" for jec_var in self.jec_variations]
-        match_pt = ak.concatenate([events[jet_name][pt_name][..., None] for pt_name in pt_names], axis=-1)
+        match_pt = ak_concatenate_safe([events[jet_name][pt_name][..., None] for pt_name in pt_names], axis=-1)
     pt_relative_diff = 1 - matched_gen_jet.pt / match_pt
 
     # test if matched gen jets are within 3 * resolution
@@ -926,9 +957,6 @@ def jer(self: Calibrator, events: ak.Array, **kwargs) -> ak.Array:
     # -- hybrid smearing: take smear factors from scaling if there was a match,
     # otherwise take the stochastic ones
     smear_factors = ak.where(is_matched_pt, smear_factors_scaling, smear_factors_stochastic)
-
-    # ensure array with correctionlib output 'Nan' are set to 0.0 in the next line
-    smear_factors = ak.nan_to_none(smear_factors)
 
     # ensure array is not nullable (avoid ambiguity on Arrow/Parquet conversion)
     smear_factors = ak.fill_none(smear_factors, 0.0)
@@ -1007,6 +1035,8 @@ jer_horn_handling = jer.derive("jer_horn_handling", cls_dict={
 
 @jer.init
 def jer_init(self: Calibrator, **kwargs) -> None:
+    super(jer, self).init_func(**kwargs)
+
     # add jec_cfg for applying nominal smearing to jec variations
     jec_cfg = self.get_jec_config()
     jec_sources = self.jec_uncertainty_sources
@@ -1071,6 +1101,8 @@ def jer_requires(
     reqs: dict[str, DotDict[str, Any]],
     **kwargs,
 ) -> None:
+    super(jer, self).requires_func(task=task, reqs=reqs, **kwargs)
+
     if "external_files" in reqs:
         return
 
@@ -1119,6 +1151,8 @@ def jer_setup(
     :param inputs: Additional inputs, currently not used.
     :param reader_targets: TODO: add documentation.
     """
+    super(jer, self).setup_func(task=task, reqs=reqs, inputs=inputs, reader_targets=reader_targets, **kwargs)
+
     # import the correction sets from the external file
     jer_file = self.get_jer_file(reqs["external_files"].files)
     correction_set = load_correction_set(jer_file)
@@ -1190,6 +1224,8 @@ def jets(self: Calibrator, events: ak.Array, **kwargs) -> ak.Array:
 
 @jets.init
 def jets_init(self: Calibrator, **kwargs) -> None:
+    super(jets, self).init_func(**kwargs)
+
     # create custom jec and jer calibrators, using the jet name as the identifying value
     def get_attrs(attrs):
         cls_dict = {}
