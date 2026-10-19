@@ -193,6 +193,13 @@ class CreateDatacards(SerializeInferenceModelBase):
                                 else None
                             )
                             for d in ["up", "down"]:
+                                # collection shifts are not stored in histograms, only their subshifts
+                                if (
+                                    shift_source and
+                                    config_inst.get_shift(f"{shift_source}_{d}").has_tag("is_collection")
+                                ):
+                                    continue
+
                                 if shift_source and f"{shift_source}_{d}" not in h_proc.axes["shift"]:
                                     raise ValueError(
                                         f"cannot find '{shift_source}_{d}' in shift axis of histogram for process "

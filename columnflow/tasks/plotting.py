@@ -5,7 +5,6 @@ Tasks to plot different types of histograms.
 """
 
 import itertools
-import functools
 from collections import OrderedDict, defaultdict
 from abc import abstractmethod
 
@@ -157,9 +156,10 @@ class PlotVariablesBase(_PlotVariablesBase):
                 process_info = {
                     "dataset_proc_name_map": dataset_proc_name_map,
                     "config_shifts": {
-                        shift
+                        subshift
                         for dataset_inst in dataset_proc_name_map.keys()
                         for shift in requested_shifts_per_dataset[dataset_inst]
+                        for subshift in (getattr(config_inst.get_shift(shift).x, "subshifts", []) or [shift])
                     },
                 }
                 process_shift_map[process_inst.name].update(process_info["config_shifts"])
@@ -221,10 +221,12 @@ class PlotVariablesBase(_PlotVariablesBase):
                         }]
                         h = h[{"process": sum}]
 
+                        # skip processes without any entries in this dataset
+                        if h.sum().value == 0:
+                            continue
+
                         # create expected shift bins and fill them with the nominal histogram
-                        # change Ghent: replace all expected shifts with nominal.
-                        # not preffered by columnflow: https://github.com/columnflow/columnflow/pull/692
-                        expected_shifts = plot_shift_names  # & process_shift_map[process_inst.name]
+                        expected_shifts = plot_shift_names & process_shift_map[process_inst.name]
                         add_missing_shifts(h, expected_shifts, str_axis="shift", nominal_bin="nominal")
 
                         # add the histogram
@@ -587,7 +589,14 @@ class PlotVariablesBaseMultiShifts(
 
         # gather sources, and expand to up/down shifts
         sources = self.shift_sources if self.combine_shifts else [self.branch_data.shift_source]
-        shifts = list(map(functools.partial(get_shift_from_configs, self.config_insts), expand_shift_sources(sources)))
+        shifts = []
+        for shift_name in expand_shift_sources(sources):
+            shift = get_shift_from_configs(self.config_insts, shift_name)
+            # expand collection shifts into their subshifts
+            if (subshifts := shift.x("subshifts", [])):
+                shifts.extend([get_shift_from_configs(self.config_insts, s) for s in subshifts])
+            else:
+                shifts.append(shift)
 
         return shifts
 

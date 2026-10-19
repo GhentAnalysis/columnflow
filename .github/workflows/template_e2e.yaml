@@ -17,7 +17,9 @@ concurrency:
 jobs:
   template_e2e:
     name: Ghent Template 🚀
-    runs-on: ubuntu-latest
+    # pinned instead of ubuntu-latest: python 3.9 (columnflow's default CF_PYTHON_VERSION) has no
+    # actions/setup-python build for ubuntu 26.04, which ubuntu-latest points to now
+    runs-on: ubuntu-24.04
     timeout-minutes: 45
     defaults:
       run:
@@ -38,6 +40,12 @@ jobs:
         --version ci --config l18 --workers 1 --local-scheduler True
       DATASET_ARG: --dataset tt_dl_powheg
       DATASETS_ARG: --datasets tt_dl_powheg
+      # arguments for the collection shift test (tests/ci/README.md, "Collection shift test"):
+      # ci_jer_default (tests/ci/ci_producers.py) is the template's default producer plus declared jer
+      # shifts, shifts_hist (columnflow/histogramming/shifts.py) fills all subshifts of a collection;
+      # variables are passed per step since cf.CreateDatacards takes them from the inference model
+      COLL_ARGS: >-
+        --producers ci_jer_default --hist-producer shifts_hist
       # rebuild (rather than just warn-and-continue-on) sandbox venvs whenever their "# version N"
       # line was bumped; see the "Cache sandbox virtualenvs" step for why this matters in CI
       CF_SANDBOX_SETUP_MODE: update
@@ -145,6 +153,8 @@ jobs:
           # a user-deployed analysis never ships with CI-specific configuration; it is copied in
           # and wired up here, in the workflow, instead.
           cp tests/ci/ci_config_patch.py "${CF_ANALYSIS_DIR}/${CF_ANALYSIS_DIR}/"
+          # CI-only producer for the collection shift test, registered in law_user.cfg below
+          cp tests/ci/ci_producers.py "${CF_ANALYSIS_DIR}/${CF_ANALYSIS_DIR}/"
           {
             echo "from ${CF_ANALYSIS_DIR}.ci_config_patch import apply as _apply_ci_config"
             echo "_apply_ci_config(\"${CF_ANALYSIS_DIR}\", \"${CF_ANALYSIS_DIR}\")"
@@ -203,6 +213,21 @@ jobs:
           cf.ProduceColumns: local
           cf.CreateHistograms: local
           EOF
+
+          # register the modules needed by the collection shift test in the [analysis] section above:
+          # the CI-only producer module copied in by the overlay step, and columnflow's shifts_hist
+          # hist producer. law_user.cfg overrides keys of law.cfg rather than extending them, so the
+          # generated law.cfg values are read and extended here instead of being repeated verbatim,
+          # which would silently drop modules added to the template later.
+          prod_modules="$(sed -n 's/^production_modules: *//p' law.cfg)"
+          hist_modules="$(sed -n 's/^hist_production_modules: *//p' law.cfg)"
+          if [ -z "${prod_modules}" ] || [ -z "${hist_modules}" ]; then
+            echo "::error::could not read production_modules / hist_production_modules from the generated law.cfg"
+            exit 1
+          fi
+          sed -i "/^chunked_io_chunk_size:/a hist_production_modules: ${hist_modules}, columnflow.histogramming.shifts" law_user.cfg
+          sed -i "/^chunked_io_chunk_size:/a production_modules: ${prod_modules}, ${CF_ANALYSIS_DIR}.ci_producers" law_user.cfg
+          cat law_user.cfg
 
       - name: Setup environment ⚙️
         working-directory: ${{ env.CF_ANALYSIS_DIR }}
@@ -332,6 +357,83 @@ jobs:
           fi
           echo "found plot output:"
           printf ' - %s\n' "${plots[@]}"
+
+      - name: law run cf.MergeHistograms for collection shift 🛰️
+        working-directory: ${{ env.CF_ANALYSIS_DIR }}
+        run: |
+          source "${GITHUB_WORKSPACE}/tests/ci/setup_ci_env.sh"
+          # ci_coll_up bundles minbias_xs_up, mur_up and jer_up (CI_COLLECTION in
+          # tests/ci/ci_config_patch.py) into a single histogram; minbias_xs_up and nominal are
+          # created the standard way, one shift per task, as references for the check below. jer_up
+          # is "selection_dependent", so ci_coll_up additionally triggers cf.ProduceColumns at jer_up.
+          for shift in ci_coll_up minbias_xs_up nominal; do
+            law run cf.MergeHistograms ${TASK_ARGS} ${DATASET_ARG} ${COLL_ARGS} --variables jet1_pt \
+              --shift "${shift}"
+          done
+
+      - name: Assert collection shift histograms ✅
+        working-directory: ${{ env.CF_ANALYSIS_DIR }}
+        run: |
+          source "${GITHUB_WORKSPACE}/tests/ci/setup_ci_env.sh"
+          # select the merged shifts_hist output per shift via exact path segments; the cf_default
+          # histograms of the plotting step above live next to them
+          find_hist() {
+            local matches=()
+            mapfile -t matches < <(find data/cf_store -path "*/cf.MergeHistograms/*" -path "*/$1/*" \
+              -path "*/hist__shifts_hist*" -name "hist__var_jet1_pt.pickle")
+            if [ "${#matches[@]}" -ne 1 ]; then
+              echo "::error::expected exactly one shifts_hist cf.MergeHistograms output for shift $1, found ${#matches[@]}" >&2
+              return 1
+            fi
+            echo "${matches[0]}"
+          }
+          coll_hist="$(find_hist ci_coll_up)"
+          minbias_hist="$(find_hist minbias_xs_up)"
+          nominal_hist="$(find_hist nominal)"
+
+          # unpickling hist objects requires the columnar sandbox
+          cf_sandbox venv_columnar python "${GITHUB_WORKSPACE}/tests/ci/check_collection_shift_hists.py" \
+            "${PWD}/${coll_hist}" "${PWD}/${minbias_hist}" "${PWD}/${nominal_hist}"
+
+      - name: law run cf.PlotShiftedVariables1D for collection shift 🎨
+        working-directory: ${{ env.CF_ANALYSIS_DIR }}
+        run: |
+          source "${GITHUB_WORKSPACE}/tests/ci/setup_ci_env.sh"
+          # expands the ci_coll source into its subshifts via cf.MergeShiftedHistograms, which also
+          # requires ci_coll_down (and hence cf.ProduceColumns at jer_down)
+          law run cf.PlotShiftedVariables1D ${TASK_ARGS} ${DATASETS_ARG} ${COLL_ARGS} --variables jet1_pt \
+            --processes tt --categories incl --shift-sources ci_coll
+
+          shopt -s nullglob globstar
+          plots=( data/cf_store/**/cf.PlotShiftedVariables1D/**/*.pdf data/cf_store/**/cf.PlotShiftedVariables1D/**/*.png )
+          if [ "${#plots[@]}" -eq 0 ]; then
+            echo "::error::no plot files found under data/cf_store/**/cf.PlotShiftedVariables1D"
+            exit 1
+          fi
+          echo "found plot output:"
+          printf ' - %s\n' "${plots[@]}"
+
+      - name: law run cf.CreateDatacards for collection shift 📜
+        working-directory: ${{ env.CF_ANALYSIS_DIR }}
+        run: |
+          source "${GITHUB_WORKSPACE}/tests/ci/setup_ci_env.sh"
+          # the template's "example" inference model (inference/example.py) marks its minbias_xs and
+          # mur parameters as dynamic since both are contained in ci_coll, and adds a ci_coll parameter
+          # requesting the collection histograms; muf stays a regular shape parameter, so the
+          # datacard combines shapes from collection histograms and from single-shift histograms
+          law run cf.CreateDatacards ${TASK_ARGS} ${COLL_ARGS} --inference-model example
+
+          shopt -s nullglob globstar
+          cards=( data/cf_store/**/cf.CreateDatacards/**/datacard__cat_incl.txt )
+          shapes=( data/cf_store/**/cf.CreateDatacards/**/shapes__cat_incl.root )
+          if [ "${#cards[@]}" -ne 1 ] || [ "${#shapes[@]}" -ne 1 ]; then
+            echo "::error::expected exactly one datacard and shapes file for cat_incl under data/cf_store/**/cf.CreateDatacards, found ${#cards[@]} and ${#shapes[@]}"
+            exit 1
+          fi
+
+          # reading the shapes file requires uproot from the columnar sandbox
+          cf_sandbox venv_columnar python "${GITHUB_WORKSPACE}/tests/ci/check_collection_shift_datacard.py" \
+            "${PWD}/${cards[0]}" "${PWD}/${shapes[0]}"
 
       - name: Upload artifacts 📤
         if: always()

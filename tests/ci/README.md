@@ -104,6 +104,42 @@ law step of the workflow sources `tests/ci/setup_ci_env.sh` instead of `setup.sh
 script sources `setup.sh` and then re-exports `CF_LOCAL_ENV=true`; its header explains why the
 override comes *after* sourcing and why sandboxed tasks are unaffected.
 
+## Collection shift test
+
+After the standard chain, the workflow tests *collection shifts*: shifts tagged `is_collection`
+whose `subshifts` aux lists several regular shifts. With the `shifts_hist` hist producer
+(`columnflow/histogramming/shifts.py`), a single `cf.CreateHistograms --shift <collection>_up` fills
+the histograms of all subshifts at once. Three CI-only pieces are involved:
+
+- `tests/ci/ci_config_patch.py` adds `ci_coll_{up,down}` (`CI_COLLECTION`), bundling `minbias_xs`
+  (config-level event weight), `mur` (dataset-level event weight) and `jer` (a
+  `selection_dependent` shift applied via `Jet.pt`/`Jet.mass` aliases). It also keeps
+  `Jet.{pt,mass}_jer_{up,down}` after `cf.ReduceEvents`.
+- `tests/ci/ci_producers.py` defines `ci_jer_default`, the template's `default` producer with
+  declared `jer` shifts. No template calibrator or selector declares them, so `cf.ReduceEvents`
+  resolves `jer_up` to nominal, while `cf.ProduceColumns` runs at `jer_up` on the same nominal
+  reduced events. This is the setup `shifts_hist` expects for selection-dependent subshifts. The
+  workflow copies the module into the analysis package and appends it, together with
+  `columnflow.histogramming.shifts`, to the module lists in `law_user.cfg`.
+- `tests/ci/check_collection_shift_hists.py` runs in `venv_columnar` on the merged histograms
+  of `ci_coll_up`, `minbias_xs_up` and `nominal`. It checks that the shift axis holds exactly the
+  three subshifts, that the `minbias_xs_up` subshift matches the same shift histogrammed on its own,
+  and that `mur_up` and `jer_up` differ from nominal.
+
+`cf.PlotShiftedVariables1D --shift-sources ci_coll` then smoke-tests the expansion of collection
+shifts into subshifts in `cf.MergeShiftedHistograms` and the plotting tasks.
+
+Finally, `cf.CreateDatacards` runs the template's `example` inference model
+(`analysis_templates/ghent_template/__cf_module_name__/inference/example.py`). It only uses
+`tt_dl_powheg` with fake data, so it runs on the bundle as is. Whenever a config defines collection
+shifts, the model marks parameters whose shift source is part of a collection as dynamic
+(`minbias_xs` and `mur` here) and adds a parameter named after the collection (`ci_coll`) that
+requests the collection histograms. `muf` stays a regular parameter with histograms of its own.
+`tests/ci/check_collection_shift_datacard.py` checks that all shape parameters are in the
+datacard, that their varied shapes differ from nominal, and that the `ci_coll` parameter itself
+has no effect. The `jer` subshift has no parameter in the model, so its datacard shapes are not
+covered, only its histograms.
+
 ## What is still fetched live
 
 The bundle is *not* fully self-contained. Exactly one `cfg.x.external_files` entry,
