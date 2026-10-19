@@ -202,7 +202,7 @@ class SerializeInferenceModelBase(
                             continue
 
                         # only add if a shift is required for this parameter
-                        if not param_obj.is_dynamic & (
+                        if not param_obj.is_dynamic and (
                             (param_obj.type.is_shape and not param_obj.transformations.any_from_rate) or
                             (param_obj.type.is_rate and param_obj.transformations.any_from_shape)
                         ):

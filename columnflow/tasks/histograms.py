@@ -277,9 +277,9 @@ class CreateHistograms(_CreateHistograms):
                     events, *shift_columns = remove_obj_overlap(all_events, *shift_columns)
                     events = update_ak_array(events, *shift_columns)
 
-                    # add aliases
-                    sub_aliases = shift_inst.x("column_aliases", {})
-
+                    # add aliases, for the main pass only those of the local shift (the global shift might be
+                    # handled upstream already), for selection dependent subshifts those of the subshift itself
+                    sub_aliases = aliases if shift_inst == self.global_shift_inst else shift_inst.x("column_aliases", {})
                     events = add_ak_aliases(
                         events,
                         sub_aliases,
