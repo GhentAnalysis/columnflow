@@ -126,10 +126,19 @@ the histograms of all subshifts at once. Three CI-only pieces are involved:
   three subshifts, that the `minbias_xs_up` subshift matches the same shift histogrammed on its own,
   and that `mur_up` and `jer_up` differ from nominal.
 
-Finally, `cf.PlotShiftedVariables1D --shift-sources ci_coll` smoke-tests the expansion of
-collection shifts into subshifts in `cf.MergeShiftedHistograms` and the plotting tasks.
-`cf.CreateDatacards` with collection shifts is not covered, since the template inference model
-needs datasets that are not part of the bundle.
+`cf.PlotShiftedVariables1D --shift-sources ci_coll` then smoke-tests the expansion of collection
+shifts into subshifts in `cf.MergeShiftedHistograms` and the plotting tasks.
+
+Finally, `cf.CreateDatacards` runs the template's `example` inference model
+(`analysis_templates/ghent_template/__cf_module_name__/inference/example.py`). It only uses
+`tt_dl_powheg` with fake data, so it runs on the bundle as is. Whenever a config defines collection
+shifts, the model marks parameters whose shift source is part of a collection as dynamic
+(`minbias_xs` and `mur` here) and adds a parameter named after the collection (`ci_coll`) that
+requests the collection histograms. `muf` stays a regular parameter with histograms of its own.
+`tests/ci/check_collection_shift_datacard.py` checks that all shape parameters are in the
+datacard, that their varied shapes differ from nominal, and that the `ci_coll` parameter itself
+has no effect. The `jer` subshift has no parameter in the model, so its datacard shapes are not
+covered, only its histograms.
 
 ## What is still fetched live
 

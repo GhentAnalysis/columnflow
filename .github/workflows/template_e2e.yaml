@@ -40,9 +40,10 @@ jobs:
       DATASETS_ARG: --datasets tt_dl_powheg
       # arguments for the collection shift test (tests/ci/README.md, "Collection shift test"):
       # ci_jer_default (tests/ci/ci_producers.py) is the template's default producer plus declared jer
-      # shifts, shifts_hist (columnflow/histogramming/shifts.py) fills all subshifts of a collection
+      # shifts, shifts_hist (columnflow/histogramming/shifts.py) fills all subshifts of a collection;
+      # variables are passed per step since cf.CreateDatacards takes them from the inference model
       COLL_ARGS: >-
-        --producers ci_jer_default --hist-producer shifts_hist --variables jet1_pt
+        --producers ci_jer_default --hist-producer shifts_hist
       # rebuild (rather than just warn-and-continue-on) sandbox venvs whenever their "# version N"
       # line was bumped; see the "Cache sandbox virtualenvs" step for why this matters in CI
       CF_SANDBOX_SETUP_MODE: update
@@ -364,7 +365,8 @@ jobs:
           # created the standard way, one shift per task, as references for the check below. jer_up
           # is "selection_dependent", so ci_coll_up additionally triggers cf.ProduceColumns at jer_up.
           for shift in ci_coll_up minbias_xs_up nominal; do
-            law run cf.MergeHistograms ${TASK_ARGS} ${DATASET_ARG} ${COLL_ARGS} --shift "${shift}"
+            law run cf.MergeHistograms ${TASK_ARGS} ${DATASET_ARG} ${COLL_ARGS} --variables jet1_pt \
+              --shift "${shift}"
           done
 
       - name: Assert collection shift histograms ✅
@@ -397,7 +399,7 @@ jobs:
           source "${GITHUB_WORKSPACE}/tests/ci/setup_ci_env.sh"
           # expands the ci_coll source into its subshifts via cf.MergeShiftedHistograms, which also
           # requires ci_coll_down (and hence cf.ProduceColumns at jer_down)
-          law run cf.PlotShiftedVariables1D ${TASK_ARGS} ${DATASETS_ARG} ${COLL_ARGS} \
+          law run cf.PlotShiftedVariables1D ${TASK_ARGS} ${DATASETS_ARG} ${COLL_ARGS} --variables jet1_pt \
             --processes tt --categories incl --shift-sources ci_coll
 
           shopt -s nullglob globstar
@@ -408,6 +410,28 @@ jobs:
           fi
           echo "found plot output:"
           printf ' - %s\n' "${plots[@]}"
+
+      - name: law run cf.CreateDatacards for collection shift 📜
+        working-directory: ${{ env.CF_ANALYSIS_DIR }}
+        run: |
+          source "${GITHUB_WORKSPACE}/tests/ci/setup_ci_env.sh"
+          # the template's "example" inference model (inference/example.py) marks its minbias_xs and
+          # mur parameters as dynamic since both are contained in ci_coll, and adds a ci_coll parameter
+          # requesting the collection histograms; muf stays a regular shape parameter, so the
+          # datacard combines shapes from collection histograms and from single-shift histograms
+          law run cf.CreateDatacards ${TASK_ARGS} ${COLL_ARGS} --inference-model example
+
+          shopt -s nullglob globstar
+          cards=( data/cf_store/**/cf.CreateDatacards/**/datacard__cat_incl.txt )
+          shapes=( data/cf_store/**/cf.CreateDatacards/**/shapes__cat_incl.root )
+          if [ "${#cards[@]}" -ne 1 ] || [ "${#shapes[@]}" -ne 1 ]; then
+            echo "::error::expected exactly one datacard and shapes file for cat_incl under data/cf_store/**/cf.CreateDatacards, found ${#cards[@]} and ${#shapes[@]}"
+            exit 1
+          fi
+
+          # reading the shapes file requires uproot from the columnar sandbox
+          cf_sandbox venv_columnar python "${GITHUB_WORKSPACE}/tests/ci/check_collection_shift_datacard.py" \
+            "${PWD}/${cards[0]}" "${PWD}/${shapes[0]}"
 
       - name: Upload artifacts 📤
         if: always()
