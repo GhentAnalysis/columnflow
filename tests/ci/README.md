@@ -104,6 +104,33 @@ law step of the workflow sources `tests/ci/setup_ci_env.sh` instead of `setup.sh
 script sources `setup.sh` and then re-exports `CF_LOCAL_ENV=true`; its header explains why the
 override comes *after* sourcing and why sandboxed tasks are unaffected.
 
+## Collection shift test
+
+After the standard chain, the workflow tests *collection shifts*: shifts tagged `is_collection`
+whose `subshifts` aux lists several regular shifts. With the `shifts_hist` hist producer
+(`columnflow/histogramming/shifts.py`), a single `cf.CreateHistograms --shift <collection>_up` fills
+the histograms of all subshifts at once. Three CI-only pieces are involved:
+
+- `tests/ci/ci_config_patch.py` adds `ci_coll_{up,down}` (`CI_COLLECTION`), bundling `minbias_xs`
+  (config-level event weight), `mur` (dataset-level event weight) and `jer` (a
+  `selection_dependent` shift applied via `Jet.pt`/`Jet.mass` aliases). It also keeps
+  `Jet.{pt,mass}_jer_{up,down}` after `cf.ReduceEvents`.
+- `tests/ci/ci_producers.py` defines `ci_jer_default`, the template's `default` producer with
+  declared `jer` shifts. No template calibrator or selector declares them, so `cf.ReduceEvents`
+  resolves `jer_up` to nominal, while `cf.ProduceColumns` runs at `jer_up` on the same nominal
+  reduced events. This is the setup `shifts_hist` expects for selection-dependent subshifts. The
+  workflow copies the module into the analysis package and appends it, together with
+  `columnflow.histogramming.shifts`, to the module lists in `law_user.cfg`.
+- `tests/ci/check_collection_shift_hists.py` runs in `venv_columnar` on the merged histograms
+  of `ci_coll_up`, `minbias_xs_up` and `nominal`. It checks that the shift axis holds exactly the
+  three subshifts, that the `minbias_xs_up` subshift matches the same shift histogrammed on its own,
+  and that `mur_up` and `jer_up` differ from nominal.
+
+Finally, `cf.PlotShiftedVariables1D --shift-sources ci_coll` smoke-tests the expansion of
+collection shifts into subshifts in `cf.MergeShiftedHistograms` and the plotting tasks.
+`cf.CreateDatacards` with collection shifts is not covered, since the template inference model
+needs datasets that are not part of the bundle.
+
 ## What is still fetched live
 
 The bundle is *not* fully self-contained. Exactly one `cfg.x.external_files` entry,

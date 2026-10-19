@@ -12,6 +12,10 @@ analysis shipped with CI-specific branches. Here, the same effect is achieved at
 monkeypatching the generated analysis's ``add_config`` function, driven entirely by the
 ``CF_CI_TESTDATA`` environment variable. See ``tests/ci/README.md`` for how the bundle referenced
 by that variable is built and how this overlay is wired into the workflow.
+
+In addition, it registers the collection shift :py:data:`CI_COLLECTION` used by the workflow to
+test the ``shifts_hist`` hist producer (columnflow/histogramming/shifts.py), which fills the
+histograms of several shifts in a single ``cf.CreateHistograms`` task.
 """
 
 from __future__ import annotations
@@ -34,6 +38,12 @@ CVMFS_JSONPOG_PREFIX = "/cvmfs/cms.cern.ch/rsync/cms-nanoAOD/jsonpog-integration
 # CI run, and (combined with the smaller chunked_io_chunk_size set in the workflow's law_user.cfg)
 # exercises multi-chunk processing instead of the single chunk that 66000 events alone would be.
 N_LFN_REPEATS = 2
+
+# collection shift tested by the workflow, as name -> (first id, shift sources bundled in it); the
+# sources cover a config-level event weight (minbias_xs: pu_weight, normalized_pu_weight), a
+# dataset-level event weight (mur: normalized_mur_weight) and a "selection_dependent" shift whose
+# column aliases (Jet.pt/mass) require producers to be re-run at that shift (jer)
+CI_COLLECTION = ("ci_coll", 90000, ["minbias_xs", "mur", "jer"])
 
 
 def _redirect_cvmfs_paths(node: object, old_prefix: str, new_prefix: str, _ctx: str = "external_files") -> int:
@@ -104,6 +114,31 @@ def _make_get_dataset_lfns(ci_data: str) -> callable:
     return get_dataset_lfns
 
 
+def _add_shift_collection(cfg: object, name: str, idx: int, sources: list[str]) -> None:
+    """
+    Adds the collection shifts ``<name>_up`` and ``<name>_down`` to *cfg* with ids starting at
+    *idx*, each bundling the shifts of all *sources* in the same direction as ``subshifts``. This
+    mirrors the helper described in GhentAnalysis/columnflow#118 for analyses. Raises when a
+    subshift is not known to the config, since the collection would then silently be incomplete.
+    """
+    for i, direction in enumerate(["up", "down"]):
+        subshifts = [f"{source}_{direction}" for source in sources]
+        missing = [shift for shift in subshifts if not cfg.has_shift(shift)]
+        if missing:
+            raise RuntimeError(
+                f"cannot add collection shift '{name}_{direction}' to config '{cfg.name}', subshifts "
+                f"{','.join(missing)} are not defined; the template shifts changed and CI_COLLECTION "
+                "(tests/ci/ci_config_patch.py) needs updating",
+            )
+        cfg.add_shift(
+            name=f"{name}_{direction}",
+            id=idx + i,
+            type="shape",
+            tags={"is_collection"},
+            aux={"subshifts": subshifts},
+        )
+
+
 def _patch_config(cfg: object, ci_data: str) -> None:
     """
     Post-processes a freshly built config object *cfg*, redirecting external files, dataset LFN
@@ -160,6 +195,19 @@ def _patch_config(cfg: object, ci_data: str) -> None:
     # keep BTagEfficiency from fanning out over the full tt/dy dataset groups
     cfg.x.btag_dataset_groups = {"tt": ["tt_dl_powheg"]}
     logger.info(f"restricted cfg.x.btag_dataset_groups to {cfg.x.btag_dataset_groups}")
+
+    # register the collection shift tested by the workflow
+    coll_name, coll_idx, coll_sources = CI_COLLECTION
+    _add_shift_collection(cfg, coll_name, coll_idx, coll_sources)
+    logger.info(f"added collection shifts {coll_name}_{{up,down}} bundling {','.join(coll_sources)}")
+
+    # the jer subshift is applied via Jet.pt/mass aliases in cf.ProduceColumns and
+    # cf.CreateHistograms, so the varied columns written by the calibrator must survive reduction
+    cfg.x.keep_columns["cf.ReduceEvents"] |= {
+        f"Jet.{var}_jer_{direction}"
+        for var in ["pt", "mass"]
+        for direction in ["up", "down"]
+    }
 
 
 def apply(module_name: str, short_name: str) -> None:
