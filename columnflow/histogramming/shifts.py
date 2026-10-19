@@ -107,6 +107,9 @@ def shifts_hist_init(self: HistProducer) -> None:
             weight_columns |= {Route(column) for column in self.dataset_inst.x("event_weights", [])}
             for shift_insts in self.dataset_inst.x.event_weights.values():
                 self.shifts |= {shift_inst.name for shift_inst in shift_insts}
+
+        # declare collection shifts so that they can be requested directly, subshifts are resolved in post_init
+        self.shifts |= {shift_inst.name for shift_inst in self.config_inst.shifts if shift_inst.has_tag("is_collection")}
     else:
         if self.config_inst.has_aux("data_event_weights"):
             weight_columns |= {Route(column) for column in self.config_inst.x.data_event_weights}
