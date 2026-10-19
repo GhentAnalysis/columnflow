@@ -17,6 +17,8 @@ from columnflow.hist_util import sum_hists
 from columnflow.util import DotDict, maybe_import, real_path, ensure_dir, safe_div, maybe_int
 from columnflow.types import TYPE_CHECKING, Sequence, Any, Union, Hashable
 
+np = maybe_import("numpy")
+
 if TYPE_CHECKING:
     hist = maybe_import("hist")
 
@@ -151,6 +153,53 @@ class DatacardWriter(object):
 
         return True
 
+    @classmethod
+    def validate_histograms(cls, histograms: DatacardHists, silent: bool = False) -> bool:
+        import hist
+
+        # validate structure of histograms, shape keys and histogram types
+        errors: list[str] = []
+        for cat_name, proc_hists in histograms.items():
+            if not isinstance(cat_name, str):
+                errors.append(f"category name key '{cat_name}' is not a string")
+            for proc_name, config_hists in proc_hists.items():
+                if not isinstance(proc_name, str):
+                    errors.append(f"process name '{proc_name}' in category '{cat_name}' is not a string")
+                for config_name, shift_hists in config_hists.items():
+                    if not isinstance(config_name, str):
+                        errors.append(
+                            f"config name '{config_name}' for process '{proc_name}' in category '{cat_name}' is not a "
+                            f"string",
+                        )
+                    for shift_key, h in shift_hists.items():
+                        # shift_key must be nominal or a tuple of (param_name, "up|down")
+                        if (
+                            shift_key != "nominal" and
+                            (
+                                not isinstance(shift_key, (tuple, list)) or
+                                len(shift_key) != 2 or
+                                shift_key[1] not in {"up", "down"}
+                            )
+                        ):
+                            errors.append(
+                                f"invalid shift key '{shift_key}' in config '{config_name}' for process "
+                                f"'{proc_name}' in category '{cat_name}'",
+                            )
+                        if not isinstance(h, hist.Hist):
+                            errors.append(
+                                f"histogram for shift '{shift_key}' in config '{config_name}' for process "
+                                f"'{proc_name}' in category '{cat_name}' is not a hist.Hist instance",
+                            )
+
+        # handle errors
+        if errors:
+            if silent:
+                return False
+            errors_repr = "\n  - ".join(errors)
+            raise ValueError(f"datacard histograms invalid, reasons:\n  - {errors_repr}")
+
+        return True
+
     def __init__(
         self,
         inference_model_inst: InferenceModel,
@@ -168,13 +217,13 @@ class DatacardWriter(object):
         self.histograms = histograms
         self.rate_precision = rate_precision
         self.effect_precision = effect_precision
-        self.effect_precision = effect_precision
         self.effect_from_shape_if_flat_max_outlier = effect_from_shape_if_flat_max_outlier
         self.effect_from_shape_if_flat_max_deviation = effect_from_shape_if_flat_max_deviation
         self.asymmetrize_if_large_threshold = asymmetrize_if_large_threshold
 
-        # validate the inference model
+        # validate the inference model and histograms
         self.validate_model(self.inference_model_inst)
+        self.validate_histograms(self.histograms)
 
     def write(
         self,
@@ -200,7 +249,7 @@ class DatacardWriter(object):
         cat_objects = [self.inference_model_inst.get_category(cat_name) for cat_name in rates]
 
         # prepare blocks and lines to write
-        blocks = DotDict()
+        blocks: DotDict[str, list] = DotDict()
         separators = set()
         empty_lines = set()
 
@@ -270,8 +319,10 @@ class DatacardWriter(object):
             types = set()
             effects = []
             for cat_name, proc_name in flat_rates:
+                cat_obj = self.inference_model_inst.get_category(category=cat_name)
+                proc_obj = self.inference_model_inst.get_process(category=cat_name, process=proc_name)
                 param_obj = self.inference_model_inst.get_parameter(
-                    param_name,
+                    parameter=param_name,
                     category=cat_name,
                     process=proc_name,
                     silent=True,
@@ -304,7 +355,20 @@ class DatacardWriter(object):
                     if param_obj.effect_precision <= 0
                     else param_obj.effect_precision
                 )
-                rnd = lambda f: round(f, effect_precision)
+
+                def rnd(f: float | int) -> float:
+                    r = round(f, effect_precision)
+
+                    # warn in case the precision is too low for the effect
+                    if abs(1.0 - f) < 10**(-effect_precision):
+                        logger.warning(
+                            f"the effect value '{f}' is rounded to '{r}' which probably leads to loosing its intended "
+                            f"impact; consider choosing an effect precision higher than the current value of "
+                            f"{effect_precision} for the paremeter '{param_name}' acting on process '{proc_name}' in "
+                            f"category '{cat_name}'",
+                        )
+
+                    return r
 
                 # update and transform effects
                 if param_obj.type.is_rate:
@@ -373,7 +437,7 @@ class DatacardWriter(object):
                             effect = 1.0
 
                 # custom hook to modify the effect
-                effect = self.modify_parameter_effect(cat_name, proc_name, param_obj, effect)
+                effect = self.modify_parameter_effect(cat_obj, proc_obj, param_obj, effect)
 
                 # encode the effect
                 if isinstance(effect, (int, float)):
@@ -404,7 +468,7 @@ class DatacardWriter(object):
                         type_str = "shape"
                 elif types == {ParameterType.rate_gauss, ParameterType.shape}:
                     # when mixing lnN and shape effects, combine expects the "shape?" type and makes the actual decision
-                    # dependend on the presence of shape variations in the accompaying shape files, see
+                    # dependent on the presence of shape variations in the accompanying shape files, see
                     # https://cms-analysis.github.io/HiggsAnalysis-CombinedLimit/v10.2.X/part2/settinguptheanalysis/?h=shape%3F#template-shape-uncertainties # noqa
                     type_str = "shape?"
                 if not type_str:
@@ -480,6 +544,9 @@ class DatacardWriter(object):
         if blocks.mc_stats:
             blocks.mc_stats = self.align_lines(list(blocks.mc_stats))
 
+        # allow modification before writing via hook
+        blocks, separators, empty_lines = self.modify_before_write(blocks, separators, empty_lines)
+
         # write the blocks
         with open(datacard_path, "w") as f:
             for block_name, lines in blocks.items():
@@ -554,7 +621,7 @@ class DatacardWriter(object):
                 return
 
             # warn in case of flow content
-            if cat_obj.flow_strategy == FlowStrategy.warn:
+            if cat_obj.flow_strategy in {FlowStrategy.warn, FlowStrategy.move}:
                 if underflow[0]:
                     logger.warning_once(
                         f"underflow_warn_{self.inference_model_inst.cls_name}_{cat_obj.name}_{name}",
@@ -567,6 +634,9 @@ class DatacardWriter(object):
                         f"overflow content detected in category '{cat_obj.name}' for histogram "
                         f"'{name}' ({overflow[0] / view.value.sum() * 100:.1f}% of integral)",
                     )
+
+            # stop here in case of warn-only
+            if cat_obj.flow_strategy == FlowStrategy.warn:
                 return
 
             # here, we can already remove overflow values
@@ -603,7 +673,8 @@ class DatacardWriter(object):
             _effects = effects[cat_name] = OrderedDict()
             for proc_name, config_hists in proc_hists.items():
                 # skip if process is not known to category
-                if not self.inference_model_inst.has_process(process=proc_name, category=cat_name):
+                proc_obj = self.inference_model_inst.get_process(process=proc_name, category=cat_name, silent=True)
+                if not proc_obj:
                     continue
 
                 # defer the handling of data to the end
@@ -618,7 +689,7 @@ class DatacardWriter(object):
                 if not hists:
                     continue
 
-                # helper to sum over them for a given shift key and an optional fallback
+                # helper to sum over histograms for a given shift key and an optional fallback
                 def get_hist_sum(key: Hashable, fallback_key: Hashable | None = None) -> hist.Hist:
                     def get(hd: dict[Hashable, hist.Hist]) -> hist.Hist:
                         if key in hd:
@@ -629,6 +700,14 @@ class DatacardWriter(object):
                             f"'{key}' shape for process '{proc_name}' in category '{cat_name}' misconfigured: {hd}",
                         )
                     return sum_hists(map(get, hists))
+
+                # optionally skip the process under specific conditions
+                if (skip_reason := self.check_skip_process(cat_obj, proc_obj, get_hist_sum("nominal"))):
+                    skip_msg = f"skipping process '{proc_name}' in category '{cat_name}'"
+                    if not isinstance(skip_reason, bool):
+                        skip_msg += f", reason: {skip_reason}"
+                    skip_msg = logger.info(skip_msg)
+                    continue
 
                 # helper to extract sum of hists, apply scale, handle flow and fill empty bins
                 def load(
@@ -643,7 +722,6 @@ class DatacardWriter(object):
                     return h
 
                 # get the process scale (usually 1)
-                proc_obj = self.inference_model_inst.get_process(proc_name, category=cat_name)
                 scale = proc_obj.scale
 
                 # nominal shape
@@ -688,18 +766,15 @@ class DatacardWriter(object):
                             h_down = h_nom.copy() * f_down
                             h_up = h_nom.copy() * f_up
                         else:
-                            # just extract the shapes
-                            h_down = sum_hists((param_obj.name, "down"), "nominal") * scale
-                            h_up = sum_hists((param_obj.name, "up"), "nominal") * scale
                             # just extract the shapes from the inputs
-                            h_down = load(down_name, (param_obj.name, "down"), "nominal", scale=scale)
-                            h_up = load(up_name, (param_obj.name, "up"), "nominal", scale=scale)
+                            h_down = load(down_name, (param_obj.name, "down"), fallback_key="nominal", scale=scale)
+                            h_up = load(up_name, (param_obj.name, "up"), fallback_key="nominal", scale=scale)
 
                     elif param_obj.type.is_rate:
                         if param_obj.transformations.any_from_shape:
                             # just extract the shapes
-                            h_down = load(down_name, (param_obj.name, "down"), "nominal", scale=scale)
-                            h_up = load(up_name, (param_obj.name, "up"), "nominal", scale=scale)
+                            h_down = load(down_name, (param_obj.name, "down"), fallback_key="nominal", scale=scale)
+                            h_up = load(up_name, (param_obj.name, "up"), fallback_key="nominal", scale=scale)
 
                             # in case the transformation is effect_from_shape_if_flat, and any of the two variations
                             # do not qualify as "flat", convert the parameter to shape-type and drop all transformations
@@ -794,8 +869,8 @@ class DatacardWriter(object):
 
                     # custom hook to modify the shapes
                     h_nom, h_down, h_up = self.modify_parameter_shape(
-                        cat_name,
-                        proc_name,
+                        cat_obj,
+                        proc_obj,
                         param_obj,
                         h_nom,
                         h_down,
@@ -825,7 +900,7 @@ class DatacardWriter(object):
                     if proc_name in proc_hists:
                         h_data.extend([hd["nominal"] for hd in proc_hists[proc_name].values()])
                     else:
-                        logger.warning(f"process '{proc_name}' not found in histograms for created fake data, skipping")
+                        logger.warning(f"process '{proc_name}' not found in histograms for creating fake data, skipping")
                 if not h_data:
                     proc_str = ",".join(map(str, cat_obj.data_from_processes))
                     raise Exception(f"none of requested processes '{proc_str}' found to create fake data")
@@ -922,10 +997,26 @@ class DatacardWriter(object):
 
         return lines[:n_rate_lines], lines[n_rate_lines:]
 
+    def modify_before_write(
+        self,
+        blocks: DotDict[str, list],
+        separators: set[str],
+        empty_lines: set[str],
+    ) -> tuple[DotDict[str, list], set[str], set[str]]:
+        """
+        Hook to modify the datacard blocks, empty lines and separators before they are written to the datacard file.
+
+        :param blocks: Datacard blocks.
+        :param separators: Set of block names after which a separator line should be inserted.
+        :param empty_lines: Set of block names after which an empty line should be inserted.
+        :returns: The modified datacard blocks, separators and empty lines.
+        """
+        return blocks, separators, empty_lines
+
     def modify_parameter_effect(
         self,
-        category: str,
-        process: str,
+        cat_obj: DotDict,
+        proc_obj: DotDict,
         param_obj: DotDict,
         effect: float | tuple[float, float],
     ) -> float | tuple[float, float]:
@@ -933,8 +1024,8 @@ class DatacardWriter(object):
         Custom hook to modify the effect of a parameter on a given category and process before it is encoded into the
         datacard. By default, this does nothing and simply returns the given effect.
 
-        :param category: The category name.
-        :param process: The process name.
+        :param cat_obj: The category object, following :py:meth:`columnflow.inference.InferenceModel.category_spec`.
+        :param proc_obj: The process object, following :py:meth:`columnflow.inference.InferenceModel.process_spec`.
         :param param_obj: The parameter object, following :py:meth:`columnflow.inference.InferenceModel.parameter_spec`.
         :param effect: The effect value(s) to be modified.
         :returns: The modified effect value(s).
@@ -943,8 +1034,8 @@ class DatacardWriter(object):
 
     def modify_parameter_shape(
         self,
-        category: str,
-        process: str,
+        cat_obj: DotDict,
+        proc_obj: DotDict,
         param_obj: DotDict,
         h_nom: hist.Hist,
         h_down: hist.Hist,
@@ -954,8 +1045,8 @@ class DatacardWriter(object):
         Custom hook to modify the nominal and varied (down, up) shapes of a parameter on a given category and process
         before they are saved to the shapes file. By default, this does nothing and simply returns the given histograms.
 
-        :param category: The category name.
-        :param process: The process name.
+        :param cat_obj: The category object, following :py:meth:`columnflow.inference.InferenceModel.category_spec`.
+        :param proc_obj: The process object, following :py:meth:`columnflow.inference.InferenceModel.process_spec`.
         :param param_obj: The parameter object, following :py:meth:`columnflow.inference.InferenceModel.parameter_spec`.
         :param h_nom: The nominal histogram.
         :param h_down: The down-varied histogram.
@@ -963,3 +1054,23 @@ class DatacardWriter(object):
         :returns: The modified nominal and varied (down, up) histograms.
         """
         return h_nom, h_down, h_up
+
+    def check_skip_process(
+        self,
+        cat_obj: DotDict,
+        proc_obj: DotDict,
+        h: hist.Hist,
+    ) -> bool | str:
+        """
+        Custom hook to check if a process in a given category should be skipped entirely based on the nominal histogram
+        and the process and category objects. If a string is returned, it is added to the log message as a reason for
+        skipping the process.
+
+        :param cat_obj: The category object, following :py:meth:`columnflow.inference.InferenceModel.category_spec`.
+        :param proc_obj: The process object, following :py:meth:`columnflow.inference.InferenceModel.process_spec`.
+        :param h: The nominal histogram for the process in the category.
+        :returns: Whether to skip the process, and optionally a reason for skipping.
+        """
+        if proc_obj.skip_if_empty and np.all(h.view().value == 0):
+            return "nominal histogram is empty"
+        return False

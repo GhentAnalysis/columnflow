@@ -7,6 +7,7 @@ from __future__ import annotations
 import os
 import law
 import order as od
+import dataclasses
 from typing import Iterable
 from collections import OrderedDict
 
@@ -15,13 +16,21 @@ from columnflow.production import Producer, producer
 from columnflow.selection import SelectionResult
 
 from columnflow.util import maybe_import, DotDict, four_vec
-from columnflow.columnar_util import set_ak_column, layout_ak_array, Route, has_ak_column, optional_column
+from columnflow.columnar_util import set_ak_column, layout_ak_array, Route, has_ak_column, optional_column, TAFConfig
 from columnflow.production.cms.btag import BTagSFConfig
 
 ak = maybe_import("awkward")
 np = maybe_import("numpy")
 
 logger = law.logger.get_logger(__name__)
+
+
+@dataclasses.dataclass
+class BTagWorkingPointConfig(TAFConfig):
+    # ordered names of the fixed working points to query via "{correction_set}_wp_values",
+    # e.g. ("L", "M", "T") or ("L", "M", "T", "XT", "XXT") for taggers with extra-tight tiers;
+    # the corresponding threshold values are looked up from correctionlib in setup_btag
+    working_points: tuple[str, ...] = ("L", "M", "T")
 
 
 def init_btag(self: Producer, add_eff_vars=True):
@@ -37,6 +46,11 @@ def init_btag(self: Producer, add_eff_vars=True):
         self.btag_config = BTagSFConfig.new(self.btag_config)
     else:
         self.btag_config = self.get_btag_config()
+
+    if not hasattr(self, "get_btag_wp_config"):
+        self.wp_config = self.config_inst.x("btag_wp_config", BTagWorkingPointConfig())
+    else:
+        self.wp_config = self.get_btag_wp_config()
 
     # update used columns
     self.uses.add(f"Jet.{self.btag_config.discriminator}")
@@ -70,7 +84,9 @@ def setup_btag(self: Producer, task: law.Task, reqs: dict):
     )
 
     btag_wp_corrector = correction_set_btag_wp_corr[f"{self.btag_config.correction_set}_wp_values"]
-    self.btag_wp_value = OrderedDict([(wp, btag_wp_corrector.evaluate(wp)) for wp in "LMT"])
+    self.btag_wp_value = OrderedDict(
+        [(wp, btag_wp_corrector.evaluate(wp)) for wp in self.wp_config.working_points],
+    )
     return correction_set_btag_wp_corr
 
 
@@ -80,7 +96,6 @@ def req_btag(self: Producer, task: law.Task, reqs: dict):
 
 
 @producer(
-    produces={optional_column("Jet.btag_{LMT}")},
     get_btag_config=(lambda self: BTagSFConfig.new(self.config_inst.x.btag_sf)),
     get_btag_sf=lambda self, external_files: external_files.btag_sf_corr,
 )
@@ -104,6 +119,10 @@ def jet_btag(
 @jet_btag.init
 def jet_btag_init(self: Producer):
     init_btag(self, add_eff_vars=False)
+    self.produces |= {
+        optional_column(f"Jet.btag_{wp}")
+        for wp in self.wp_config.working_points
+    }
 
 
 @jet_btag.setup
@@ -135,7 +154,10 @@ def fixed_wp_btag_weights(
     **kwargs,
 ) -> ak.Array:
 
-    working_points = sorted(law.util.make_list(working_points), key=lambda x: "LMT".find(x))
+    working_points = sorted(
+        law.util.make_list(working_points),
+        key=lambda x: self.wp_config.working_points.index(x),
+    )
 
     # get the total number of jets in the chunk
     jets = events.Jet[jet_mask] if jet_mask is not None else events.Jet
@@ -383,15 +405,17 @@ def btag_efficiency_hists(
         "mc_weight": events.mc_weight[results.x.event_no_btag],
     })
 
-    histogram = hist.Hist.new.IntCat([0, 4, 5], name="hadronFlavour")  # Jet hadronFlavour 0, 4, or 5
-    # add variables for binning the efficiency
-    for var_inst in self.variable_insts:
-        histogram = histogram.Var(
-            var_inst.bin_edges,
-            name=var_inst.name,
-            label=var_inst.get_full_x_title(),
-        )
-    hists["btag_efficiencies"] = histogram.Weight()
+    if "btag_efficiencies" not in hists:
+        histogram = hist.Hist.new.IntCat([0, 4, 5], name="hadronFlavour")  # Jet hadronFlavour 0, 4, or 5
+        # add variables for binning the efficiency
+        for var_inst in self.variable_insts:
+            histogram = histogram.Var(
+                var_inst.bin_edges,
+                name=var_inst.name,
+                label=var_inst.get_full_x_title(),
+            )
+        hists["btag_efficiencies"] = histogram.Weight()
+        hists["btag_efficiencies"].name = f"{self.btag_config.correction_set}({self.btag_config.discriminator})"
 
     fill_kwargs = {
         # broadcast event weight and process-id to jet weight
@@ -415,7 +439,6 @@ def btag_efficiency_hists(
 
     # fill inclusive histogram
     hists["btag_efficiencies"].fill(**fill_kwargs)
-    hists["btag_efficiencies"].name = f"{self.btag_config.correction_set}({self.btag_config.discriminator})"
 
     return events
 
@@ -438,7 +461,7 @@ def btag_efficiency_hists_setup(
         name="btag_wp",
         expression=f"Jet.{self.btag_config.discriminator}",
         binning=[0, *self.btag_wp_value.values(), 1],
-        x_labels=["U", "L", "M", "T"],
+        x_labels=["U", *self.btag_wp_value.keys()],
     ))
 
 

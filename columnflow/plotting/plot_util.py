@@ -476,10 +476,23 @@ def prepare_style_config(
     # unit format on axes (could be configurable)
     unit_format = "{title} [{unit}]"
 
+    if density:
+        ylabel = variable_inst.get_full_y_title(
+            bin_width=False,
+            unit=variable_inst.unit or "unit",
+            unit_format="{title} / {unit}",
+        )
+    else:
+        ylabel = variable_inst.get_full_y_title(
+            bin_width=False,
+            unit=False,
+            unit_format=unit_format,
+        )
+
     style_config = {
         "ax_cfg": {
             "xlim": xlim,
-            "ylabel": variable_inst.get_full_y_title(bin_width=False, unit=False, unit_format=unit_format),
+            "ylabel": ylabel,
             "xlabel": variable_inst.get_full_x_title(unit_format=unit_format),
             "yscale": yscale,
             "xscale": "log" if variable_inst.log_x else "linear",
@@ -530,6 +543,7 @@ def prepare_stack_plot_config(
     shape_norm: bool | None = False,
     hide_stat_errors: bool | None = None,
     shift_insts: Sequence[od.Shift] | None = None,
+    density: bool = False,
     **kwargs,
 ) -> OrderedDict:
     """
@@ -579,8 +593,6 @@ def prepare_stack_plot_config(
     # setup plotting configs
     plot_config = OrderedDict()
 
-    # take first (non-underflow) bin
-    # shape_norm_func = kwargs.get("shape_norm_func", lambda h, shape_norm: h.values()[0] if shape_norm else 1)
     shape_norm_func = kwargs.get("shape_norm_func", lambda h, shape_norm: sum(h.values()) if shape_norm else 1)
 
     # draw stack
@@ -661,6 +673,7 @@ def prepare_stack_plot_config(
                 "norm": data_norm,
                 "label": data_label or "Data",
                 "error_type": "poisson_unweighted",
+                "density": density,
             },
         }
 
@@ -668,6 +681,7 @@ def prepare_stack_plot_config(
             plot_config["data"]["ratio_kwargs"] = {
                 "norm": h_mc.values() * data_norm / mc_norm,
                 "error_type": "poisson_unweighted",
+                "density": density,
             }
 
         # suppress error bars by overriding `yerr`
@@ -687,7 +701,8 @@ def split_ax_kwargs(kwargs: dict[str, Any]) -> tuple[dict[str, Any], dict[str, A
     set_kwargs, other_kwargs = {}, {}
     other_keys = {
         "xmajorticks", "xminorticks", "xmajorticklabels", "xminorticklabels", "xloc", "xrotation",
-        "ymajorticks", "yminorticks", "yloc", "yrotation",
+        "ymajorticks", "yminorticks", "yloc", "yrotation", "xticklabelformat", "yticklabelformat",
+        "xoffsettext", "yoffsettext",
     }
     for key, value in kwargs.items():
         (other_kwargs if key in other_keys else set_kwargs)[key] = value
@@ -726,6 +741,24 @@ def apply_ax_kwargs(ax: plt.Axes, kwargs: dict[str, Any]) -> None:
         ax.tick_params(axis="x", labelrotation=other_kwargs.get("xrotation"))
     if other_kwargs.get("yrotation") is not None:
         ax.tick_params(axis="y", labelrotation=other_kwargs.get("yrotation"))
+    if other_kwargs.get("xticklabelformat") is not None:
+        _kwargs = other_kwargs["xticklabelformat"].copy()
+        if not callable(getattr(ax.xaxis.major.formatter, "set_scientific", None)):
+            if _kwargs.get("style") == "sci":
+                _kwargs.pop("style")
+                _kwargs.pop("useMathText", None)
+        ax.ticklabel_format(axis="x", **_kwargs)
+    if other_kwargs.get("yticklabelformat") is not None:
+        _kwargs = other_kwargs["yticklabelformat"].copy()
+        if not callable(getattr(ax.yaxis.major.formatter, "set_scientific", None)):
+            if _kwargs.get("style") == "sci":
+                _kwargs.pop("style")
+                _kwargs.pop("useMathText", None)
+        ax.ticklabel_format(axis="y", **_kwargs)
+    if other_kwargs.get("xoffsettext") is not None:
+        ax.xaxis.get_offset_text().set(**other_kwargs["xoffsettext"])
+    if other_kwargs.get("yoffsettext") is not None:
+        ax.yaxis.get_offset_text().set(**other_kwargs["yoffsettext"])
 
 
 def get_position(minimum: float, maximum: float, factor: float = 1.4, logscale: bool = False) -> float:
@@ -1257,7 +1290,7 @@ def remove_label_placeholders(
     return re.sub(f"__{sel}__", "", label)
 
 
-def calculate_stat_error(h: hist.Hist, error_type: str) -> np.ndarray:
+def calculate_stat_error(h: hist.Hist, error_type: str, density: bool = True) -> np.ndarray:
     """
     Calculate the error to be plotted for the given histogram *h*.
     Supported error types are:
@@ -1266,6 +1299,11 @@ def calculate_stat_error(h: hist.Hist, error_type: str) -> np.ndarray:
         - "poisson_unweighted": the plotted error is the poisson error for each bin
         - "poisson_weighted": the plotted error is the poisson error for each bin, weighted by the variance
     """
+    # undo density if needed
+    if density:
+        area = functools.reduce(operator.mul, h.axes.widths)
+        h = h * area
+
     # determine the error type
     if error_type == "variance":
         yerr = h.view().variance ** 0.5
@@ -1298,5 +1336,11 @@ def calculate_stat_error(h: hist.Hist, error_type: str) -> np.ndarray:
 
     else:
         raise ValueError(f"unknown error type '{error_type}'")
+
+    # re-apply density if needed
+    if density:
+        area = functools.reduce(operator.mul, h.axes.widths)
+        h = h / area
+        yerr = yerr / area
 
     return yerr

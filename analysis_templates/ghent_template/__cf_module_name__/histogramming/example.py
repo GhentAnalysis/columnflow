@@ -28,7 +28,7 @@ def example(self: HistProducer, events: ak.Array, **kwargs) -> ak.Array:
 
 
 @example.init
-def example_init(self: HistProducer) -> None:
+def example_init(self: HistProducer, **kwargs) -> None:
     self.weight_columns = {}
 
     if self.dataset_inst.is_data:

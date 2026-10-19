@@ -97,7 +97,7 @@ def _egamma_scale_smear(self: Calibrator, events: ak.Array, **kwargs) -> ak.Arra
 
         # get scaled energy error
         smear = self.smear_syst_corrector.evaluate("smear", *get_inputs(self.smear_syst_corrector, pt=pt_scaled))
-        energy_err_scaled = (((coll.energyErr)**2 + (coll.energy * smear)**2) * scale)**0.5
+        energy_err_scaled = (((coll.energyErr)**2 + (coll.energy * smear)**2))**0.5 * scale
 
         # store columns
         events = set_ak_column_f32(events, f"{self.collection_name}.pt", pt_scaled)
@@ -127,7 +127,7 @@ def _egamma_scale_smear(self: Calibrator, events: ak.Array, **kwargs) -> ak.Arra
             smear_factor = 1.0 + smear * rnd
             pt_smeared = coll.pt * smear_factor
             # get smeared energy error
-            energy_err_smeared = (((coll.energyErr)**2 + (coll.energy * smear)**2) * smear_factor)**0.5
+            energy_err_smeared = (((coll.energyErr)**2 + (coll.energy * smear)**2))**0.5 * smear_factor
             # return both
             return pt_smeared, energy_err_smeared
 
@@ -160,6 +160,8 @@ def _egamma_scale_smear(self: Calibrator, events: ak.Array, **kwargs) -> ak.Arra
 
 @_egamma_scale_smear.init
 def _egamma_scale_smear_init(self: Calibrator, **kwargs) -> None:
+    super(_egamma_scale_smear, self).init_func(**kwargs)
+
     # store the config
     self.cfg = self.get_scale_smear_config()
 
@@ -182,6 +184,8 @@ def _egamma_scale_smear_init(self: Calibrator, **kwargs) -> None:
 
 @_egamma_scale_smear.requires
 def _egamma_scale_smear_requires(self, task: law.Task, reqs: dict[str, DotDict[str, Any]], **kwargs) -> None:
+    super(_egamma_scale_smear, self).requires_func(task=task, reqs=reqs, **kwargs)
+
     if "external_files" in reqs:
         return
 
@@ -198,6 +202,14 @@ def _egamma_scale_smear_setup(
     reader_targets: law.util.InsertableDict,
     **kwargs,
 ) -> None:
+    super(_egamma_scale_smear, self).setup_func(
+        task=task,
+        reqs=reqs,
+        inputs=inputs,
+        reader_targets=reader_targets,
+        **kwargs,
+    )
+
     # get and load the correction file
     corr_file = self.get_correction_file(reqs["external_files"].files)
     corr_set = load_correction_set(corr_file)

@@ -15,7 +15,7 @@ import law
 from columnflow.calibration import Calibrator, calibrator
 from columnflow.calibration.util import propagate_met
 from columnflow.util import maybe_import, load_correction_set, DotDict
-from columnflow.columnar_util import TAFConfig, set_ak_column, flat_np_view, ak_copy
+from columnflow.columnar_util import TAFConfig, set_ak_column, flat_np_view, layout_ak_array, full_like
 from columnflow.types import Any
 
 ak = maybe_import("awkward")
@@ -101,77 +101,77 @@ def tec(
     if self.dataset_inst.is_data:
         raise ValueError("attempt to apply tau energy corrections in data")
 
-    # the correction tool only supports flat arrays, so convert inputs to flat np view first
-    pt = flat_np_view(events.Tau.pt, axis=1)
-    mass = flat_np_view(events.Tau.mass, axis=1)
-    eta = flat_np_view(events.Tau.eta, axis=1)
-    dm = flat_np_view(events.Tau.decayMode, axis=1)
-    match = flat_np_view(events.Tau.genPartFlav, axis=1)
-
-    # get the scale factors for the four supported decay modes
+    # create mask to select taus with supported decay modes
+    match = events.Tau.genPartFlav
+    dm = events.Tau.decayMode
     dm_mask = (dm == 0) | (dm == 1) | (dm == 10) | (dm == 11)
 
-    # prepare arguments
+    # prepare inputs
     variable_map = {
-        "pt": pt[dm_mask],
-        "eta": eta[dm_mask],
+        "pt": events.Tau.pt[dm_mask],
+        "eta": events.Tau.eta[dm_mask],
         "dm": dm[dm_mask],
         "genmatch": match[dm_mask],
         "id": self.tec_cfg.tagger,
         **self.tec_cfg.corrector_kwargs,
     }
-    args = tuple(
+    inputs = [
         variable_map[inp.name] for inp in self.tec_corrector.inputs
         if inp.name in variable_map
-    )
+    ]
+
+    # helper to get scales
+    def get_scales(syst):
+        scales = flat_np_view(full_like(dm_mask, 1.0, dtype=np.float32))
+        scales[flat_np_view(dm_mask)] = flat_np_view(self.tec_corrector(*inputs, syst))
+        return layout_ak_array(scales, events.Tau)
 
     # nominal correction
-    scales_nom = np.ones_like(dm_mask, dtype=np.float32)
-    scales_nom[dm_mask] = self.tec_corrector(*args, "nom")
+    scales_nom = get_scales("nom")
 
     # varied corrections
     if self.with_uncertainties:
-        scales_up = np.ones_like(dm_mask, dtype=np.float32)
-        scales_up[dm_mask] = self.tec_corrector(*args, "up")
-        scales_down = np.ones_like(dm_mask, dtype=np.float32)
-        scales_down[dm_mask] = self.tec_corrector(*args, "down")
+        scales_up = get_scales("up")
+        scales_down = get_scales("down")
 
     # custom adjustment: reset where the matching value is unhandled
     reset_mask = (match < 1) | (match > 5)
-    scales_nom[reset_mask] = 1.0
-    if self.with_uncertainties:
-        scales_up[reset_mask] = 1.0
-        scales_down[reset_mask] = 1.0
+    if ak.any(reset_mask):
+        scales_nom = ak.where(reset_mask, 1.0, scales_nom)
+        if self.with_uncertainties:
+            scales_up = ak.where(reset_mask, 1.0, scales_up)
+            scales_down = ak.where(reset_mask, 1.0, scales_down)
 
-    # create varied collections per decay mode
+    # create varied collections per decay mode, gen match, and direction
     if self.with_uncertainties:
         for (match_mask, match_name), _dm, (direction, scales) in itertools.product(
-            [(match == 5, "jet"), ((match == 1) | (match == 3), "e")],
+            [(match == 5, "tau"), ((match == 1) | (match == 3), "e"), ((match == 2) | (match == 4), "mu")],
             [0, 1, 10, 11],
             [("up", scales_up), ("down", scales_down)],
         ):
             # copy pt and mass
-            pt_varied = ak_copy(events.Tau.pt)
-            mass_varied = ak_copy(events.Tau.mass)
-            pt_view = flat_np_view(pt_varied, axis=1)
-            mass_view = flat_np_view(mass_varied, axis=1)
+            pt_flat = flat_np_view(events.Tau.pt, copy=True)
+            mass_flat = flat_np_view(events.Tau.mass, copy=True)
 
-            # correct pt and mass for taus with that gen match and decay mode
+            # correct pt and mass using
+            # - varied scale values for taus with that gen match and decay mode
+            # - nominal scale values for the rest
             mask = match_mask & (dm == _dm)
-            pt_view[mask] *= scales[mask]
-            mass_view[mask] *= scales[mask]
+            flat_scales = flat_np_view(ak.where(mask, scales, scales_nom))
+            pt_flat *= flat_scales
+            mass_flat *= flat_scales
 
             # save columns
             postfix = f"tec_{match_name}_dm{_dm}_{direction}"
-            events = set_ak_column_f32(events, f"Tau.pt_{postfix}", pt_varied)
-            events = set_ak_column_f32(events, f"Tau.mass_{postfix}", mass_varied)
+            events = set_ak_column_f32(events, f"Tau.pt_{postfix}", layout_ak_array(pt_flat, events.Tau))
+            events = set_ak_column_f32(events, f"Tau.mass_{postfix}", layout_ak_array(mass_flat, events.Tau))
 
             # propagate changes to MET
             if self.propagate_met:
                 met_pt_varied, met_phi_varied = propagate_met(
                     events.Tau.pt,
                     events.Tau.phi,
-                    pt_varied,
+                    events.Tau[f"pt_{postfix}"],
                     events.Tau.phi,
                     events[self.met_name].pt,
                     events[self.met_name].phi,
@@ -180,11 +180,9 @@ def tec(
                 events = set_ak_column_f32(events, f"{self.met_name}.phi_{postfix}", met_phi_varied)
 
     # apply the nominal correction
-    # note: changes are applied to the views and directly propagate to the original ak arrays
-    # and do not need to be inserted into the events chunk again
     tau_sum_before = events.Tau.sum(axis=1)
-    pt *= scales_nom
-    mass *= scales_nom
+    events = set_ak_column_f32(events, "Tau.pt", events.Tau.pt * scales_nom)
+    events = set_ak_column_f32(events, "Tau.mass", events.Tau.mass * scales_nom)
 
     # propagate changes to MET
     if self.propagate_met:
@@ -204,6 +202,8 @@ def tec(
 
 @tec.init
 def tec_init(self: Calibrator, **kwargs) -> None:
+    super(tec, self).init_func(**kwargs)
+
     self.tec_cfg = self.get_tec_config()
 
     # add nominal met columns of propagating nominal tec
@@ -219,7 +219,7 @@ def tec_init(self: Calibrator, **kwargs) -> None:
             src_fields += [f"{self.met_name}.{var}" for var in ["pt", "phi"]]
 
         self.produces |= {
-            f"{field}_tec_{{jet,e}}_dm{{0,1,10,11}}_{{up,down}}"
+            f"{field}_tec_{{tau,e,mu}}_dm{{0,1,10,11}}_{{up,down}}"
             for field in src_fields
         }
 
@@ -231,6 +231,8 @@ def tec_requires(
     reqs: dict[str, DotDict[str, Any]],
     **kwargs,
 ) -> None:
+    super(tec, self).requires_func(task=task, reqs=reqs, **kwargs)
+
     if "external_files" in reqs:
         return
 
@@ -247,6 +249,8 @@ def tec_setup(
     reader_targets: law.util.InsertableDict,
     **kwargs,
 ) -> None:
+    super(tec, self).setup_func(task=task, reqs=reqs, inputs=inputs, reader_targets=reader_targets, **kwargs)
+
     # create the tec corrector
     tau_file = self.get_tau_file(reqs["external_files"].files)
     self.tec_corrector = load_correction_set(tau_file)[self.tec_cfg.correction_set]

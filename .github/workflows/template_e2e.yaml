@@ -1,0 +1,344 @@
+name: Ghent Template
+
+on:
+  workflow_dispatch:
+  pull_request:
+  push:
+    branches:
+      - master
+      - "GhentAnalysis/**"
+
+# cancel any still-running run for the same ref when a new one starts (e.g. a fast-follow push),
+# and avoid the pull_request + push triggers above both firing for the same commit at once
+concurrency:
+  group: template_e2e-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  template_e2e:
+    name: Ghent Template 🚀
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    defaults:
+      run:
+        shell: bash
+    env:
+      # the analysis instance is created into this directory, relative to the checkout root
+      CF_ANALYSIS_DIR: citest
+      # release tag of the CI test-data bundle; bump together with the release and the digest
+      # below (tests/ci/README.md)
+      TESTDATA_TAG: ci-testdata-v1
+      # sha256 digest of the ci-testdata-v1.tar.gz release asset, re-confirmed via
+      # `gh release view ci-testdata-v1 -R GhentAnalysis/columnflow --json assets`; update together
+      # with TESTDATA_TAG whenever the bundle is bumped (tests/ci/README.md)
+      TESTDATA_SHA256: c6ffb49676d819e91826a45396a9a7c7dd45f1e8bfc4dba1f5a6a7e6e87443a0
+      # arguments shared by every task in the calibration -> histogramming chain; dataset args are
+      # kept separate below since cf.PlotVariables1D needs the plural "--datasets"
+      TASK_ARGS: >-
+        --version ci --config l18 --workers 1 --local-scheduler True
+      DATASET_ARG: --dataset tt_dl_powheg
+      DATASETS_ARG: --datasets tt_dl_powheg
+      # rebuild (rather than just warn-and-continue-on) sandbox venvs whenever their "# version N"
+      # line was bumped; see the "Cache sandbox virtualenvs" step for why this matters in CI
+      CF_SANDBOX_SETUP_MODE: update
+    steps:
+      - name: Checkout ⬇️
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+          submodules: recursive
+
+      - name: Setup python 🐍
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.9"
+
+      - name: Prepare scratch directories 📁
+        run: |
+          # TMPDIR: the ghent_template setup.sh hardcodes /scratch/$USER/columnflow as a fallback,
+          # which does not exist on GitHub-hosted runners; pre-export it to something writable
+          echo "TMPDIR=${RUNNER_TEMP}/cf" >> "${GITHUB_ENV}"
+          mkdir -p "${RUNNER_TEMP}/cf"
+
+          # CF_SOFTWARE_BASE: pin explicitly so CF_VENV_BASE (CF_SOFTWARE_BASE/venvs) resolves to a
+          # deterministic, cacheable path. "source setup.sh \"\"" runs the non-interactive default
+          # setup (setup.sh's query() only prompts for a *named* setup), so nothing is queried
+          # either way; without this the default would silently be $CF_DATA/software (setup.sh:385).
+          echo "CF_SOFTWARE_BASE=${RUNNER_TEMP}/software" >> "${GITHUB_ENV}"
+
+      - name: Cache CI test-data bundle 💾
+        id: cache-testdata
+        uses: actions/cache@v4
+        with:
+          path: ${{ runner.temp }}/testdata
+          key: ${{ env.TESTDATA_TAG }}
+
+      - name: Download CI test-data bundle 📥
+        if: steps.cache-testdata.outputs.cache-hit != 'true'
+        run: |
+          mkdir -p "${RUNNER_TEMP}/testdata"
+          url="https://github.com/GhentAnalysis/columnflow/releases/download/${TESTDATA_TAG}/${TESTDATA_TAG}.tar.gz"
+          archive="${RUNNER_TEMP}/${TESTDATA_TAG}.tar.gz"
+
+          # check the asset is reachable before downloading, so a missing release surfaces as an
+          # actionable message rather than "curl: (22) 404" or a checksum mismatch on an HTML
+          # error page
+          if ! curl -fsSL --head "${url}" > /dev/null 2>&1; then
+            echo "::error::CI test-data bundle not found at ${url}"
+            echo "The end-to-end job needs a test-data bundle published as a public GitHub Release"
+            echo "asset. It cannot be generated on a runner: it contains the POG correctionlib"
+            echo "JSONs (only available via /cvmfs, which is not mounted here, and with no"
+            echo "anonymous public mirror) plus a truncated NanoAOD file."
+            echo ""
+            echo "Build and publish it once by following tests/ci/README.md, then re-run this job."
+            exit 1
+          fi
+
+          # download to a file first, rather than piping straight into tar, so the digest can be
+          # verified before anything is unpacked - an unverified 138 MB asset piped into tar would
+          # silently unpack a corrupted or tampered download
+          curl -fsSL "${url}" -o "${archive}"
+          echo "${TESTDATA_SHA256}  ${archive}" | sha256sum -c -
+
+          tar xzf "${archive}" -C "${RUNNER_TEMP}/testdata"
+          rm -f "${archive}"
+
+      - name: Export test-data location 🔧
+        run: echo "CF_CI_TESTDATA=${RUNNER_TEMP}/testdata" >> "${GITHUB_ENV}"
+
+      - name: Cache sandbox virtualenvs 💾
+        uses: actions/cache@v4
+        with:
+          path: ${{ runner.temp }}/software/venvs
+          # exact-key-or-rebuild, deliberately with no restore-keys fallback: a venv's install
+          # directory name is derived from its sandbox *file path* (bin/cf_sandbox_file_hash.py),
+          # not from its requirements content, and a version bump in a requirements file is only
+          # detected via a hand-maintained "# version N" line that _setup_venv.sh, by default,
+          # just warns about and keeps using the stale venv for. A loose restore-keys prefix match
+          # would happily restore that stale venv on a cache miss for the exact key instead of
+          # rebuilding, silently reintroducing the very staleness CF_SANDBOX_SETUP_MODE=update
+          # (set above) is meant to catch. Widened to every sandboxes/*.txt, not just the three
+          # this job's law tasks obviously use, since e.g. venv_selection_eff.txt is pulled in
+          # transitively by cf.BTagEfficiencyPlot's sandbox.
+          key: ci-venvs-${{ runner.os }}-${{ hashFiles('sandboxes/*.txt') }}
+
+      - name: Instantiate ghent_template analysis 🏗️
+        run: |
+          # these must be the literal strings "true"/"false": the script evaluates them as
+          # commands (`if ${noninteractive}; then`), so a value of "1" would not work
+          export CF_CREATE_ANALYSIS_NONINTERACTIVE=true
+          export CF_CREATE_ANALYSIS_DEBUG=true
+          # CF_CREATE_ANALYSIS_DEBUG symlinks modules/columnflow to this checkout, so CI exercises
+          # this PR's columnflow code rather than fetching a tarball of a remote branch
+          export cf_analysis_name="${CF_ANALYSIS_DIR}"
+          export cf_module_name="${CF_ANALYSIS_DIR}"
+          export cf_short_name="${CF_ANALYSIS_DIR}"
+          export cf_analysis_flavor=ghent_template
+          export cf_use_ssh=False
+          bash create_analysis.sh
+
+      - name: Apply CI-only config overlay 🩹
+        run: |
+          # tests/ci/ci_config_patch.py monkeypatches the generated analysis's add_config to
+          # redirect /cvmfs, DAS and grid access to the self-contained CF_CI_TESTDATA bundle
+          # (see tests/ci/README.md). It is deliberately NOT part of analysis_templates/, so that
+          # a user-deployed analysis never ships with CI-specific configuration; it is copied in
+          # and wired up here, in the workflow, instead.
+          cp tests/ci/ci_config_patch.py "${CF_ANALYSIS_DIR}/${CF_ANALYSIS_DIR}/"
+          {
+            echo "from ${CF_ANALYSIS_DIR}.ci_config_patch import apply as _apply_ci_config"
+            echo "_apply_ci_config(\"${CF_ANALYSIS_DIR}\", \"${CF_ANALYSIS_DIR}\")"
+          } >> "${CF_ANALYSIS_DIR}/${CF_ANALYSIS_DIR}/__init__.py"
+
+      - name: Write law_user.cfg 📝
+        working-directory: ${{ env.CF_ANALYSIS_DIR }}
+        run: |
+          # law.cfg already declares `extend: $CITEST_BASE/law_user.cfg` as the gitignored override
+          # hook (see analysis_templates/ghent_template/law.cfg:6), so this file, not the generated
+          # law.cfg, is where CI-specific overrides belong.
+          #
+          # - skip_ensure_proxy: cf.CalibrateEvents.run, cf.SelectEvents.run and cf.ReduceEvents.run
+          #   are all wrapped in @ensure_proxy (columnflow/tasks/calibration.py:94, selection.py:134,
+          #   reduction.py:106), which raises "neither voms nor arc proxy valid"
+          #   (columnflow/util.py:366-371) since runners have no VOMS/arc proxy.
+          # - the generated law.cfg [outputs] section pins exactly nine cf.* tasks to
+          #   "local, %(shared_location)s" (law.cfg:132-140), which expands to
+          #   /pnfs/iihe/cms/store/user/$CF_CERN_USER/... - a path that does not exist on a runner
+          #   (and $CF_CERN_USER is unset here, so it collapses to /pnfs/iihe/cms/store/user//...).
+          #   Each of the nine keys must be overridden by name. A single "cf.*: local" catch-all
+          #   does NOT work and was tried: the lookup in AnalysisTask._dfs_key_lookup
+          #   (columnflow/tasks/framework/base.py:392-449) returns the *first* entry whose pattern
+          #   matches, in config order, so law.cfg's specific "cf.GetDatasetLFNs" key still wins
+          #   over a "cf.*" added later via the extend hook - the task then tried to mkdir /pnfs
+          #   and died with PermissionError.
+          #   To keep this from silently rotting when a tenth entry is added upstream,
+          #   shared_location is *also* redirected below: any future pinned task inherits a
+          #   writable path instead of /pnfs even before its key is mirrored here.
+          # - [local_fs] base/rucio_report_access are omitted below: they are already set to the
+          #   same values by analysis_templates/ghent_template/law.cfg's own [local_fs] section
+          #   (law.cfg:190-193), so repeating them here was redundant.
+          # - chunked_io_chunk_size: lowered from the template default of 100000 (law.cfg:82).
+          #   tests/ci/ci_config_patch.py now serves the bundled NanoAOD file twice (N_LFN_REPEATS),
+          #   so this run processes ~132000 events; at the default chunk size that would still fit
+          #   in a single chunk, leaving chunk-boundary bugs - a common columnflow failure mode -
+          #   untested by this job. 20000 forces several chunks per file.
+          cat > law_user.cfg <<'EOF'
+          [analysis]
+          skip_ensure_proxy: True
+          chunked_io_chunk_size: 20000
+
+          [outputs]
+          lfn_sources: local_fs
+
+          # catch-all for any task pinned upstream that is not mirrored below
+          shared_location: $CITEST_BASE/data/cf_store
+
+          cf.GetDatasetLFNs: local
+          cf.CalibrateEvents: local
+          cf.CreatePileupWeights: local
+          cf.SelectEvents: local
+          cf.MergeSelectionMasks: local
+          cf.ReduceEvents: local
+          cf.MergeReducedEvents: local
+          cf.ProduceColumns: local
+          cf.CreateHistograms: local
+          EOF
+
+      - name: Setup environment ⚙️
+        working-directory: ${{ env.CF_ANALYSIS_DIR }}
+        run: source setup.sh ""
+
+      - name: law index 🔎
+        working-directory: ${{ env.CF_ANALYSIS_DIR }}
+        run: |
+          # every law step below sources tests/ci/setup_ci_env.sh rather than setup.sh directly; it
+          # sources setup.sh and then declares the runner a local columnflow env, which two tasks of
+          # the chain require to run at all (see the header of that file).
+          #
+          # the explicit "law index" is needed because the automatic one performed during sourcing is
+          # gated on CF_LOCAL_ENV, which is still false at that point (setup.sh:833); without it no
+          # task family resolves and every "law run" below fails immediately.
+          source "${GITHUB_WORKSPACE}/tests/ci/setup_ci_env.sh"
+          law index -q
+
+      - name: law run cf.CalibrateEvents 🛰️
+        working-directory: ${{ env.CF_ANALYSIS_DIR }}
+        run: |
+          source "${GITHUB_WORKSPACE}/tests/ci/setup_ci_env.sh"
+          law run cf.CalibrateEvents ${TASK_ARGS} ${DATASET_ARG}
+
+      - name: law run cf.SelectEvents 🛰️
+        working-directory: ${{ env.CF_ANALYSIS_DIR }}
+        run: |
+          source "${GITHUB_WORKSPACE}/tests/ci/setup_ci_env.sh"
+          law run cf.SelectEvents ${TASK_ARGS} ${DATASET_ARG}
+
+      - name: Assert selection stats are sane ✅
+        working-directory: ${{ env.CF_ANALYSIS_DIR }}
+        run: |
+          source "${GITHUB_WORKSPACE}/tests/ci/setup_ci_env.sh"
+          # cf.SelectEvents alone only proves nothing crashed: an empty selection or a broken
+          # process_id assignment still yields a valid (empty) plot and a green build downstream.
+          # cf.MergeSelectionStats merges the per-branch stats written by cf.SelectEvents into a
+          # single stats.json; run it explicitly here since nothing later in this chain requires it
+          # eagerly enough to have produced it yet.
+          law run cf.MergeSelectionStats ${TASK_ARGS} ${DATASET_ARG}
+
+          # the store path includes the calibrator/selector class name segments, which are
+          # implementation details that can change - glob for stats.json instead of hardcoding them
+          shopt -s nullglob globstar
+          stats_files=( data/cf_store/**/cf.MergeSelectionStats/**/stats.json )
+          if [ "${#stats_files[@]}" -ne 1 ]; then
+            echo "::error::expected exactly one cf.MergeSelectionStats/stats.json under data/cf_store, found ${#stats_files[@]}"
+            exit 1
+          fi
+
+          python3 - "${stats_files[0]}" <<'PY'
+          import json
+          import sys
+
+          path = sys.argv[1]
+          with open(path) as f:
+              stats = json.load(f)
+
+          num_events = stats["num_events"]
+          num_events_selected = stats["num_events_selected"]
+          efficiency = num_events_selected / num_events if num_events else 0.0
+
+          print(f"num_events         : {num_events}")
+          print(f"num_events_selected: {num_events_selected}")
+          print(f"selection efficiency: {efficiency:.4f}")
+
+          # 66000 events in the bundled NanoAOD file, served N_LFN_REPEATS (=2) times by
+          # tests/ci/ci_config_patch.py, so cf.SelectEvents runs two branches over the same file
+          # and cf.MergeSelectionStats sums them. Bumping N_LFN_REPEATS means bumping this too.
+          expected_num_events = 66000 * 2
+          # unaffected by the repetition: both branches see the same events
+          eff_low, eff_high = 0.10, 0.25
+
+          if num_events != expected_num_events:
+              print(
+                  f"::error::num_events is {num_events}, expected {expected_num_events} - the CI "
+                  "test-data bundle or the dataset it is mapped to (tests/ci/ci_config_patch.py) "
+                  "changed without this assertion being updated",
+              )
+              sys.exit(1)
+
+          if not (eff_low <= efficiency <= eff_high):
+              print(
+                  f"::error::selection efficiency {efficiency:.4f} is outside the expected "
+                  f"[{eff_low}, {eff_high}] band (observed ~0.166 historically) - the selection, "
+                  "the test-data file, or a producer feeding it likely changed behaviour",
+              )
+              sys.exit(1)
+          PY
+
+      - name: law run cf.ReduceEvents 🛰️
+        working-directory: ${{ env.CF_ANALYSIS_DIR }}
+        run: |
+          source "${GITHUB_WORKSPACE}/tests/ci/setup_ci_env.sh"
+          law run cf.ReduceEvents ${TASK_ARGS} ${DATASET_ARG}
+
+      - name: law run cf.ProduceColumns 🛰️
+        working-directory: ${{ env.CF_ANALYSIS_DIR }}
+        run: |
+          source "${GITHUB_WORKSPACE}/tests/ci/setup_ci_env.sh"
+          law run cf.ProduceColumns ${TASK_ARGS} ${DATASET_ARG}
+
+      - name: law run cf.CreateHistograms 🛰️
+        working-directory: ${{ env.CF_ANALYSIS_DIR }}
+        run: |
+          source "${GITHUB_WORKSPACE}/tests/ci/setup_ci_env.sh"
+          law run cf.CreateHistograms ${TASK_ARGS} ${DATASET_ARG} --variables jet1_pt
+
+      - name: law run cf.PlotVariables1D 🎨
+        working-directory: ${{ env.CF_ANALYSIS_DIR }}
+        run: |
+          source "${GITHUB_WORKSPACE}/tests/ci/setup_ci_env.sh"
+          law run cf.PlotVariables1D ${TASK_ARGS} ${DATASETS_ARG} \
+            --processes tt --variables jet1_pt --categories incl
+
+      - name: Assert plot output exists ✅
+        working-directory: ${{ env.CF_ANALYSIS_DIR }}
+        run: |
+          shopt -s nullglob globstar
+          # narrowed to cf.PlotVariables1D's own output directory: a bare "**/*.pdf" glob is also
+          # satisfied by the ~27 incidental cf.BTagEfficiencyPlot PDFs pulled in as an upstream
+          # requirement, which would pass this assertion for the wrong reason
+          plots=( data/cf_store/**/cf.PlotVariables1D/**/*.pdf data/cf_store/**/cf.PlotVariables1D/**/*.png )
+          if [ "${#plots[@]}" -eq 0 ]; then
+            echo "::error::no plot files found under data/cf_store/**/cf.PlotVariables1D; cf.PlotVariables1D produced nothing"
+            exit 1
+          fi
+          echo "found plot output:"
+          printf ' - %s\n' "${plots[@]}"
+
+      - name: Upload artifacts 📤
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: template-e2e-outputs
+          path: |
+            ${{ env.CF_ANALYSIS_DIR }}/data/cf_store/**
+          if-no-files-found: warn
+          retention-days: 7
