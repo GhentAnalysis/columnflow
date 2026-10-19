@@ -1,0 +1,54 @@
+# Posts a message to the Mattermost channel ~columnflow-dev (team ugent-cms-analysis)
+# whenever a pull request is merged into GhentAnalysis/master.
+#
+# Requires the repository secret MATTERMOST_WEBHOOK_URL, containing the URL of a Mattermost
+# incoming webhook that is bound to the channel.
+#
+# pull_request_target (instead of pull_request) is used so that the secret is also available
+# for PRs opened from forks. This is safe because this workflow never checks out or runs PR code.
+
+name: Mattermost merge notification
+
+on:
+  pull_request_target:
+    types: [closed]
+    branches: [GhentAnalysis/master]
+
+permissions: {}
+
+jobs:
+  notify:
+    if: github.event.pull_request.merged == true
+    runs-on: ubuntu-latest
+    steps:
+      - name: Post to Mattermost
+        env:
+          MM_WEBHOOK_URL: ${{ secrets.MATTERMOST_WEBHOOK_URL }}
+          # PR data is passed via env (never interpolated into the script) to avoid script injection
+          REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          PR_TITLE: ${{ github.event.pull_request.title }}
+          PR_URL: ${{ github.event.pull_request.html_url }}
+          PR_AUTHOR: ${{ github.event.pull_request.user.login }}
+          MERGED_BY: ${{ github.event.pull_request.merged_by.login }}
+          BASE: ${{ github.event.pull_request.base.ref }}
+          HEAD: ${{ github.event.pull_request.head.label }}
+        run: |
+          set -euo pipefail
+
+          if [ -z "${MM_WEBHOOK_URL}" ]; then
+            echo "::error::secret MATTERMOST_WEBHOOK_URL is not set"
+            exit 1
+          fi
+
+          # GitHub users are linked rather than @-mentioned to avoid pinging unrelated Mattermost users
+          msg=":tada: **[${REPO}#${PR_NUMBER}](${PR_URL}) merged into \`${BASE}\`**: ${PR_TITLE}
+          Author: [${PR_AUTHOR}](https://github.com/${PR_AUTHOR}) · Merged by: [${MERGED_BY}](https://github.com/${MERGED_BY}) · \`${HEAD}\` → \`${BASE}\`"
+
+          # build the payload with jq so that special characters in the title cannot break the JSON
+          jq -n --arg text "${msg}" '{text: $text}' \
+            | curl -fsS -o /dev/null -X POST \
+              -H "Content-Type: application/json" \
+              -d @- "${MM_WEBHOOK_URL}"
+
+          echo "posted merge notification for ${REPO}#${PR_NUMBER}"
