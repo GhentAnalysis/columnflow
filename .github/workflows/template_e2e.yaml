@@ -236,8 +236,25 @@ jobs:
           echo "found plot output:"
           printf ' - %s\n' "${plots[@]}"
 
-      - name: Upload artifacts 📤
+      - name: Collect results 🗂️
         if: always()
+        run: |
+          # cf.BTagEfficiencyPlot is not requested directly, but runs in this job as an upstream
+          # requirement of the event weight producers
+          bash tests/ci/collect_results.sh "${CF_ANALYSIS_DIR}/data/cf_store" "${RUNNER_TEMP}/results" \
+            cf.PlotVariables1D cf.BTagEfficiencyPlot
+
+      - name: Upload results 📤
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: template-e2e-results
+          path: ${{ runner.temp }}/results/
+          if-no-files-found: warn
+          retention-days: 7
+
+      - name: Upload outputs on failure 📤
+        if: failure()
         uses: actions/upload-artifact@v4
         with:
           name: template-e2e-outputs

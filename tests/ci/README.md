@@ -287,6 +287,24 @@ The scripts can also be run outside CI from a generated test-template analysis d
 `bash /path/to/columnflow/tests/ci/e2e/base.sh`, with `CF_CI_TESTDATA` pointing at an unpacked
 bundle (or without it on a machine with cvmfs and grid access).
 
+### Artifacts
+
+Every job of both e2e workflows uploads a small `*-results` artifact (kept 7 days), also on failure.
+It holds only the outputs of the plotting and result tasks the job runs itself, one folder per task
+family, collected by `tests/ci/collect_results.sh`:
+
+| Artifact | Task families |
+|---|---|
+| `template-e2e-results` | `cf.PlotVariables1D`, `cf.BTagEfficiencyPlot` |
+| `test-template-base-results` | `cf.BTagEfficiencyPlot` |
+| `test-template-producers-results` | `cf.PlotVariables1D`, `cf.PlotVariables2D`, `cf.CreateYieldTable` |
+| `test-template-shifts-results` | `cf.PlotShiftedVariables1D` |
+| `test-template-datacards-results` | `cf.CreateDatacards` |
+
+The feature jobs leave out the base outputs restored from the tarball, so every plot appears in
+exactly one artifact. The whole store, with all intermediate outputs, is only uploaded when a job
+fails (`*-outputs`).
+
 ### Known issues
 
 Bugs found while building the test template are listed individually in `known_issues.md` next to
@@ -297,7 +315,8 @@ pointing there, so they can be added once the bug is fixed.
 
 1. Write `tests/ci/e2e/<feature>.sh`, following the existing scripts, plus `check_*.py` scripts
    for its outputs.
-2. Add an entry to the `features` matrix in `test_template_e2e.yaml`.
+2. Add an entry to the `features` matrix in `test_template_e2e.yaml`, with `results` listing the
+   task families whose outputs (plots, tables, datacards) go into its results artifact.
 3. If it needs new config, TAFs or an inference model, add them to the test template, not to the
    ghent_template.
 4. If it needs a new sandbox, add it to the "Build remaining sandboxes" step of the base job, since

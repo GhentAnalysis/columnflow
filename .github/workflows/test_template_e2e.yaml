@@ -136,6 +136,21 @@ jobs:
           if-no-files-found: error
           retention-days: 1
 
+      - name: Collect results 🗂️
+        if: always()
+        run: |
+          bash tests/ci/collect_results.sh "${CF_ANALYSIS_DIR}/data/cf_store" "${RUNNER_TEMP}/results" \
+            cf.BTagEfficiencyPlot
+
+      - name: Upload results 📤
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-template-base-results
+          path: ${{ runner.temp }}/results/
+          if-no-files-found: warn
+          retention-days: 7
+
       - name: Upload outputs on failure 📤
         if: failure()
         uses: actions/upload-artifact@v4
@@ -157,17 +172,22 @@ jobs:
     strategy:
       # let all features run to completion so that one failing feature does not hide the others
       fail-fast: false
+      # results: the task families whose outputs (plots, tables, datacards) the job uploads as its
+      # results artifact; only tasks the script runs itself, not those restored from the base job
       matrix:
         include:
           - name: Producers 🏭
             id: producers
             script: producers.sh
+            results: cf.PlotVariables1D cf.PlotVariables2D cf.CreateYieldTable
           - name: Shifts 🔀
             id: shifts
             script: shifts.sh
+            results: cf.PlotShiftedVariables1D
           - name: Datacards 📜
             id: datacards
             script: datacards.sh
+            results: cf.CreateDatacards
     steps:
       - name: Checkout ⬇️
         uses: actions/checkout@v4
@@ -202,8 +222,23 @@ jobs:
         working-directory: ${{ env.CF_ANALYSIS_DIR }}
         run: bash "${GITHUB_WORKSPACE}/tests/ci/e2e/${{ matrix.script }}"
 
-      - name: Upload outputs 📤
+      - name: Collect results 🗂️
         if: always()
+        run: |
+          bash tests/ci/collect_results.sh "${CF_ANALYSIS_DIR}/data/cf_store" "${RUNNER_TEMP}/results" \
+            ${{ matrix.results }}
+
+      - name: Upload results 📤
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-template-${{ matrix.id }}-results
+          path: ${{ runner.temp }}/results/
+          if-no-files-found: warn
+          retention-days: 7
+
+      - name: Upload outputs on failure 📤
+        if: failure()
         uses: actions/upload-artifact@v4
         with:
           name: test-template-${{ matrix.id }}-outputs
