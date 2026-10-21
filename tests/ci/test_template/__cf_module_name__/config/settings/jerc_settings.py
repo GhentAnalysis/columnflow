@@ -81,7 +81,7 @@ def add_jerc_settings(config: od.Config) -> None:
             ],
             # whether the JECs for data should be era-specific
             "data_per_era": True,
-        })
+        }),
     }
 
     # JER
@@ -91,7 +91,7 @@ def add_jerc_settings(config: od.Config) -> None:
             "campaign": f"Summer19UL{config.x.year2}{jerc_postfix}",
             "version": "JR" + {2016: "V3", 2017: "V2", 2018: "V2"}[config.x.year],
             "jet_type": "AK4PFchs",
-        })
+        }),
     }
 
     # JEC uncertainty sources propagated to btag scale factors

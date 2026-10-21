@@ -46,7 +46,7 @@ def cutflow_features(
         events = set_ak_column(
             events,
             "genTop",
-            events.GenPart[(np.abs(events.GenPart.pdgId) == 6) & (events.GenPart.status == 62)]
+            events.GenPart[(np.abs(events.GenPart.pdgId) == 6) & (events.GenPart.status == 62)],
         )
 
     return events

@@ -51,7 +51,7 @@ def __cf_short_name_lc___increment_stats(
         weight_map["sum_mc_weight_selected"] = (events.mc_weight, event_mask)  # weights of selected events
 
         weight_columns = list(
-            set(self[event_weights_to_normalize].produced_columns)
+            set(self[event_weights_to_normalize].produced_columns),
         )
         weight_columns = sorted([col.string_nano_column for col in weight_columns])
 

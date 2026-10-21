@@ -18,20 +18,20 @@ def add_datasets(config: od.Config, campaign: od.Campaign):
     dataset_names = {
         "2018": [
             # data
-            *[f"data_mumu_{era}" for era in ['a', 'b', 'c', 'd']],
-            *[f"data_egamma_{era}" for era in ['a', 'b', 'c', 'd']],
-            *[f"data_muoneg_{era}" for era in ['a', 'b', 'c', 'd']],
-            *[f"data_mu_{era}" for era in ['a', 'b', 'c', 'd']],
+            *[f"data_mumu_{era}" for era in ["a", "b", "c", "d"]],
+            *[f"data_egamma_{era}" for era in ["a", "b", "c", "d"]],
+            *[f"data_muoneg_{era}" for era in ["a", "b", "c", "d"]],
+            *[f"data_mu_{era}" for era in ["a", "b", "c", "d"]],
 
             # backgrounds
 
             # ewk
-            *[f"dy_m50toinf_ht-{htr}_madgraph" for htr in ['100to200', '200to400', '400to600',
-                                                           '600to800', '800to1200', '1200to2500']],
+            *[f"dy_m50toinf_ht-{htr}_madgraph" for htr in ["100to200", "200to400", "400to600",
+                                                           "600to800", "800to1200", "1200to2500"]],
 
             # ttbar
             "tt_dl_powheg",
-            "tt_sl_powheg"
+            "tt_sl_powheg",
         ]}[f"{config.x.year}{config.x.corr_postfix}"]
 
     # loop over all dataset names and add them to the config

@@ -77,7 +77,7 @@ def trigger_selection(
 
     return events, SelectionResult(
         steps={
-            "Trigger": sel_trigger, "VetoTrigger": veto_trigger
+            "Trigger": sel_trigger, "VetoTrigger": veto_trigger,
         },
     )
 

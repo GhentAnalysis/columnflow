@@ -119,7 +119,7 @@ def add_config(
         "btag_sf_corr": (f"{json_mirror}/POG/BTV/{year}{corr_postfix}_UL/btagging.json.gz", "v1"),
 
         # Pile up scale factor
-        "pu_sf": (f"{json_mirror}/POG/LUM/{year}{corr_postfix}_UL/puWeights.json.gz", "v1")
+        "pu_sf": (f"{json_mirror}/POG/LUM/{year}{corr_postfix}_UL/puWeights.json.gz", "v1"),
     })
 
     # shift groups for conveniently looping over certain shifts
@@ -165,7 +165,7 @@ def add_config(
             {"Jet"},
             {"btagDeepFlavB", "btagDeepFlavCvB", "hadronFlavour"},
         ) | four_vec(  # Leptons
-            {"Electron", "Muon", },
+            {"Electron", "Muon"},
             {"deltaEtaSC"},
         )
     )

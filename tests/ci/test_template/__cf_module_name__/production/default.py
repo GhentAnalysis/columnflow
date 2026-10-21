@@ -26,10 +26,10 @@ ak = maybe_import("awkward")
         category_ids,
         jet_btag,
     } | four_vec(
-        {"Electron", "Muon", }
+        {"Electron", "Muon"},
     ) | four_vec(
         {"Jet"},
-        {"btagDeepFlavB"}
+        {"btagDeepFlavB"},
     )
     ),
     produces=({
@@ -45,7 +45,7 @@ def features(self: Producer, events: ak.Array, **kwargs) -> ak.Array:
     # (re)produce category ids
     events = self[category_ids](events, **kwargs)
 
-    events = self[jet_btag](events, working_points=["M",], jet_mask=(abs(events.Jet.eta) < 2.4))
+    events = self[jet_btag](events, working_points=["M"], jet_mask=(abs(events.Jet.eta) < 2.4))
 
     events = set_ak_column(events, "ht", ak.sum(events.Jet.pt, axis=1), value_type=np.float32)
     events = set_ak_column(events, "n_jet", ak.sum(events.Jet.pt > 0, axis=1))

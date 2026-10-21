@@ -128,8 +128,8 @@ def event_weights(self: Producer, events: ak.Array, **kwargs) -> ak.Array:
 
     #
     is_ctjet = abs(events.Jet.eta) < 2.4
-    events = self[jet_btag](events, working_points=["M",], jet_mask=is_ctjet)
-    events = self[fixed_wp_btag_weights](events, working_points=["M",], jet_mask=is_ctjet)
+    events = self[jet_btag](events, working_points=["M"], jet_mask=is_ctjet)
+    events = self[fixed_wp_btag_weights](events, working_points=["M"], jet_mask=is_ctjet)
 
     # normalize event weights using stats
     events = self[normalized_pu_weights](events, **kwargs)

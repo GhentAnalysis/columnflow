@@ -55,7 +55,7 @@ def TetraVec(arr: ak.Array) -> ak.Array:
         process_ids, attach_coffea_behavior, mc_weight, optional_column("veto"),
     },
     produces={
-        process_ids, attach_coffea_behavior, mc_weight
+        process_ids, attach_coffea_behavior, mc_weight,
     },
     exposed=False,
 )
@@ -83,7 +83,7 @@ def pre_selection(
     uses=four_vec(
         ("Electron", "Muon"), ("charge", "pdgId", "tight"),
     ),
-    triggers=None
+    triggers=None,
 )
 def lepton_selection(
         self: Selector,
@@ -104,7 +104,7 @@ def lepton_selection(
     # required for pt cuts and Z-cuts on masks
     fill_with = {
         "pt": -999, "eta": -999, "phi": -999, "charge": -999,
-        "pdgId": -999, "mass": -999, "sip3d": -999, 'tight': False,
+        "pdgId": -999, "mass": -999, "sip3d": -999, "tight": False,
     }
     lepton = ak.fill_none(ak.pad_none(lepton, 2, axis=-1), fill_with)
 
@@ -148,7 +148,7 @@ def jet_selection(
     **kwargs,
 ) -> Tuple[ak.Array, SelectionResult]:
 
-    events = self[jet_btag](events, working_points=["M",], jet_mask=(abs(events.Jet.eta) < 2.4))
+    events = self[jet_btag](events, working_points=["M"], jet_mask=(abs(events.Jet.eta) < 2.4))
 
     jet = (events.Jet[results.objects.Jet.Jet])
 
@@ -164,10 +164,10 @@ def jet_selection(
 
 @selector(
     uses={
-        category_ids, __cf_short_name_lc___increment_stats, cutflow_features
+        category_ids, __cf_short_name_lc___increment_stats, cutflow_features,
     },
     produces={
-        category_ids, __cf_short_name_lc___increment_stats, cutflow_features
+        category_ids, __cf_short_name_lc___increment_stats, cutflow_features,
     },
     exposed=False,
 )

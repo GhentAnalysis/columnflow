@@ -18,9 +18,9 @@ ak = maybe_import("awkward")
 @selector(
     uses=four_vec(
         ("Muon"),
-        ("sip3d", "dxy", "dz", "miniPFRelIso_all", "mediumId")
+        ("sip3d", "dxy", "dz", "miniPFRelIso_all", "mediumId"),
     ) | {"event"},
-    triggers=None
+    triggers=None,
 )
 def muon_object(
         self: Selector,
@@ -53,8 +53,8 @@ def muon_object(
         steps={},
         objects={
             "Muon": {
-                "Muon": sorted_indices_from_mask(mu_mask, muon.pt)
-            }
+                "Muon": sorted_indices_from_mask(mu_mask, muon.pt),
+            },
         },
     )
 
@@ -63,11 +63,11 @@ def muon_object(
     uses=four_vec(
         ("Electron"),
         ("sip3d", "charge", "isPFcand", "dxy", "dz", "miniPFRelIso_all", "mvaFall17V2Iso_WP90", "tightCharge",
-        "lostHits", "convVeto")
+        "lostHits", "convVeto"),
     ) | four_vec(
         ("Muon"),
     ),
-    triggers=None
+    triggers=None,
 )
 def electron_object(
         self: Selector,
@@ -108,8 +108,8 @@ def electron_object(
         steps={},
         objects={
             "Electron": {
-                "Electron": sorted_indices_from_mask(e_mask, electron.pt)
-            }
+                "Electron": sorted_indices_from_mask(e_mask, electron.pt),
+            },
         },
     )
 

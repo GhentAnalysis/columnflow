@@ -20,12 +20,12 @@ def add_processes(config: od.Config, campaign: od.Campaign):
 
     # How to add new processes:
     # Add custom process to encapsulate all background processes:
-    bg_processes = ['dy']
+    bg_processes = ["dy"]
     background = config.add_process(
         name="background",
         id=9999,  # cannot collide with ids defined in cmsdb though
         label="Background",
-        xsecs={campaign.ecm: sum([config.get_process(bg).get_xsec(campaign.ecm) for bg in bg_processes])}
+        xsecs={campaign.ecm: sum([config.get_process(bg).get_xsec(campaign.ecm) for bg in bg_processes])},
     )
     for bg in bg_processes:
         background.add_process(config.get_process(bg))
