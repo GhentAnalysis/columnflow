@@ -1,0 +1,213 @@
+name: Test Template
+
+# end-to-end coverage of columnflow tasks beyond the standard chain, run on the CI-only test template
+# (tests/ci/test_template, see tests/ci/README.md, section "Test template"); template_e2e.yaml keeps
+# covering the user-facing ghent_template
+#
+# a "base" job runs calibration, selection, reduction and the b-tag efficiencies once and hands its
+# analysis directory (including the store) to a matrix of feature jobs that run in parallel; to add a
+# feature, add a script to tests/ci/e2e/ and an entry to the matrix below
+
+on:
+  workflow_dispatch:
+  pull_request:
+  push:
+    branches:
+      - master
+      - "GhentAnalysis/**"
+
+# cancel any still-running run for the same ref when a new one starts (e.g. a fast-follow push),
+# and avoid the pull_request + push triggers above both firing for the same commit at once
+concurrency:
+  group: test_template_e2e-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  # the analysis instance is created into this directory, relative to the checkout root; feature
+  # jobs restore it at the same absolute path, which law requires to find the base job's outputs
+  CF_ANALYSIS_DIR: citest
+  # CI test-data bundle, see the cf-e2e-setup action and tests/ci/README.md
+  TESTDATA_TAG: ci-testdata-v1
+  TESTDATA_SHA256: c6ffb49676d819e91826a45396a9a7c7dd45f1e8bfc4dba1f5a6a7e6e87443a0
+  # arguments shared by every law task, picked up by tests/ci/e2e/lib.sh; base and feature jobs must
+  # use the same version for the feature jobs to reuse the base job's outputs
+  TASK_ARGS: >-
+    --version ci --config l18 --workers 1 --local-scheduler True
+  # rebuild (rather than just warn-and-continue-on) sandbox venvs whenever their "# version N" line
+  # was bumped, see the venv cache step of the cf-e2e-setup action
+  CF_SANDBOX_SETUP_MODE: update
+
+jobs:
+  base:
+    name: Base 🧱
+    # pinned instead of ubuntu-latest: python 3.9 (columnflow's default CF_PYTHON_VERSION) has no
+    # actions/setup-python build for ubuntu 26.04, which ubuntu-latest points to now
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Checkout ⬇️
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+          submodules: recursive
+
+      - name: Setup 🔧
+        uses: ./.github/actions/cf-e2e-setup
+        with:
+          testdata-tag: ${{ env.TESTDATA_TAG }}
+          testdata-sha256: ${{ env.TESTDATA_SHA256 }}
+          venv-cache-key-prefix: ci-venvs-test-template
+          save-venv-cache: "true"
+
+      - name: Instantiate test template 🏗️
+        run: |
+          # these must be the literal strings "true"/"false": the script evaluates them as
+          # commands (`if ${noninteractive}; then`), so a value of "1" would not work
+          export CF_CREATE_ANALYSIS_NONINTERACTIVE=true
+          # CF_CREATE_ANALYSIS_DEBUG symlinks modules/columnflow to this checkout, so CI exercises
+          # this PR's columnflow code, and allows to copy the template from a custom directory
+          export CF_CREATE_ANALYSIS_DEBUG=true
+          export CF_CREATE_ANALYSIS_TEMPLATE_DIR="${GITHUB_WORKSPACE}/tests/ci/test_template"
+          export cf_analysis_name="${CF_ANALYSIS_DIR}"
+          export cf_module_name="${CF_ANALYSIS_DIR}"
+          export cf_short_name="${CF_ANALYSIS_DIR}"
+          # only steers the hints printed at the end, the template is taken from the directory above
+          export cf_analysis_flavor=ghent_template
+          export cf_use_ssh=False
+          bash create_analysis.sh
+
+      - name: Apply CI-only config overlay 🩹
+        run: |
+          # redirects /cvmfs, DAS and grid access to the CF_CI_TESTDATA bundle, exactly as for the
+          # ghent_template in template_e2e.yaml (tests/ci/README.md)
+          cp tests/ci/ci_config_patch.py "${CF_ANALYSIS_DIR}/${CF_ANALYSIS_DIR}/"
+          {
+            echo "from ${CF_ANALYSIS_DIR}.ci_config_patch import apply as _apply_ci_config"
+            echo "_apply_ci_config(\"${CF_ANALYSIS_DIR}\", \"${CF_ANALYSIS_DIR}\")"
+          } >> "${CF_ANALYSIS_DIR}/${CF_ANALYSIS_DIR}/__init__.py"
+
+      - name: Write law_user.cfg 📝
+        working-directory: ${{ env.CF_ANALYSIS_DIR }}
+        run: |
+          # the test template stores all outputs locally and sets a small chunk size itself, so only
+          # the runner-specific settings remain: no VOMS/arc proxy is available and input files are
+          # read from the local test-data bundle (see template_e2e.yaml for details)
+          cat > law_user.cfg <<'EOF'
+          [analysis]
+          skip_ensure_proxy: True
+
+          [outputs]
+          lfn_sources: local_fs
+          EOF
+
+      - name: Setup environment ⚙️
+        working-directory: ${{ env.CF_ANALYSIS_DIR }}
+        run: source setup.sh ""
+
+      - name: Run base chain 🛰️
+        working-directory: ${{ env.CF_ANALYSIS_DIR }}
+        run: bash "${GITHUB_WORKSPACE}/tests/ci/e2e/base.sh"
+
+      - name: Build remaining sandboxes 📦
+        working-directory: ${{ env.CF_ANALYSIS_DIR }}
+        run: |
+          # the feature jobs only restore the venv cache, so make sure every sandbox they use is part
+          # of what this job saves; a no-op for sandboxes the base chain already built
+          source "${GITHUB_WORKSPACE}/tests/ci/setup_ci_env.sh"
+          for sandbox in venv_columnar venv_selection_eff; do
+            cf_sandbox "${sandbox}" true
+          done
+
+      - name: Pack analysis directory 📦
+        run: |
+          # tar instead of uploading the directory directly: upload-artifact does not preserve
+          # symlinks, and modules/columnflow is one (to this checkout)
+          tar czf "${RUNNER_TEMP}/base.tgz" "${CF_ANALYSIS_DIR}"
+          ls -lh "${RUNNER_TEMP}/base.tgz"
+
+      - name: Upload analysis directory 📤
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-template-base
+          path: ${{ runner.temp }}/base.tgz
+          if-no-files-found: error
+          retention-days: 1
+
+      - name: Upload outputs on failure 📤
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-template-base-outputs
+          path: |
+            ${{ env.CF_ANALYSIS_DIR }}/data/cf_store/**
+          if-no-files-found: warn
+          retention-days: 7
+
+  features:
+    name: ${{ matrix.name }}
+    needs: base
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    defaults:
+      run:
+        shell: bash
+    strategy:
+      # let all features run to completion so that one failing feature does not hide the others
+      fail-fast: false
+      matrix:
+        include:
+          - name: Producers 🏭
+            id: producers
+            script: producers.sh
+          - name: Shifts 🔀
+            id: shifts
+            script: shifts.sh
+          - name: Datacards 📜
+            id: datacards
+            script: datacards.sh
+    steps:
+      - name: Checkout ⬇️
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+          submodules: recursive
+
+      - name: Setup 🔧
+        uses: ./.github/actions/cf-e2e-setup
+        with:
+          testdata-tag: ${{ env.TESTDATA_TAG }}
+          testdata-sha256: ${{ env.TESTDATA_SHA256 }}
+          venv-cache-key-prefix: ci-venvs-test-template
+          save-venv-cache: "false"
+
+      - name: Download analysis directory 📥
+        uses: actions/download-artifact@v4
+        with:
+          name: test-template-base
+          path: ${{ runner.temp }}
+
+      - name: Unpack analysis directory 📦
+        run: |
+          tar xzf "${RUNNER_TEMP}/base.tgz"
+          rm -f "${RUNNER_TEMP}/base.tgz"
+
+      - name: Setup environment ⚙️
+        working-directory: ${{ env.CF_ANALYSIS_DIR }}
+        run: source setup.sh ""
+
+      - name: Run ${{ matrix.id }} 🛰️
+        working-directory: ${{ env.CF_ANALYSIS_DIR }}
+        run: bash "${GITHUB_WORKSPACE}/tests/ci/e2e/${{ matrix.script }}"
+
+      - name: Upload outputs 📤
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-template-${{ matrix.id }}-outputs
+          path: |
+            ${{ env.CF_ANALYSIS_DIR }}/data/cf_store/**
+          if-no-files-found: warn
+          retention-days: 7
