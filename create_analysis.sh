@@ -19,6 +19,11 @@
 #       shell variables of the same name as the queried key (e.g. "cf_analysis_name"), falling
 #       back to the default when such a variable is unset or empty. Useful for running this
 #       script non-interactively, e.g. in CI.
+#   CF_CREATE_ANALYSIS_TEMPLATE_DIR
+#       Only considered when CF_CREATE_ANALYSIS_DEBUG is true-ish. Directory of the analysis template
+#       to copy instead of "analysis_templates/<flavor>" of the local checkout, used in CI to
+#       instantiate the test template (tests/ci/test_template) that is deliberately not offered as
+#       a flavor. The queried flavor still steers the flavor-specific hints printed at the end.
 
 create_analysis() {
     #
@@ -34,6 +39,7 @@ create_analysis() {
     local verbose="${CF_CREATE_ANALYSIS_VERBOSE:-false}"
     local debug="${CF_CREATE_ANALYSIS_DEBUG:-false}"
     local noninteractive="${CF_CREATE_ANALYSIS_NONINTERACTIVE:-false}"
+    local template_dir="${CF_CREATE_ANALYSIS_TEMPLATE_DIR:-}"
     ${debug} && verbose="true"
 
     # zsh options
@@ -246,9 +252,19 @@ create_analysis() {
     echo_color cyan "checking out analysis template to ${cf_analysis_base}"
 
     if ${debug}; then
-        cp -r "${this_dir}/analysis_templates/${cf_analysis_flavor}" "${cf_analysis_base}"
+        if [ -z "${template_dir}" ]; then
+            template_dir="${this_dir}/analysis_templates/${cf_analysis_flavor}"
+        elif [ ! -d "${template_dir}" ]; then
+            >&2 echo "template directory '${template_dir}' (CF_CREATE_ANALYSIS_TEMPLATE_DIR) does not exist"
+            return "1"
+        fi
+        echo "template directory: ${template_dir}"
+        cp -r "${template_dir}" "${cf_analysis_base}"
         cd "${cf_analysis_base}" || return "$?"
     else
+        if [ ! -z "${template_dir}" ]; then
+            >&2 echo_color yellow "ignoring CF_CREATE_ANALYSIS_TEMPLATE_DIR as CF_CREATE_ANALYSIS_DEBUG is not set"
+        fi
         rm -rf "${exec_dir}/.cf_analysis_setup"
         mkdir -p "${exec_dir}/.cf_analysis_setup" || return "$?"
         cd "${exec_dir}/.cf_analysis_setup"

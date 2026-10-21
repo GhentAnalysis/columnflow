@@ -1,7 +1,9 @@
 # CI test-data bundle
 
 `.github/workflows/template_e2e.yaml` runs the `ghent_template` analysis end to end
-(`cf.CalibrateEvents` → `cf.PlotVariables1D`) on a GitHub-hosted `ubuntu-latest` runner. That
+(`cf.CalibrateEvents` → `cf.PlotVariables1D`) on a GitHub-hosted `ubuntu-24.04` runner, and
+`.github/workflows/test_template_e2e.yaml` runs the CI-only test template on the same data with a
+wider task coverage (see "Test template" below). That
 runner has no CERN credentials, no VOMS/arc proxy, and — critically — no `/cvmfs` mount. Five of
 the six leaf `cfg.x.external_files` entries in
 `analysis_templates/ghent_template/__cf_module_name__/config/config___cf_short_name_lc__.py` are
@@ -213,8 +215,10 @@ in a way that's harder to diagnose than a clean 404).
 The tag (`ci-testdata-v1`), the workflow's cache key, the download URL, and the expected digest all
 encode the version/content and must be changed together:
 
-- `.github/workflows/template_e2e.yaml`: the `TESTDATA_TAG` job env var (which drives both the
-  `actions/cache@v4` key and the `curl` URL), and the `TESTDATA_SHA256` job env var next to it —
+- `.github/workflows/template_e2e.yaml` and `.github/workflows/test_template_e2e.yaml`: the
+  `TESTDATA_TAG` env var (passed to the shared `.github/actions/cf-e2e-setup` action, where it
+  drives both the `actions/cache@v4` key and the `curl` URL), and the `TESTDATA_SHA256` env var
+  next to it —
   the workflow downloads the asset to a file and verifies it with `sha256sum -c` before unpacking,
   so an unbumped digest makes every run of the new bundle fail closed rather than silently
   unpacking the wrong (or a corrupted) archive. Get the new digest with:
@@ -230,3 +234,103 @@ Bump the version (e.g. to `ci-testdata-v2`) whenever the bundle contents change 
 existing tag/cache key for different contents means the `actions/cache@v4` step in CI will keep
 serving the old, cached bundle to runners that already have it cached, silently skipping your
 update.
+
+## Test template
+
+`template_e2e.yaml` checks that the user-facing `ghent_template` still works, so it deliberately
+stays close to what a new analysis runs. Testing more of columnflow there (systematic shifts, b-tag
+efficiencies, datacards, ...) would bloat the template every analysis starts from. Wider coverage
+therefore lives in a separate, CI-only **test template** in `tests/ci/test_template/`, run by
+`test_template_e2e.yaml`.
+
+### The template
+
+The test template is derived from `analysis_templates/ghent_template` and keeps its layout and
+placeholders. It lives outside of `analysis_templates/` so that `create_analysis.sh` never offers it
+as a flavor; the workflow instantiates it with `CF_CREATE_ANALYSIS_DEBUG=true` and
+`CF_CREATE_ANALYSIS_TEMPLATE_DIR=tests/ci/test_template`. Compared to the ghent_template, it
+
+- stores all outputs locally and uses a small `chunked_io_chunk_size` in its `law.cfg`, so that
+  `law_user.cfg` only needs runner-specific settings,
+- uses the `all_weights` hist producer by default, so event weights and their shifts are applied
+  (with the pileup weight counted once, see `config/shifts.py`),
+- declares the `jer` shifts in the `default` selector, making `jer` a selection dependent shift that
+  re-runs selection, reduction and production,
+- splits the producer into `features` and `event_weights` (`default` runs both),
+- adds the `test` inference model, which only needs what the test-data bundle provides,
+- restricts `btag_dataset_groups` to `tt_dl_powheg` and adds variables (`jet1_eta`, `ht`, `n_bjet`,
+  `cf_jet1_pt`) and `selector_step_groups`, and
+- drops the broken `example` ML model, hist producer and inference model.
+
+Its config still reads inputs from `/cvmfs` and DAS, so the generated analysis also runs on a machine
+with cvmfs and grid access; in CI, the overlay described above redirects them to the bundle.
+
+### Workflow layout
+
+The workflow consists of a `base` job and a matrix of feature jobs:
+
+- `base` instantiates the template and runs `tests/ci/e2e/base.sh`: calibration, selection (with the
+  stats check), reduction including the merging and `cf.BTagEfficiency`/`cf.BTagEfficiencyPlot`,
+  which every event weight producer requires. It packs the whole analysis directory, store included,
+  into a tarball artifact.
+- Each feature job restores that tarball at the same path and runs one script of `tests/ci/e2e/`:
+  `producers.sh`, `shifts.sh` or `datacards.sh`. Law finds the base outputs complete and only runs
+  what the feature adds. The jobs run in parallel and report their own status.
+
+Each script sources `tests/ci/e2e/lib.sh`, which sets up the analysis and provides `cf_law`,
+`find_one`, `assert_some` and `check_py`. The `check_*.py` scripts assert on the content of outputs
+(stats, efficiencies, shift axes, datacards), not only on their existence: columnflow silently drops
+shift sources that no TAF declares and falls back to nominal, which would otherwise produce green
+but meaningless runs.
+
+The scripts can also be run outside CI from a generated test-template analysis directory, e.g.
+`bash /path/to/columnflow/tests/ci/e2e/base.sh`, with `CF_CI_TESTDATA` pointing at an unpacked
+bundle (or without it on a machine with cvmfs and grid access).
+
+### Artifacts
+
+Every job of both e2e workflows uploads a small `*-results` artifact (kept 7 days), also on failure.
+It holds only the outputs of the plotting and result tasks the job runs itself, one folder per task
+family, collected by `tests/ci/collect_results.sh`:
+
+| Artifact | Task families |
+|---|---|
+| `template-e2e-results` | `cf.PlotVariables1D`, `cf.BTagEfficiencyPlot` |
+| `test-template-base-results` | `cf.BTagEfficiencyPlot` |
+| `test-template-producers-results` | `cf.PlotVariables1D`, `cf.PlotVariables2D`, `cf.CreateYieldTable` |
+| `test-template-shifts-results` | `cf.PlotShiftedVariables1D` |
+| `test-template-datacards-results` | `cf.CreateDatacards` |
+
+The feature jobs leave out the base outputs restored from the tarball, so every plot appears in
+exactly one artifact. The whole store, with all intermediate outputs, is only uploaded when a job
+fails (`*-outputs`).
+
+### Known issues
+
+Bugs found while building the test template are listed individually in `known_issues.md` next to
+this file. Tasks that are blocked by one of them are left out of the e2e scripts with a `TODO`
+pointing there, so they can be added once the bug is fixed.
+
+### Adding a feature job
+
+1. Write `tests/ci/e2e/<feature>.sh`, following the existing scripts, plus `check_*.py` scripts
+   for its outputs.
+2. Add an entry to the `features` matrix in `test_template_e2e.yaml`, with `results` listing the
+   task families whose outputs (plots, tables, datacards) go into its results artifact.
+3. If it needs new config, TAFs or an inference model, add them to the test template, not to the
+   ghent_template.
+4. If it needs a new sandbox, add it to the "Build remaining sandboxes" step of the base job, since
+   feature jobs only restore the venv cache and never save it.
+
+### Sharing outputs between jobs
+
+The feature jobs reuse the base outputs only as long as
+
+- the store paths are identical: same `TASK_ARGS` (notably `--version`), same `law_user.cfg`, and
+  the analysis directory restored at the same absolute path (GitHub-hosted runners use the same
+  `GITHUB_WORKSPACE`),
+- every task output the feature tasks check for exists. `cf.MergeReductionStats` must be included,
+  since `cf.ProvideReducedEvents` reads it to decide whether merged reduced events are used, and
+  `default_keep_reduced_events` must stay `True`,
+- tasks request identical parameters. `cf.MergeHistograms` re-requires `cf.CreateHistograms` with
+  its own variables, so histograms are only reused across requests with the same `--variables`.
