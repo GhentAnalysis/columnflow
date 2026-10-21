@@ -93,9 +93,7 @@ class ReduceEvents(_ReduceEvents):
                 if calibrator_inst.produced_columns
             ],
             "selection": self.reqs.SelectEvents.req(self),
-            "reducer": law.util.make_unique(law.util.flatten(
-                self.reducer_inst.run_requires(task=self),
-            )),
+            "reducer": law.util.make_unique(law.util.flatten(self.reducer_inst.run_requires(task=self))),
         }
 
     def output(self):
@@ -200,18 +198,25 @@ class ReduceEvents(_ReduceEvents):
         # prepare inputs for localization
         with law.localize_file_targets(input_targets, mode="r") as inps:
             # iterate over chunks of events and diffs
-            for (events, sel, *diffs), pos in self.iter_chunked_io(
+            for (events, sel, *cols), pos in self.iter_chunked_io(
                 law.util.map_struct(law.target.file.get_path, inps),
                 source_type=["coffea_root"] + (len(inps) - 1) * ["awkward_parquet"],
+                open_options=self.get_open_options(inps, first_is_nano=True),
+                read_options=self.get_read_options(inps, first_is_nano=True),
                 read_columns=[read_columns, read_sel_columns] + (len(inps) - 2) * [read_columns],
+                filter_config=self.get_filter_configs(inps, first_is_nano=True),
                 chunk_size=self.reducer_inst.get_min_chunk_size(),
             ):
-                # optional check for overlapping inputs within diffs
-                if self.check_overlapping_inputs:
-                    self.raise_if_overlapping(list(diffs))
+                # adjust if necessary
+                if callable(self.adjust_chunks):
+                    events, *cols = self.adjust_chunks([events, *cols])
 
-                # add the calibrated diffs and potentially new columns
-                events = update_ak_array(events, *diffs)
+                # optional check for overlapping inputs within cols
+                if self.check_overlapping_inputs:
+                    self.raise_if_overlapping(list(cols))
+
+                # add the calibrated cols and potentially new columns
+                events = update_ak_array(events, *cols)
 
                 # add aliases
                 events = add_ak_aliases(

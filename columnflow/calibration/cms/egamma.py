@@ -56,6 +56,9 @@ class EGammaCorrectionConfig(TAFConfig):
     smear_syst_compound: bool = False
     systs: list[str] = dataclasses.field(default_factory=lambda: ["scale_down", "scale_up", "smear_down", "smear_up"])
     corrector_kwargs: dict[str, Any] = dataclasses.field(default_factory=dict)
+    # whether parts of the implementation should be offloaded to the egm tools (correctionlib)
+    # (so far, only the "egm_random_generator" is used until the tools are fully released)
+    use_egm_tool: bool = False
 
 
 @calibrator(
@@ -65,12 +68,16 @@ class EGammaCorrectionConfig(TAFConfig):
     collection_name=None,  # to be set in derived classes to "Electron" or "Photon"
     get_scale_smear_config=None,  # to be set in derived classes
     get_correction_file=None,  # to be set in derived classes
+    # function to get the egm tool (correctionlib) file from the config
+    # (see /afs/cern.ch/work/m/mrieger/public/hbt/external_files/custom_egm_files/egm_tools_example.py)
+    get_egm_tool_file=(lambda self, external_files: external_files.egm_tool),
     deterministic_seed_index=-1,  # use deterministic seeds for random smearing when >=0
     store_original=False,  # if original columns (pt, energyErr) should be stored as "*_uncorrected"
 )
 def _egamma_scale_smear(self: Calibrator, events: ak.Array, **kwargs) -> ak.Array:
     # gather inputs
     coll = events[self.collection_name]
+    coll_empty = ak.all(ak.num(coll, axis=1) == 0)
     variable_map = {
         "run": events.run if ak.sum(ak.num(coll, axis=1), axis=0) else [],
         "pt": coll.pt,
@@ -78,8 +85,15 @@ def _egamma_scale_smear(self: Calibrator, events: ak.Array, **kwargs) -> ak.Arra
         "AbsScEta": abs(coll.superclusterEta),
         "r9": coll.r9,
         "seedGain": coll.seedGain,
-        **self.cfg.corrector_kwargs,
+        **self.ss_cfg.corrector_kwargs,
     }
+    if self.egm_tool:
+        variable_map |= {
+            "event": events.event,
+            "seediEtaOriX": coll.seediEtaOriX,
+            "seediPhiOriY": coll.seediPhiOriY,
+        }
+
     def get_inputs(corrector, **additional_variables):
         _variable_map = variable_map | additional_variables
         return (_variable_map[inp.name] for inp in corrector.inputs if inp.name in _variable_map)
@@ -92,11 +106,19 @@ def _egamma_scale_smear(self: Calibrator, events: ak.Array, **kwargs) -> ak.Arra
             events = set_ak_column(events, f"{self.collection_name}.energyErr_scale_uncorrected", coll.energyErr)
 
         # get scaled pt
-        scale = self.scale_corrector.evaluate("scale", *get_inputs(self.scale_corrector))
+        scale = (
+            1.0
+            if coll_empty
+            else self.scale_corrector.evaluate("scale", *get_inputs(self.scale_corrector))
+        )
         pt_scaled = coll.pt * scale
 
         # get scaled energy error
-        smear = self.smear_syst_corrector.evaluate("smear", *get_inputs(self.smear_syst_corrector, pt=pt_scaled))
+        smear = (
+            1.0
+            if coll_empty
+            else self.smear_syst_corrector.evaluate("smear", *get_inputs(self.smear_syst_corrector, pt=pt_scaled))
+        )
         energy_err_scaled = (((coll.energyErr)**2 + (coll.energy * smear)**2))**0.5 * scale
 
         # store columns
@@ -111,19 +133,36 @@ def _egamma_scale_smear(self: Calibrator, events: ak.Array, **kwargs) -> ak.Arra
             events = set_ak_column(events, f"{self.collection_name}.energyErr_smear_uncorrected", coll.energyErr)
 
         # compute random variables in the shape of the collection once
-        rnd_args = (full_like(coll.pt, 0.0), full_like(coll.pt, 1.0))
-        if self.use_deterministic_seeds:
-            rnd_args += (coll.deterministic_seed,)
-            rand_func = self.deterministic_normal
+        if ak.all(ak.num(coll, axis=1) == 0):
+            # use a dummy value if there are no electrons in the event chunk, which would fail broadcastings below
+            rnd = 1.0
+        elif self.egm_tool:
+            # use the random generator from the tools
+            rnd_tool = self.egm_tool["egm_random_generator"]
+            rnd_variable_map = {
+                "event": events.event,
+                "seediEtaOriX": coll.seediEtaOriX,
+                "seediPhiOriY": coll.seediPhiOriY,
+                "eta": coll.superclusterEta,
+            }
+            rnd = 1.0 if coll_empty else rnd_tool.evaluate(*(rnd_variable_map[inp.name] for inp in rnd_tool.inputs))
         else:
-            # TODO: bit generator could be configurable
-            rand_func = np.random.Generator(np.random.SFC64((events.event).to_list())).normal
-        rnd = ak_random(*rnd_args, rand_func=rand_func)
+            rnd_args = (full_like(coll.pt, 0.0), full_like(coll.pt, 1.0))
+            if self.use_deterministic_seeds:
+                rnd_args += (coll.deterministic_seed,)
+                rand_func = self.deterministic_normal
+            else:
+                rand_func = np.random.Generator(np.random.SFC64((events.event).to_list())).normal
+            rnd = ak_random(*rnd_args, rand_func=rand_func)
 
         # helper to compute smeared pt and energy error values given a syst
         def apply_smearing(syst):
             # get smeared pt
-            smear = self.smear_syst_corrector.evaluate(syst, *get_inputs(self.smear_syst_corrector))
+            smear = (
+                1.0
+                if coll_empty
+                else self.smear_syst_corrector.evaluate(syst, *get_inputs(self.smear_syst_corrector))
+            )
             smear_factor = 1.0 + smear * rnd
             pt_smeared = coll.pt * smear_factor
             # get smeared energy error
@@ -137,12 +176,16 @@ def _egamma_scale_smear(self: Calibrator, events: ak.Array, **kwargs) -> ak.Arra
         events = set_ak_column_f32(events, f"{self.collection_name}.energyErr", energy_err_smeared)
 
         # apply scale and smearing uncertainties to MC
-        if self.with_uncertainties and self.cfg.systs:
-            for syst in self.cfg.systs:
+        if self.with_uncertainties and self.ss_cfg.systs:
+            for syst in self.ss_cfg.systs:
                 # exact behavior depends on syst itself
                 if syst in {"scale_up", "scale_down"}:
                     # compute scale with smeared pt and apply muliplicatively to smeared values
-                    scale = self.smear_syst_corrector.evaluate(syst, *get_inputs(self.smear_syst_corrector, pt=pt_smeared))  # noqa: E501
+                    scale = (
+                        1.0
+                        if coll_empty
+                        else self.smear_syst_corrector.evaluate(syst, *get_inputs(self.smear_syst_corrector, pt=pt_smeared))  # noqa: E501
+                    )
                     events = set_ak_column_f32(events, f"{self.collection_name}.pt_{syst}", pt_smeared * scale)
                     events = set_ak_column_f32(events, f"{self.collection_name}.energyErr_{syst}", energy_err_smeared * scale)  # noqa: E501
 
@@ -163,10 +206,13 @@ def _egamma_scale_smear_init(self: Calibrator, **kwargs) -> None:
     super(_egamma_scale_smear, self).init_func(**kwargs)
 
     # store the config
-    self.cfg = self.get_scale_smear_config()
+    self.ss_cfg = self.get_scale_smear_config()
 
     # update used columns
     self.uses |= {"run", f"{self.collection_name}.{{pt,eta,phi,mass,energyErr,superclusterEta,r9,seedGain}}"}
+
+    if self.ss_cfg.use_egm_tool:
+        self.uses |= {"event", f"{self.collection_name}.{{seediEtaOriX,seediPhiOriY}}"}
 
     # update produced columns
     if self.dataset_inst.is_data:
@@ -178,7 +224,7 @@ def _egamma_scale_smear_init(self: Calibrator, **kwargs) -> None:
         if self.store_original:
             self.produces |= {f"{self.collection_name}.{{pt,energyErr}}_smear_uncorrected"}
         if self.with_uncertainties:
-            for syst in self.cfg.systs:
+            for syst in self.ss_cfg.systs:
                 self.produces |= {f"{self.collection_name}.{{pt,energyErr}}_{syst}"}
 
 
@@ -216,12 +262,22 @@ def _egamma_scale_smear_setup(
 
     # setup the correctors
     get_set = lambda set_name, compound: (corr_set.compound if compound else corr_set)[set_name]
-    self.scale_corrector = get_set(self.cfg.scale_correction_set, self.cfg.scale_compound)
-    self.smear_syst_corrector = get_set(self.cfg.smear_syst_correction_set, self.cfg.smear_syst_compound)
+    self.scale_corrector = get_set(self.ss_cfg.scale_correction_set, self.ss_cfg.scale_compound)
+    self.smear_syst_corrector = get_set(self.ss_cfg.smear_syst_correction_set, self.ss_cfg.smear_syst_compound)
+
+    # check if the egm tools should be used, and optionally set it up
+    self.egm_tool = None
+    if self.ss_cfg.use_egm_tool:
+        egm_tool_file = self.get_egm_tool_file(reqs["external_files"].files)
+        self.egm_tool = load_correction_set(egm_tool_file)
 
     # use deterministic seeds for random smearing if requested
     self.use_deterministic_seeds = self.deterministic_seed_index >= 0
     if self.use_deterministic_seeds:
+        # deterministic seeds and the egm tools should not be used simultaneously
+        if self.egm_tool is not None:
+            raise ValueError("deterministic seeds and the egm tools should not be used simultaneously")
+
         idx = self.deterministic_seed_index
         bit_generator = np.random.SFC64
 
@@ -239,8 +295,8 @@ electron_scale_smear = _egamma_scale_smear.derive(
     "electron_scale_smear",
     cls_dict={
         "collection_name": "Electron",
-        "get_scale_smear_config": lambda self: self.config_inst.x.ess,
-        "get_correction_file": lambda self, external_files: external_files.electron_ss,
+        "get_scale_smear_config": (lambda self: self.config_inst.x.ess),
+        "get_correction_file": (lambda self, external_files: external_files.electron_ss),
     },
 )
 
@@ -248,7 +304,7 @@ photon_scale_smear = _egamma_scale_smear.derive(
     "photon_scale_smear",
     cls_dict={
         "collection_name": "Photon",
-        "get_scale_smear_config": lambda self: self.config_inst.x.gss,
-        "get_correction_file": lambda self, external_files: external_files.photon_ss,
+        "get_scale_smear_config": (lambda self: self.config_inst.x.gss),
+        "get_correction_file": (lambda self, external_files: external_files.photon_ss),
     },
 )

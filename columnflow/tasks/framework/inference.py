@@ -12,27 +12,21 @@ import order as od
 from columnflow.tasks.framework.base import Requirements
 from columnflow.tasks.framework.mixins import (
     CalibratorClassesMixin, SelectorClassMixin, ReducerClassMixin, ProducerClassesMixin, HistProducerClassMixin,
-    InferenceModelMixin, HistHookMixin, MLModelsMixin,
+    InferenceModelMixin, HistHookMixin, MLModelsMixin, VariablesMixin,
 )
 from columnflow.tasks.framework.remote import RemoteWorkflow
 from columnflow.tasks.histograms import MergeShiftedHistograms
+from columnflow.inference import InferenceModel
 from columnflow.config_util import get_datasets_from_process
 from columnflow.util import dev_sandbox, DotDict, maybe_import
-from columnflow.types import TYPE_CHECKING
+from columnflow.types import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     hist = maybe_import("hist")
 
 
-class SerializeInferenceModelBase(
-    CalibratorClassesMixin,
-    SelectorClassMixin,
-    ReducerClassMixin,
-    ProducerClassesMixin,
-    MLModelsMixin,
-    HistProducerClassMixin,
+class InferenceModelUser(
     InferenceModelMixin,
-    HistHookMixin,
     law.LocalWorkflow,
     RemoteWorkflow,
 ):
@@ -46,6 +40,23 @@ class SerializeInferenceModelBase(
         RemoteWorkflow.reqs,
         MergeShiftedHistograms=MergeShiftedHistograms,
     )
+
+    _combined_config_data_attr = "_workflow_cached_combined_config_data"
+    transfer_params_to_inst = {_combined_config_data_attr}
+
+    @classmethod
+    def resolve_param_values_post_init(cls, params: dict[str, Any]) -> dict[str, Any]:
+        params = super().resolve_param_values_post_init(params)
+
+        # add combined config data to params
+        if (
+            not params.get(cls._combined_config_data_attr) and
+            (config_insts := params.get("config_insts")) and
+            (inference_model_inst := params.get("inference_model_inst"))
+        ):
+            params[cls._combined_config_data_attr] = cls._combined_config_data(config_insts, inference_model_inst)
+
+        return params
 
     @classmethod
     def get_mc_datasets(cls, config_inst: od.Config, proc_obj: DotDict) -> list[str]:
@@ -107,8 +118,12 @@ class SerializeInferenceModelBase(
             )
         ]
 
-    @law.workflow_property(cache=True)
-    def combined_config_data(self) -> dict[od.ConfigInst, dict[str, dict | set]]:
+    @classmethod
+    def _combined_config_data(
+        cls,
+        config_insts: list[od.Config],
+        inference_model_inst: InferenceModel,
+    ) -> DotDict[od.ConfigInst, dict[str, dict | set]]:
         # prepare data extracted from the inference model
         config_data = {
             config_inst: {
@@ -118,20 +133,20 @@ class SerializeInferenceModelBase(
                 "categories": set(),
                 # plain set of names of real data datasets
                 "data_datasets": set(),
-                # per mc dataset name, the set of shift sources and the names processes to be extracted from them
+                # per mc dataset name, the set of shift sources and the names of processes to be extracted from them
                 "mc_datasets": {},
             }
-            for config_inst in self.config_insts
+            for config_inst in config_insts
         }
 
         # iterate over all model categories
-        for cat_obj in self.inference_model_inst.categories:
+        for cat_obj in inference_model_inst.categories:
             # keep track of per-category information across configs for consistency checks
             variables = set()
             categories = set()
 
             # iterate over configs relevant for this category
-            config_insts = [config_inst for config_inst in self.config_insts if config_inst.name in cat_obj.config_data]
+            config_insts = [config_inst for config_inst in config_insts if config_inst.name in cat_obj.config_data]
             for config_inst in config_insts:
                 data = config_data[config_inst]
 
@@ -143,12 +158,12 @@ class SerializeInferenceModelBase(
                 #   - data in that category is not faked from mc processes, or
                 #   - at least one process object is dynamic (that usually means data-driven)
                 if not cat_obj.data_from_processes or any(proc_obj.is_dynamic for proc_obj in cat_obj.processes):
-                    data["data_datasets"].update(self.get_data_datasets(config_inst, cat_obj))
+                    data["data_datasets"].update(cls.get_data_datasets(config_inst, cat_obj))
 
-                # mc datasets over all process objects
+                # mc datasets over all process objects, but only if
                 #   - the process is not dynamic
                 for proc_obj in cat_obj.processes:
-                    mc_datasets = self.get_mc_datasets(config_inst, proc_obj)
+                    mc_datasets = cls.get_mc_datasets(config_inst, proc_obj)
                     for dataset_name in mc_datasets:
                         if dataset_name not in data["mc_datasets"]:
                             data["mc_datasets"][dataset_name] = {
@@ -163,11 +178,9 @@ class SerializeInferenceModelBase(
                     for param_obj in proc_obj.parameters:
                         if config_inst.name not in param_obj.config_data:
                             continue
-                        # only add if a shift is required for this parameter
-                        if (
-                            (param_obj.type.is_shape and not param_obj.transformations.any_from_rate) or
-                            (param_obj.type.is_rate and param_obj.transformations.any_from_shape)
-                        ):
+                        # check if a shift source is required for this parameter
+                        needs_source = param_obj.type.is_shape
+                        if needs_source and config_inst.name in param_obj.config_data:
                             shift_source = param_obj.config_data[config_inst.name].shift_source
                             for mc_dataset in mc_datasets:
                                 data["mc_datasets"][mc_dataset]["shift_sources"].add(shift_source)
@@ -188,31 +201,63 @@ class SerializeInferenceModelBase(
                     f"{', '.join(c.name for c in config_insts)}: {categories}",
                 )
 
-        return config_data
+        return DotDict.wrap(config_data)
+
+    @law.workflow_property(cache=True)
+    def combined_config_data(self) -> DotDict[od.ConfigInst, dict[str, dict | set]]:
+        return self._combined_config_data(self.config_insts, self.inference_model_inst)
+
+    def req_branch(self, branch: int, **kwargs) -> InferenceModelUser:
+        kwargs.setdefault(self._combined_config_data_attr, self.combined_config_data)
+        return super().req_branch(branch, **kwargs)
+
+
+class _SerializeInferenceModelBase(
+    CalibratorClassesMixin,
+    SelectorClassMixin,
+    ReducerClassMixin,
+    ProducerClassesMixin,
+    MLModelsMixin,
+    HistProducerClassMixin,
+    HistHookMixin,
+    InferenceModelUser,
+):
+    """
+    Base classes for :py:class:`SerializeInferenceModelBase`.
+    """
+
+
+class SerializeInferenceModelBase(_SerializeInferenceModelBase):
+
+    # upstream requirements
+    reqs = Requirements(
+        RemoteWorkflow.reqs,
+        MergeShiftedHistograms=MergeShiftedHistograms,
+    )
 
     def create_branch_map(self):
         # dummy branch map
         return {0: None}
 
-    def _hist_requirement(self, **kwargs):
+    def requires_histogram(self, **kwargs):
         return self.reqs.MergeShiftedHistograms.req_different_branching(self, **kwargs)
 
-    def _hist_requirements(self, **kwargs):
+    def requires_histograms(self, **kwargs):
         # gather data from inference model to define requirements in the structure
         # config_name -> dataset_name -> MergeHistogramsTask
         reqs = {}
         for config_inst, data in self.combined_config_data.items():
             reqs[config_inst.name] = {}
             # ensure that all variables exist
-            for var_name in data["variables"]:
+            for var_name in set.union(*map(set, map(VariablesMixin.split_multi_variable, data["variables"]))):
                 if not config_inst.has_variable(var_name):
                     raise ValueError(
-                        f"config '{config_inst.name}' does not have variable '{var_name}' required by inference model "
-                        f"'{self.inference_model}'",
+                        f"config '{config_inst.name}' does not have variable '{var_name}' defined as required by "
+                        f"inference model '{self.inference_model}'",
                     )
             # mc datasets
             for dataset_name in sorted(data["mc_datasets"]):
-                reqs[config_inst.name][dataset_name] = self._hist_requirement(
+                reqs[config_inst.name][dataset_name] = self.requires_histogram(
                     config=config_inst.name,
                     dataset=dataset_name,
                     shift_sources=("nominal",) + tuple(sorted(data["mc_datasets"][dataset_name]["shift_sources"])),
@@ -222,7 +267,7 @@ class SerializeInferenceModelBase(
 
             # data datasets, no shift sources so not chunked
             for dataset_name in sorted(data["data_datasets"]):
-                reqs[config_inst.name][dataset_name] = self._hist_requirement(
+                reqs[config_inst.name][dataset_name] = self.requires_histogram(
                     config=config_inst.name,
                     dataset=dataset_name,
                     shift_sources=("nominal",),
@@ -234,11 +279,11 @@ class SerializeInferenceModelBase(
 
     def workflow_requires(self):
         reqs = super().workflow_requires()
-        reqs["merged_hists"] = self._hist_requirements()
+        reqs["merged_hists"] = self.requires_histograms()
         return reqs
 
     def requires(self):
-        return self._hist_requirements(branch=-1, workflow="local")
+        return self.requires_histograms(branch=-1, workflow="local")
 
     def load_process_hists(
         self,
@@ -262,7 +307,7 @@ class SerializeInferenceModelBase(
                     except Exception as e:
                         raise Exception(
                             f"failed to load '{variable}' histogram for dataset '{dataset_name}' in config "
-                            f"'{config_inst.name}' from {inp.abspath}",
+                            f"'{config_inst.name}' from {inp['hists'][variable].abspath}",
                         ) from e
 
                     # determine processes to extract

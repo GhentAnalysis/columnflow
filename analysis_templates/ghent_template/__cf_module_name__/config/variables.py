@@ -43,4 +43,3 @@ def add_variables(config: od.Config) -> None:
         x_title="Gen-level Top pT",
         unit="GeV",
     )
-
