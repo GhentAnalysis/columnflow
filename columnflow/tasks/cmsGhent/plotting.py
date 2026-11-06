@@ -3,6 +3,7 @@ import order as od
 import luigi
 from collections import OrderedDict
 
+from columnflow.types import Any
 from columnflow.tasks.plotting import PlotVariablesBaseSingleShift, PlotVariables1D
 from columnflow.tasks.framework.plotting import PlotBase1D, PlotBase, PlotBase2D
 from columnflow.tasks.framework.decorators import view_output_plots
@@ -183,60 +184,67 @@ class PlotVariables2DMigration(
 class MultiVarMixin:
 
     def requires(self):
+
+        if self.is_branch() and self.bypass_branch_requirements:
+            return {}
+
         variables = ",".join([",".join(self.variable_tuples[vr]) for vr in self.variables])
         reqs = {
-            dataset: self.reqs.MergeHistograms.req(
-                self,
-                variables=variables,
-                branch=-1,
-                dataset=dataset,
-                _exclude={"branches"},
-                _prefer_cli={"variables"},
-            )
-            for dataset in self.datasets
+            config_inst.name: {
+                dataset: self.reqs.MergeHistograms.req_different_branching(
+                    self,
+                    variables=variables,
+                    config=config_inst.name,
+                    branch=-1,
+                    dataset=dataset,
+                    _exclude={"branches"},
+                    _prefer_cli={"variables"},
+                )
+                for dataset in datasets
+            }
+            for config_inst, datasets in zip(self.config_insts, self.datasets)
         }
         return reqs
 
     def run_var(
-            self,
-            variable_inst: od.Variable,
-            sub_process_insts: dict[od.Process, list[od.Process]],
-            category_insts: list[od.Category],
-            plot_shifts: list[od.Shift],
+        self,
+        variable_inst: od.Variable,
+        config_process_map: dict[od.Config, dict[od.Process, dict[str, Any]]],
+        plot_shifts: list[od.Shift],
     ):
+        import hist
         hists = {}
-        process_insts = list(sub_process_insts)
 
         inputs = self.input() or self.workflow_input().merged_hists
-        for dataset, inp in inputs.items():
-            dataset_inst = self.config_inst.get_dataset(dataset)
-            h_in = inp["collection"][0]["hists"].targets[variable_inst.name].load(formatter="pickle")
+        for i, (config, dataset_dict) in enumerate(inputs.items()):
+            config_inst = self.config_insts[i]
+            hists[config_inst] = {}
+            for dataset, inp in dataset_dict.items():
+                dataset_inst = config_inst.get_dataset(dataset)
+                h_in = inp["collection"][0]["hists"].targets[variable_inst.name].load(formatter="pickle")
 
-            # loop and extract one histogram per process
-            for process_inst in process_insts:
-                # skip when the dataset is already known to not contain any sub process
-                if not any(
-                        dataset_inst.has_process(sub_process_inst.name)
-                        for sub_process_inst in sub_process_insts[process_inst]
-                ):
-                    continue
+                # loop and extract one histogram per process
+                for process_inst, process_info in config_process_map[config_inst].items():
+                    # skip when the dataset is already known to not contain any sub process
+                    if dataset_inst not in process_info["dataset_proc_name_map"].keys():
+                        breakpoint()
 
-                # select processes and reduce axis
-                h = h_in.copy()
-                h = h[{
-                    "process": [
-                        p.name
-                        for p in sub_process_insts[process_inst]
-                        if p.name in h.axes["process"]
-                    ],
-                }]
-                h = h[{"process": sum}]
+                    # select processes and reduce axis
+                    h = h_in.copy()
+                    h = h[{
+                        "process": [
+                            hist.loc(proc_name)
+                            for proc_name in process_info["dataset_proc_name_map"][dataset_inst]
+                            if proc_name in h.axes["process"]
+                        ],
+                    }]
+                    h = h[{"process": sum}]
 
-                # add the histogram
-                if process_inst in hists:
-                    hists[process_inst] += h
-                else:
-                    hists[process_inst] = h
+                    # add the histogram
+                    if process_inst in hists[config_inst]:
+                        hists[config_inst][process_inst] += h
+                    else:
+                        hists[config_inst][process_inst] = h
 
         # there should be hists to plot
         if not hists:
@@ -247,47 +255,50 @@ class MultiVarMixin:
             )
 
         # update histograms using a custom hook
-        hists = self.invoke_hist_hook(hists)
+        hists = self.invoke_hist_hooks(hists)
 
         # add new processes to the end of the list
+        process_insts = list(config_process_map[config_inst])
         for process_inst in hists:
             if process_inst not in process_insts:
                 process_insts.append(process_inst)
 
         # axis selections and reductions, including sorting by process order
         _hists = OrderedDict()
-        for process_inst in sorted(hists, key=process_insts.index):
-            h = hists[process_inst]
-            # selections
-            h = h[{
-                "category": [
-                    c.name
-                    for c in category_insts
-                    if c.name in h.axes["category"]
-                ],
-                "shift": [
-                    s.name
-                    for s in plot_shifts
-                    if s.name in h.axes["shift"]
-                ],
-            }]
-            # reductions
-            h = h[{"category": sum}]
-            # store
-            _hists[process_inst] = h
+        for config_inst, config_hists in hists.items():
+            category_inst = config_inst.get_category(self.branch_data.category)
+            leaf_category_insts = category_inst.get_leaf_categories() or [category_inst]
+            for process_inst in sorted(config_hists, key=process_insts.index):
+                h = config_hists[process_inst]
+                # selections
+                h = h[{
+                    "category": [
+                        c.name
+                        for c in leaf_category_insts
+                        if c.name in h.axes["category"]
+                    ],
+                    "shift": [
+                        s.name
+                        for s in plot_shifts
+                        if s.name in h.axes["shift"]
+                    ],
+                }]
+                # reductions
+                h = h[{"category": sum}]
+                # store
+                _hists[process_inst] = h
         return _hists
 
 
-class PlotVariables1DMultiVar(MultiVarMixin, PlotVariables1D):
+class PlotVariables1DMultiVar(
+    MultiVarMixin,
+    PlotVariables1D,
+):
 
     exclude_index = False
 
     plot_function = PlotVariables1D.plot_function.copy(
         default="columnflow.plotting.cmsGhent.plot_functions_1d.plot_multi_variables",
-    )
-
-    skip_ratio = PlotVariables1D.skip_ratio.copy(
-        default=True,
     )
 
     @law.decorator.log
@@ -302,25 +313,18 @@ class PlotVariables1DMultiVar(MultiVarMixin, PlotVariables1D):
             self.config_inst.get_variable(var_name)
             for var_name in variable_tuple
         ]
-        category_inst = self.config_inst.get_category(self.branch_data.category)
-        leaf_category_insts = [category_inst]
-        process_insts = list(map(self.config_inst.get_process, self.processes))
-        sub_process_insts = {
-            proc: [sub for sub, _, _ in proc.walk_processes(include_self=True)]
-            for proc in process_insts
-        }
+        config_process_map, process_shift_map = self.get_config_process_map()
 
         # histogram data per variable
         hists = {}
 
-        with self.publish_step(f"plotting {self.branch_data.variable} in {category_inst.name}"):
+        with self.publish_step(f"plotting {self.branch_data.variable} in {self.branch_data.category}"):
 
             # histogram data per variable
-
             for variable_inst in variable_insts:
-                var_hists = self.run_var(variable_inst, sub_process_insts, leaf_category_insts, plot_shifts)
+                var_hists = self.run_var(variable_inst, config_process_map, plot_shifts)
                 var_hists = list(var_hists.values())
-                hists[variable_inst] = sum(var_hists[1:], var_hists[0])
+                hists[variable_inst] = hists.get(variable_inst, 0) + sum(var_hists[1:], var_hists[0])
 
             # sort hists by varianle order
             hists = OrderedDict(
@@ -328,6 +332,7 @@ class PlotVariables1DMultiVar(MultiVarMixin, PlotVariables1D):
                 for variable_inst in sorted(hists, key=variable_insts.index)
             )
             # call the plot function
+            category_inst = self.config_inst.get_category(self.branch_data.category)
             fig, _ = self.call_plot_func(
                 self.plot_function,
                 hists=hists,
