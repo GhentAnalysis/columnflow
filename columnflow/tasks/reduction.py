@@ -74,11 +74,12 @@ class ReduceEvents(_ReduceEvents):
                 for calibrator_inst in self.calibrator_insts
                 if calibrator_inst.produced_columns
             ]
-            reqs["selection"] = self.reqs.SelectEvents.req(self)
             # reducer dependent requirements
             reqs["reducer"] = law.util.make_unique(law.util.flatten(
                 self.reducer_inst.run_requires(task=self),
             ))
+            if not self.selector_inst.skip_func():
+                reqs["selection"] = self.reqs.SelectEvents.req(self)
         else:
             # pass-through pilot workflow requirements of upstream task
             t = self.reqs.SelectEvents.req(self)
@@ -87,7 +88,7 @@ class ReduceEvents(_ReduceEvents):
         return reqs
 
     def requires(self):
-        return {
+        out = {
             "lfns": self.reqs.GetDatasetLFNs.req(self),
             "calibrations": [
                 self.reqs.CalibrateEvents.req(
@@ -98,11 +99,13 @@ class ReduceEvents(_ReduceEvents):
                 for calibrator_inst in self.calibrator_insts
                 if calibrator_inst.produced_columns
             ],
-            "selection": self.reqs.SelectEvents.req(self),
             "reducer": law.util.make_unique(law.util.flatten(
                 self.reducer_inst.run_requires(task=self),
             )),
         }
+        if not self.selector_inst.skip_func():
+            out["selection"] = self.reqs.SelectEvents.req(self)
+        return out
 
     def check_parquet(self, inputs):
         from columnflow.columnar_util_Ghent import remove_corrupted_parquet
@@ -147,11 +150,12 @@ class ReduceEvents(_ReduceEvents):
         # for evaluating new object collections to write based on the "objects" field of the selection result data,
         # create a mapping of src_col to dst_col's using only file meta data
         self.collection_map: dict[str, list[str]] = {}
-        sel_meta = inputs["selection"]["results"].load(formatter="dask_awkward")
-        if "objects" in sel_meta.fields:
-            for src_col in sel_meta.objects.fields:
-                self.collection_map[src_col] = list(sel_meta.objects[src_col].fields)
-        del sel_meta
+        if "selection" in inputs:
+            sel_meta = inputs["selection"]["results"].load(formatter="dask_awkward")
+            if "objects" in sel_meta.fields:
+                for src_col in sel_meta.objects.fields:
+                    self.collection_map[src_col] = list(sel_meta.objects[src_col].fields)
+            del sel_meta
 
         # run the reducer setup
         self._array_function_post_init()
@@ -202,21 +206,31 @@ class ReduceEvents(_ReduceEvents):
 
         # collect input targets
         input_targets = [input_file]
-        input_targets.append(inputs["selection"]["results"])
+        if "selection" in inputs:
+            input_targets.append(inputs["selection"]["results"])
         input_targets.extend([inp["columns"] for inp in inputs["calibrations"]])
-        if self.selector_inst.produced_columns:
+        if "selection" in inputs and self.selector_inst.produced_columns:
             input_targets.append(inputs["selection"]["columns"])
         input_targets.extend(reader_targets.values())
+
+        read_columns_all = [read_columns]
+        if "selection" in inputs:
+            read_columns_all.append(read_sel_columns)
+        read_columns_all.extend((len(input_targets) - len(read_columns_all)) * [read_columns])
 
         # prepare inputs for localization
         with law.localize_file_targets(input_targets, mode="r") as inps:
             # iterate over chunks of events and diffs
-            for (events, sel, *diffs), pos in self.iter_chunked_io(
+            for (events, *diffs), pos in self.iter_chunked_io(
                 [inp.abspath for inp in inps],
                 source_type=["coffea_root"] + (len(inps) - 1) * ["awkward_parquet"],
-                read_columns=[read_columns, read_sel_columns] + (len(inps) - 2) * [read_columns],
+                read_columns=read_columns_all,
                 chunk_size=self.reducer_inst.get_min_chunk_size(),
             ):
+                sel = None
+                if "selection" in inputs:
+                    sel, *diffs = diffs
+
                 # optional check for overlapping inputs within diffs
                 if self.check_overlapping_inputs:
                     self.raise_if_overlapping(list(diffs))
