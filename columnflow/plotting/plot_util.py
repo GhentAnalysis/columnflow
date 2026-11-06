@@ -270,11 +270,13 @@ def apply_variable_settings(
 
         # rebinning
         rebin_factor = get_attr_or_aux(var_inst, "rebin", None)
-        if try_int(rebin_factor):
+        if try_int(rebin_factor) or law.util.is_iterable(rebin_factor):
+            if try_int(rebin_factor):
+               _rebin = hist.rebin(rebin_factor)
+            else:
+                _rebin = hist.rebin(groups=list(map(int, rebin_factor)))
             for proc_inst, h in list(hists.items()):
-                rebin_factor = int(rebin_factor)
-                h = h[{var_inst.name: hist.rebin(rebin_factor)}]
-                hists[proc_inst] = h
+                hists[proc_inst] = h[{var_inst.name: _rebin}]
 
         # overflow and underflow bins
         overflow = get_attr_or_aux(var_inst, "overflow", False)
