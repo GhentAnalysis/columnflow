@@ -294,9 +294,10 @@ def plot_shifted_variable(
     for i, shift_inst in enumerate(shift_insts):
         h = h_sum[{"shift": hist.loc(shift_inst.name)}]
         # assuming `nominal` always has shift id 0
-        ratio_norm = h_sum[{"shift": hist.loc("nominal")}].values()
+        ratio_norm = h_sum[{"shift": hist.loc("nominal")}]
+        h_norm = sum(h.values(flow=True))
 
-        diff = sum(h.values()) / sum(ratio_norm) - 1
+        diff = h_norm / sum(ratio_norm.values(flow=True)) - 1
         label = shift_inst.label
         if not shift_inst.is_nominal:
             label += " ({0:+.2f}%)".format(diff * 100)
@@ -305,12 +306,12 @@ def plot_shifted_variable(
             "method": "draw_hist",
             "hist": h,
             "kwargs": {
-                "norm": sum(h.values()) if shape_norm else 1,
+                "norm": h_norm if shape_norm else 1,
                 "label": label,
                 "color": colors[shift_inst.direction],
             },
             "ratio_kwargs": {
-                "norm": ratio_norm,
+                "norm": ratio_norm.values() * (1 + diff if shape_norm else 1),
                 "color": colors[shift_inst.direction],
             },
         }
