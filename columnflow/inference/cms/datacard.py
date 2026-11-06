@@ -662,6 +662,10 @@ class DatacardWriter(object):
                 proc_obj = self.inference_model_inst.get_process(proc_name, category=cat_name)
                 scale = proc_obj.scale
 
+                # skipped, but can still included in fake data (unscaled)
+                if scale <= 0:
+                    continue
+
                 # nominal shape
                 nom_name = nom_pattern.format(category=cat_name, process=proc_name)
                 h_nom = load(nom_name, "nominal", scale=scale)
