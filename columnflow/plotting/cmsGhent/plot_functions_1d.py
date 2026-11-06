@@ -73,8 +73,8 @@ def plot_multi_variables(
     2. The x label is VAR.x.x_title_multi for the first variable VAR if it is defined. If not, VAR.x_title.
     3. For the legend, each variable VAR is labeled using VAR.x_title_short
     """
-    remove_residual_axis(hists, "shift")
-    remove_residual_axis(hists, "process", max_bins=np.inf)
+    hists = remove_residual_axis(hists, "shift")
+    hists = remove_residual_axis(hists, "process", max_bins=np.inf)
 
     variable_insts = list(hists)
 
