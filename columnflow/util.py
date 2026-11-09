@@ -378,7 +378,7 @@ def ensure_proxy(
     return before_call, call, after_call
 
 
-def dev_sandbox(sandbox: str, add: bool = True, remove: bool = True) -> str:
+def dev_sandbox(sandbox: str, add: bool = False, remove: bool = True) -> str:
     """
     Takes a sandbox key *sandbox* and adds or removes the substring "_dev" right before the file
     extension (if any), depending on whether the current environment is used for development (see

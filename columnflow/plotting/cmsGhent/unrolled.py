@@ -469,12 +469,12 @@ def plot_unrolled(
 
         # one label on left
         mplhep.cms.label(ax=axes[0], llabel=cms_label_kwargs["llabel"],
-                         data=cms_label_kwargs["data"], rlabel="")
+                         data=cms_label_kwargs["data"], rlabel="", fontsize=16)
 
         # one label on right
         mplhep.cms.label(ax=axes[-1], llabel="", label="", exp="",
                          lumi=cms_label_kwargs["lumi"],
-                         com=cms_label_kwargs["com"])
+                         com=cms_label_kwargs["com"], fontsize=16)
 
     plt.tight_layout()
 

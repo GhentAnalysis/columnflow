@@ -268,8 +268,12 @@ def fixed_wp_btag_weights_init(self: Producer) -> None:
     # determine to which btag_dataset_group the dataset belongs.
     # btag efficiency will be calculated for the btag_dataset_group
     # default value of datasets to calculate the efficiency is the dataset of the produce task
-    self.datasets = [self.dataset_inst.name]
-    self.dataset_group = self.dataset_inst.processes.names()[0]
+
+    # TODO: make general for all datasets/dataset_groups
+    # self.datasets = [self.dataset_inst.name]
+    # self.dataset_group = self.dataset_inst.processes.names()[0]
+    self.datasets = "tttt_amcatnlo"
+    self.dataset_group = "tttt"
 
     if hasattr(self.config_inst.x, "btag_dataset_groups"):
         for btag_group in self.config_inst.x.btag_dataset_groups:

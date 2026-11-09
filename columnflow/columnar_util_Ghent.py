@@ -40,6 +40,19 @@ def TetraVec(arr: ak.Array, keep: Sequence | str | Literal[-1] = -1) -> ak.Array
     )
 
 
+def vector_sum(vec, axis=1):
+    return ak.zip(
+        {
+            "px": ak.sum(vec.px, axis=axis),
+            "py": ak.sum(vec.py, axis=axis),
+            "pz": ak.sum(vec.pz, axis=axis),
+            "E": ak.sum(vec.energy, axis=axis),
+        },
+        with_name="LorentzVector",
+        behavior=vec.behavior,
+    )
+
+
 def safe_concatenate(arrays, *args, **kwargs):
     n = len(arrays)
     if n > 2 ** 7:
@@ -58,3 +71,4 @@ def remove_obj_overlap(*arrays, objects=("Jet", "Electron", "Muon")):
                 if has_ak_column(c0, obj) and has_ak_column(c, obj):
                     arrays[i2] = c0 = remove_ak_column(c0, obj)
     return arrays
+

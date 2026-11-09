@@ -143,7 +143,6 @@ class SelectionEfficiencyHistMixin(
             # map dataset to one of to requested processes
             _, xsec = self.get_process_xsec(dataset, self.config_inst)
             dataset_inst = self.config_inst.get_dataset(dataset)
-
             h_in = inp["collection"][0]["hists"].load(formatter="pickle")[name]
             for variable_inst in variable_insts:
                 v_idx = h_in.axes.name.index(variable_inst.name)

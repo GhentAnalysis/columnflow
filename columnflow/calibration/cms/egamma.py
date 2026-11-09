@@ -72,7 +72,8 @@ def _egamma_scale_smear(self: Calibrator, events: ak.Array, **kwargs) -> ak.Arra
     # gather inputs
     coll = events[self.collection_name]
     variable_map = {
-        "run": events.run if ak.sum(ak.num(coll, axis=1), axis=0) else [],
+        # "run": events.run if ak.sum(ak.num(coll, axis=1), axis=0) else [],
+        "run": ak.broadcast_arrays(events.run, coll.pt)[0],
         "pt": coll.pt,
         "ScEta": coll.superclusterEta,
         "AbsScEta": abs(coll.superclusterEta),
@@ -93,6 +94,7 @@ def _egamma_scale_smear(self: Calibrator, events: ak.Array, **kwargs) -> ak.Arra
 
         # get scaled pt
         scale = self.scale_corrector.evaluate("scale", *get_inputs(self.scale_corrector))
+        breakpoint()
         pt_scaled = coll.pt * scale
 
         # get scaled energy error

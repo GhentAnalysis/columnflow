@@ -250,7 +250,6 @@ class CreateHistograms(_CreateHistograms):
                 # invoke the hist producer, potentially updating columns and creating the event weight
                 events = attach_coffea_behavior(events)
                 events, weight = self.hist_producer_inst(events, task=self)
-
                 if len(events) == 0:
                     self.publish_message(f"no events found in chunk {pos}")
                     continue

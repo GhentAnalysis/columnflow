@@ -70,6 +70,9 @@ class CreateDatacards(SerializeInferenceModelBase):
             input_hists: dict[od.Config, dict[od.Process, hist.Hist]] = {}
             for config_inst in variable_config_insts:
                 data = self.combined_config_data[config_inst]
+                print("MC datasets:")
+                import pprint
+                pprint.pp(data["mc_datasets"])
                 input_hists[config_inst] = self.load_process_hists(
                     config_inst,
                     {

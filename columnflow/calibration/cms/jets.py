@@ -416,6 +416,16 @@ def jec(
 
     # nominal met propagation
     if self.propagate_met:
+        # Check and handle non-finite MET values
+        inf_met = ~np.isfinite(events[self.raw_met_name].pt)
+
+        def protect(arr):
+            return ak.where(inf_met, 0., arr)
+        if ak.any(inf_met):
+            print(f"Found infinite MET values, replacing with 0.")
+        events = set_ak_column_f32(events, f"{self.raw_met_name}.pt", protect(events[self.raw_met_name].pt))
+        events = set_ak_column_f32(events, f"{self.raw_met_name}.phi", protect(events[self.raw_met_name].phi))
+
         # get pt and phi of all jets after correcting
         jetsum = events[jet_name][met_prop_mask].sum(axis=1)
         jetsum_pt_all_levels = jetsum.pt
@@ -621,7 +631,7 @@ def jec_setup(
                 )
             jec_era = self.dataset_inst.get_aux("jec_era", None)
             # if no special JEC era is specified, infer based on 'era'
-            if jec_era is None:
+            if (jec_era is None):
                 era = self.dataset_inst.get_aux("era", None)
                 if era is None:
                     raise ValueError(
@@ -967,9 +977,16 @@ def jer(self: Calibrator, events: ak.Array, **kwargs) -> ak.Array:
 
     # met propagation
     if self.propagate_met:
+        # check met finiteness
+        inf_met = ~np.isfinite(events[met_name].pt)
+        def protect(arr):
+            return ak.where(inf_met, 0., arr)
+        if ak.any(inf_met):
+            print(f"Found infinite met")
+
         # save unsmeared quantities
-        events = set_ak_column_f32(events, f"{met_name}.pt_unsmeared", events[met_name].pt)
-        events = set_ak_column_f32(events, f"{met_name}.phi_unsmeared", events[met_name].phi)
+        events = set_ak_column_f32(events, f"{met_name}.pt_unsmeared", protect(events[met_name].pt))
+        events = set_ak_column_f32(events, f"{met_name}.phi_unsmeared", protect(events[met_name].phi))
 
         # propagate per variation
         for postfix in self.met_postfixes:
@@ -992,9 +1009,8 @@ def jer(self: Calibrator, events: ak.Array, **kwargs) -> ak.Array:
                 events[met_name][f"pt{postfix}"],
                 events[met_name][f"phi{postfix}"],
             )
-
-            events = set_ak_column_f32(events, f"{met_name}.pt{postfix}", met_pt)
-            events = set_ak_column_f32(events, f"{met_name}.phi{postfix}", met_phi)
+            events = set_ak_column_f32(events, f"{met_name}.pt{postfix}", protect(met_pt))
+            events = set_ak_column_f32(events, f"{met_name}.phi{postfix}", protect(met_phi))
 
     return events
 

@@ -546,7 +546,11 @@ def prepare_stack_plot_config(
     data_hists, data_hide_stat_errors = [], []
     data_label = None
 
-    default_shift = shift_insts[0].name if len(shift_insts) == 1 else "nominal"
+    # determine default shift: if no shift_insts provided, fall back to 'nominal'
+    if not shift_insts:
+        default_shift = "nominal"
+    else:
+        default_shift = shift_insts[0].name if len(shift_insts) == 1 else "nominal"
 
     for process_inst, h in hists.items():
         # if given, per-process setting overrides task parameter

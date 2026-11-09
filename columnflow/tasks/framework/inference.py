@@ -261,7 +261,6 @@ class SerializeInferenceModelBase(
                 for process_inst in process_insts:
                     # gather all subprocesses for a full query later
                     sub_process_insts = [sub for sub, _, _ in process_inst.walk_processes(include_self=True)]
-
                     # there must be at least one matching sub process
                     if not any(p.name in h.axes["process"] for p in sub_process_insts):
                         raise Exception(f"no '{variable}' histograms found for process '{process_inst.name}'")
