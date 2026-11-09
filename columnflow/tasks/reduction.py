@@ -297,9 +297,9 @@ class _MergeReductionStats(
 class MergeReductionStats(_MergeReductionStats):
 
     n_inputs = luigi.IntParameter(
-        default=10,
+        default=100,
         significant=True,
-        description="minimal number of input files to infer merging factors with sufficient statistics; default: 10",
+        description="minimal number of input files to infer merging factors with sufficient statistics; default: 100",
     )
     merged_size = law.BytesParameter(
         default=law.NO_FLOAT,

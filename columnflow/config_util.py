@@ -419,6 +419,66 @@ def expand_shift_sources(shifts: Sequence[str] | set[str]) -> list[str]:
     return law.util.make_unique(_shifts)
 
 
+def get_collection_subshifts(shift_inst: od.Shift | None) -> list[str]:
+    """
+    Returns the names of the shifts contained in a collection shift *shift_inst*, i.e., a shift tagged
+    ``is_collection`` that stores the names of its sub shifts in the ``subshifts`` auxiliary entry. Histograms
+    for all sub shifts are created at once when running with the collection shift (e.g. with the ``shifts_hist``
+    histogram producer of the tttt analysis). An empty list is returned for all other shifts.
+    """
+    if shift_inst is None or not shift_inst.has_tag("is_collection"):
+        return []
+    return list(shift_inst.x("subshifts", []))
+
+
+def get_shift_collection_source_map(config: od.Config) -> dict[str, str]:
+    """
+    Returns a mapping of shift sources to the source of the collection shift (see
+    :py:func:`get_collection_subshifts`) that contains them, based on the up variations of all shifts in *config*.
+    When a source is contained in multiple collections, the first one is used.
+    """
+    source_map = {}
+    for shift_inst in config.shifts:
+        if not shift_inst.is_up:
+            continue
+        for subshift in get_collection_subshifts(shift_inst):
+            source_map.setdefault(od.Shift.split_name(subshift)[0], shift_inst.source)
+
+    return source_map
+
+
+def expand_shift_collections(configs: list[od.Config], shifts: Sequence[str]) -> list[str]:
+    """
+    Given a sequence of *shifts* names, replaces the names of collection shifts found in any of the *configs* with
+    the names of their sub shifts (see :py:func:`get_collection_subshifts`) and returns them in a common list.
+    """
+    _shifts = []
+    for shift in shifts:
+        subshifts = get_collection_subshifts(get_shift_from_configs(configs, shift, silent=True))
+        _shifts.extend(subshifts or [shift])
+
+    return law.util.make_unique(_shifts)
+
+
+def expand_shift_collection_sources(configs: list[od.Config], shift_sources: Sequence[str]) -> list[str]:
+    """
+    Given a sequence of *shift_sources*, replaces sources of collection shifts found in any of the *configs* with the
+    sources of their sub shifts (see :py:func:`get_collection_subshifts`) and returns them in a common list.
+    """
+    _sources = []
+    for source in shift_sources:
+        _sources.extend(
+            [
+                od.Shift.split_name(subshift)[0]
+                for subshift in expand_shift_collections(configs, [f"{source}_{od.Shift.UP}"])
+            ]
+            if source != od.Shift.NOMINAL
+            else [source],
+        )
+
+    return law.util.make_unique(_sources)
+
+
 class CategoryIDCache(PersistentCache):
 
     def __init__(self, cache_path: od.Config | str | pathlib.Path | law.FileSystemFileTarget) -> None:

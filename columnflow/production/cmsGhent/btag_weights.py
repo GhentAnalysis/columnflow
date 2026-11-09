@@ -326,11 +326,13 @@ def fixed_wp_btag_weights_setup(
 
     correction_set_btag_wp_corr = setup_btag(self, task, reqs)
 
-    # fix for change in nomenclature of deepJet scale factors for light hadronFlavour jets
-    if self.config_inst.x.year <= 2018:
-        self.btag_sf_incl_corrector = correction_set_btag_wp_corr[f"{self.btag_config.correction_set}_incl"]
-    else:
-        self.btag_sf_incl_corrector = correction_set_btag_wp_corr[f"{self.btag_config.correction_set}_light"]
+    # light hadronFlavour scale factors are called "_light", except in the older (e.g. Run 2 nanoAODv9 deepJet)
+    # files that only provide them as "_incl"
+    light_name = f"{self.btag_config.correction_set}_light"
+    # NOTE: "in" directly on a CorrectionSet raises an IndexError for missing keys
+    if light_name not in list(correction_set_btag_wp_corr.keys()):
+        light_name = f"{self.btag_config.correction_set}_incl"
+    self.btag_sf_incl_corrector = correction_set_btag_wp_corr[light_name]
     self.btag_sf_comb_corrector = correction_set_btag_wp_corr[f"{self.btag_config.correction_set}_comb"]
 
     # unpack the b-tagging efficiency

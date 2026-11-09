@@ -28,6 +28,18 @@ if TYPE_CHECKING:
     plt = maybe_import("matplotlib.pyplot")
 
 
+def get_bin_positions(axis) -> tuple[np.ndarray, np.ndarray]:
+    """
+    Returns the x positions (centers) and widths of the bins of *axis* as drawn by mplhep, which places discrete axes
+    (e.g. hist.axis.Integer) by bin index instead of by value, i.e., with bin i spanning [i, i + 1]. Drawing methods
+    that do not use mplhep (e.g. ax.bar) must use these positions to align with histograms drawn by mplhep.
+    """
+    if axis.traits.discrete:
+        n = len(axis)
+        return np.arange(n) + 0.5, np.ones(n)
+    return axis.centers, axis.edges[1:] - axis.edges[:-1]
+
+
 def draw_stat_error_bands(
     ax: plt.Axes,
     h: hist.Hist,
@@ -47,10 +59,10 @@ def draw_stat_error_bands(
     baseline[np.isnan(baseline)] = 0.0
 
     bar_kwargs = {
-        "x": h.axes[0].centers,
+        "x": get_bin_positions(h.axes[0])[0],
         "bottom": baseline * (1 - rel_stat_error),
         "height": baseline * 2 * rel_stat_error,
-        "width": h.axes[0].edges[1:] - h.axes[0].edges[:-1],
+        "width": get_bin_positions(h.axes[0])[1],
         "hatch": "///",
         "linewidth": 0,
         "color": "none",
@@ -150,10 +162,10 @@ def draw_syst_error_bands(
     baseline[np.isnan(baseline)] = 0.0
 
     bar_kwargs = {
-        "x": h.axes[0].centers,
+        "x": get_bin_positions(h.axes[0])[0],
         "bottom": baseline * (1 - rel_syst_error_down),
         "height": baseline * (rel_syst_error_up + rel_syst_error_down),
-        "width": h.axes[0].edges[1:] - h.axes[0].edges[:-1],
+        "width": get_bin_positions(h.axes[0])[1],
         "hatch": "\\\\\\",
         "linewidth": 0,
         "color": "none",
@@ -287,7 +299,7 @@ def draw_errorbars(
     values = h.values() / norm
 
     defaults = {
-        "x": h.axes[0].centers - (h.axes[0].edges[0] if type(h.axes[0]) is hist.axes.Integer else 0),
+        "x": get_bin_positions(h.axes[0])[0],
         "y": values,
         "color": "k",
         "linestyle": "none",

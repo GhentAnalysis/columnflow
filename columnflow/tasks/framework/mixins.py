@@ -911,8 +911,10 @@ class ProducerClassMixin(ArrayFunctionClassMixin):
 
     @classmethod
     def req_params(cls, inst: law.Task, **kwargs) -> dict[str, Any]:
-        # prefer --producer set on task-level via cli
-        kwargs["_prefer_cli"] = law.util.make_set(kwargs.get("_prefer_cli", [])) | {"producer"}
+        # prefer --producer set on task-level via cli, unless a producer is requested explicitly (e.g. by
+        # req_other_producer for required producers, which would otherwise require itself)
+        if "producer" not in kwargs:
+            kwargs["_prefer_cli"] = law.util.make_set(kwargs.get("_prefer_cli", [])) | {"producer"}
         return super().req_params(inst, **kwargs)
 
     @classmethod

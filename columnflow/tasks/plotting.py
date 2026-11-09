@@ -28,7 +28,9 @@ from columnflow.tasks.framework.remote import RemoteWorkflow
 from columnflow.tasks.histograms import MergeHistograms, MergeShiftedHistograms
 from columnflow.util import DotDict, dev_sandbox, dict_add_strict
 from columnflow.hist_util import add_missing_shifts
-from columnflow.config_util import get_shift_from_configs, expand_shift_sources
+from columnflow.config_util import (
+    get_shift_from_configs, expand_shift_sources, expand_shift_collections, expand_shift_collection_sources,
+)
 
 
 class _PlotVariablesBase(
@@ -159,7 +161,8 @@ class PlotVariablesBase(_PlotVariablesBase):
                     "config_shifts": {
                         shift
                         for dataset_inst in dataset_proc_name_map.keys()
-                        for shift in requested_shifts_per_dataset[dataset_inst]
+                        # collection shifts contain histograms of all their sub shifts
+                        for shift in expand_shift_collections([config_inst], requested_shifts_per_dataset[dataset_inst])
                     },
                 }
                 process_shift_map[process_inst.name].update(process_info["config_shifts"])
@@ -518,7 +521,8 @@ class PlotVariablesBaseMultiShifts(
         seqs = [self.categories, self.variables]
         keys = ["category", "variable"]
         if not self.combine_shifts:
-            seqs.append(self.shift_sources)
+            # one branch per sub shift source of collection shifts
+            seqs.append(tuple(expand_shift_collection_sources(self.config_insts, self.shift_sources)))
             keys.append("shift_source")
         return [DotDict(zip(keys, vals)) for vals in itertools.product(*seqs)]
 
@@ -587,7 +591,12 @@ class PlotVariablesBaseMultiShifts(
 
         # gather sources, and expand to up/down shifts
         sources = self.shift_sources if self.combine_shifts else [self.branch_data.shift_source]
-        shifts = list(map(functools.partial(get_shift_from_configs, self.config_insts), expand_shift_sources(sources)))
+        shift_names = expand_shift_collections(self.config_insts, expand_shift_sources(sources))
+
+        # always add nominal, which is otherwise missing in plots per shift source
+        if "nominal" not in shift_names:
+            shift_names = ["nominal"] + shift_names
+        shifts = list(map(functools.partial(get_shift_from_configs, self.config_insts), shift_names))
 
         return shifts
 

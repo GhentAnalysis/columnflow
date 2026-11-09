@@ -16,12 +16,15 @@ from columnflow.tasks.framework.mixins import (
 )
 from columnflow.tasks.framework.remote import RemoteWorkflow
 from columnflow.tasks.histograms import MergeShiftedHistograms
-from columnflow.config_util import get_datasets_from_process
+from columnflow.histogramming import HistProducer
+from columnflow.config_util import get_datasets_from_process, get_shift_collection_source_map
 from columnflow.util import dev_sandbox, DotDict, maybe_import
 from columnflow.types import TYPE_CHECKING
 
 if TYPE_CHECKING:
     hist = maybe_import("hist")
+
+logger = law.logger.get_logger(__name__)
 
 
 class SerializeInferenceModelBase(
@@ -188,6 +191,17 @@ class SerializeInferenceModelBase(
                     f"{', '.join(c.name for c in config_insts)}: {categories}",
                 )
 
+        # when the hist producer creates histograms for all sub shifts of a collection shift at once, require the
+        # collections instead of the individual shift sources they contain
+        if getattr(HistProducer.get_cls(self.hist_producer), "creates_shift_collections", False):
+            for config_inst, data in config_data.items():
+                source_map = get_shift_collection_source_map(config_inst)
+                for dataset_data in data["mc_datasets"].values():
+                    dataset_data["shift_sources"] = {
+                        source_map.get(source, source)
+                        for source in dataset_data["shift_sources"]
+                    }
+
         return config_data
 
     def create_branch_map(self):
@@ -276,8 +290,13 @@ class SerializeInferenceModelBase(
                         # only perform subprocess selection if there are any on the process axis
                         if len(h.axes["process"]):
                             # then, there must be at least one matching sub process
+                            # (datasets can be empty for a process, e.g. sub processes split off in production)
                             if not any(p.name in h.axes["process"] for p in sub_process_insts):
-                                raise Exception(f"no '{variable}' histograms found for process '{process_inst.name}'")
+                                logger.warning(
+                                    f"no '{variable}' histograms found for process '{process_inst.name}' in dataset "
+                                    f"'{dataset_name}' of config '{config_inst.name}'",
+                                )
+                                continue
 
                             # select and reduce over relevant processes
                             h_proc = h[{

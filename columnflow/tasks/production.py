@@ -85,6 +85,7 @@ class ProduceColumns(_ProduceColumns):
             Route, RouteFilter, mandatory_coffea_columns, update_ak_array, add_ak_aliases,
             sorted_ak_to_parquet, attach_coffea_behavior,
         )
+        from columnflow.columnar_util_Ghent import remove_obj_overlap
 
         # prepare inputs and outputs
         inputs = self.input()
@@ -133,7 +134,12 @@ class ProduceColumns(_ProduceColumns):
                 if self.check_overlapping_inputs:
                     self.raise_if_overlapping([events] + list(cols))
 
-                # apply the optional columns from custom requirements
+                # apply the optional columns from custom requirements, taking object collections
+                # entirely from the latest input that contains them (e.g. re-sorted by a required
+                # producer) instead of mixing their fields with the ones of the reduced events
+                events, *cols = remove_obj_overlap(
+                    events, *cols, objects=("Jet", "FJet", "Electron", "Muon", "Lepton"),
+                )
                 events = update_ak_array(events, *cols)
 
                 # add aliases

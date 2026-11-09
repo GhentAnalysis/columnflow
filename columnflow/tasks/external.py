@@ -109,7 +109,10 @@ class GetDatasetLFNs(DatasetTask, law.tasks.TransferLocalFile):
             get_dataset_lfns = self.dataset_inst.x("get_dataset_lfns", None)
             msg = "via custom dataset function"
             if not callable(get_dataset_lfns):
-                get_dataset_lfns = self.get_dataset_lfns_dasgoclient
+                if self.config_inst.x.split_mc:
+                    get_dataset_lfns = self.get_dataset_lfns_dasgoclient_split
+                else:
+                    get_dataset_lfns = self.get_dataset_lfns_dasgoclient
                 msg = "via dasgoclient"
 
         lfns = []
@@ -190,6 +193,75 @@ class GetDatasetLFNs(DatasetTask, law.tasks.TransferLocalFile):
             for line in out.strip().split("\n")
             if line.strip().endswith(".root") and line.strip() not in broken_files
         ]
+
+    def get_dataset_lfns_dasgoclient_split(
+        self,
+        dataset_inst: od.Dataset,
+        shift_inst: od.Shift,
+        dataset_key: str,
+    ) -> list[str]:
+        """
+        Get the LNF information with the ``dasgoclient``.
+
+        :param dataset_inst: Current dataset instance, currently not used.
+        :param shift_inst: Current shift instance, currently not used.
+        :param dataset_key: DAS key identifier for the current dataset.
+        :raises Exception: If query with ``dasgoclient`` fails.
+        :return: The list of LFNs corresponding to the dataset with the identifier *dataset_key*.
+        """
+        code, out, _ = law.util.interruptable_popen(
+            f"dasgoclient --query='file dataset={dataset_key} instance=prod/phys03' --limit=0",
+            shell=True,
+            stdout=subprocess.PIPE,
+            executable="/bin/bash",
+            kill_timeout=1,
+        )
+        if code != 0:
+            raise Exception(f"dasgoclient query failed:\n{out}")
+
+        broken_files = dataset_inst[shift_inst.name].get_aux("broken_files", [])
+
+        files = [
+            line.strip()
+            for line in out.strip().split("\n")
+            if line.strip().endswith(".root") and line.strip() not in broken_files
+        ]
+
+        sorted_files = sorted(files)
+
+        year_factor_map = {2022: 1, 2023: 1, 2024: 3, 2025: 3}
+
+        total_weight = sum(year_factor_map.values())
+        n_files = len(sorted_files)
+
+        years = list(year_factor_map)
+
+        start = 0
+        slices = {}
+
+        for year in years:
+            frac = year_factor_map[year] / total_weight
+            size = int(round(frac * n_files))
+            end = start + size
+            slices[year] = (start, end)
+            start = end
+
+        # last campaign absorbs rounding leftovers
+        last = years[-1]
+        slices[last] = (slices[last][0], n_files)
+
+        year = self.config_inst.x.year
+
+        start, end = slices[year]
+
+        if self.dataset_inst.is_data:
+            dataset = sorted_files
+        else:
+            dataset = sorted_files[start:end]
+
+        self.dataset_info_inst.n_files = len(dataset)
+
+        return dataset
 
     def iter_nano_files(
         self,
