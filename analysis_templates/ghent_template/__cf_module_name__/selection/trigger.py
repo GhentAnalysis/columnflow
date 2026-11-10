@@ -83,11 +83,7 @@ def trigger_selection(
 
 
 @trigger_selection.init
-def trigger_selection_init(self: Selector) -> None:
-    # return immediately if config object has not been loaded yet
-    if not getattr(self, "config_inst", None):
-        return
-
+def trigger_selection_init(self: Selector, **kwargs) -> None:
     # add HLT trigger bits to uses
     self.uses |= {
         f"HLT.{trigger}"

@@ -86,7 +86,9 @@ def normalized_weight_factory(
         self.produces |= set(f"normalized_{weight_name}" for weight_name in self.weight_names)
 
     @normalized_weight.requires
-    def normalized_weight_requires(self: Producer, task: law.Task, reqs: dict) -> None:
+    def normalized_weight_requires(self: Producer, task: law.Task, reqs: dict, **kwargs) -> None:
+        super(normalized_weight, self).requires_func(task=task, reqs=reqs, **kwargs)
+
         from columnflow.tasks.selection import MergeSelectionStats
         reqs["selection_stats"] = MergeSelectionStats.req(
             task,
@@ -96,10 +98,16 @@ def normalized_weight_factory(
     @normalized_weight.setup
     def normalized_weight_setup(
         self: Producer,
-        task: law.task,
-        reqs: dict, inputs: dict,
-        reader_targets: law.util.InsertableDict
+        task: law.Task,
+        reqs: dict,
+        inputs: dict,
+        reader_targets: law.util.InsertableDict,
+        **kwargs,
     ) -> None:
+        super(normalized_weight, self).setup_func(
+            task=task, reqs=reqs, inputs=inputs, reader_targets=reader_targets, **kwargs,
+        )
+
         # load the selection stats
         stats = inputs["selection_stats"]["collection"][0]["stats"].load(formatter="json")
 

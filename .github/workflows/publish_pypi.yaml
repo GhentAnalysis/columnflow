@@ -5,7 +5,9 @@ on:
 
 jobs:
   publish:
-    runs-on: ubuntu-latest
+    # pinned instead of ubuntu-latest: python 3.9 (columnflow's default CF_PYTHON_VERSION) has no
+    # actions/setup-python build for ubuntu 26.04, which ubuntu-latest points to now
+    runs-on: ubuntu-24.04
     steps:
       - name: Checkout ⬇️
         uses: actions/checkout@master

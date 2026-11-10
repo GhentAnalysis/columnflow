@@ -59,6 +59,6 @@ def default(self: Producer, events: ak.Array, **kwargs) -> ak.Array:
 
 
 @default.pre_init
-def default_pre_init(self: Producer) -> None:
+def default_pre_init(self: Producer, **kwargs) -> None:
     # add categories to config
     add_categories_production(self.config_inst)

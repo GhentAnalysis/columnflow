@@ -17,36 +17,15 @@ logger = law.logger.get_logger(__name__)
 def patch_bundle_repo_exclude_files():
     from columnflow.tasks.framework.remote import BundleRepo
 
-    # get the relative path to CF_BASE
-    cf_rel = os.path.relpath(os.environ["CF_BASE"], os.environ["__cf_short_name_uc___BASE"])
-
-    # amend exclude files to start with the relative path to CF_BASE
-    exclude_files = [os.path.join(cf_rel, path) for path in BundleRepo.exclude_files]
-
-    # add additional files
-    exclude_files.extend([
-        "docs", "tests", "data", "assets", ".law", ".setups", ".data", ".github",
-    ])
-
-    # overwrite them
-    BundleRepo.exclude_files[:] = exclude_files
+    # add analysis-specific files to exclude, as absolute paths inside the analysis repo
+    # ("docs", "tests", "data", "tmp", ".data", ".github" and ".setups" are already excluded by
+    # default for both the cf and the analysis repo, so only genuinely new paths are added here)
+    repo_path = lambda *p: os.path.join(os.environ["__cf_short_name_uc___BASE"], *p)
+    BundleRepo.exclude_files += [repo_path("assets"), repo_path(".law")]
 
     logger.debug("patched exclude_files of cf.BundleRepo")
 
 
 @memoize
-def patch_htcondor_workflow():
-    from columnflow.tasks.framework.remote import HTCondorWorkflow
-
-    # change the max_runtime parameter default
-    HTCondorWorkflow.max_runtime._default = 0
-    logger.debug("patched max_runtime of cf.HTCondorWorkflow")
-
-    HTCondorWorkflow.htcondor_flavor._default = 'NO_STR'
-    logger.debug("patched flavor of cf.HTCondorWorkflow")
-
-
-@memoize
 def patch_all():
     patch_bundle_repo_exclude_files()
-    patch_htcondor_workflow()

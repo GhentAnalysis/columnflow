@@ -168,8 +168,10 @@ def add_shifts(config: od.Config) -> None:
                 config.x.event_weights[weight] += get_shifts_from_sources(config, shift_inst.source)
             else:
                 config.x.event_weights[weight] = get_shifts_from_sources(config, shift_inst.source)
-    # default weight producer for histograms
-    config.x.default_weight_producer = "all_weights"
+    # NOTE: "default_weight_producer" is no longer read by columnflow; the active setting is
+    # "default_hist_producer" in config___cf_short_name_lc__.py (currently "cf_default"). This
+    # config used to request the "all_weights" hist producer here instead -- if that behaviour
+    # is still desired, set cfg.x.default_hist_producer = "all_weights" there.
 
     for dataset in config.datasets:
         dataset.x.event_weights = DotDict()

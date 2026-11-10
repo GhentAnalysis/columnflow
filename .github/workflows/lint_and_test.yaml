@@ -7,7 +7,9 @@ on:
 
 jobs:
   lint:
-    runs-on: ubuntu-latest
+    # pinned instead of ubuntu-latest: python 3.9 (columnflow's default CF_PYTHON_VERSION) has no
+    # actions/setup-python build for ubuntu 26.04, which ubuntu-latest points to now
+    runs-on: ubuntu-24.04
     steps:
       - name: Checkout ⬇️
         uses: actions/checkout@v4
@@ -30,7 +32,7 @@ jobs:
           ./tests/run_linting
 
   breaks:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - name: Checkout ⬇️
         uses: actions/checkout@v4
@@ -49,7 +51,7 @@ jobs:
 
 
   lint_docs:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - name: Checkout ⬇️
         uses: actions/checkout@v4
@@ -72,7 +74,7 @@ jobs:
           ./tests/run_docs lint
 
   test:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - name: Checkout ⬇️
         uses: actions/checkout@v4
@@ -95,7 +97,7 @@ jobs:
           ./tests/run_tests
 
   pypi:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - name: Checkout ⬇️
         uses: actions/checkout@v4
@@ -120,7 +122,7 @@ jobs:
         run: twine check "dist/$( python setup.py --fullname ).tar.gz"
 
   coverage:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     env:
       CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
     steps:
