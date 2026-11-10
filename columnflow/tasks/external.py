@@ -123,6 +123,11 @@ class GetDatasetLFNs(DatasetTask, law.tasks.TransferLocalFile):
             else:
                 lfns.extend(get_dataset_lfns(self, key))
 
+        # the year split is applied once to the combined file list of all keys, so that datasets with
+        # several keys (e.g. extensions) are split consistently
+        if get_dataset_lfns == self.get_dataset_lfns_dasgoclient_split:
+            lfns = self.split_lfns_by_year(lfns)
+
         if self.validate and len(lfns) != self.dataset_info_inst.n_files:
             raise ValueError(
                 f"number of obtained lfns ({len(lfns)}) does not match number of files "
@@ -204,10 +209,12 @@ class GetDatasetLFNs(DatasetTask, law.tasks.TransferLocalFile):
         dataset_key: str,
     ) -> list[str]:
         """
-        Get the LNF information with the ``dasgoclient``.
+        Get the LFNs of one dataset key with the ``dasgoclient`` (prod/phys03 instance) for datasets that are
+        split over the years. The split itself is applied to the files of all keys in :py:meth:`run` (see
+        :py:meth:`split_lfns_by_year`).
 
-        :param dataset_inst: Current dataset instance, currently not used.
-        :param shift_inst: Current shift instance, currently not used.
+        :param dataset_inst: Current dataset instance, used for the broken files.
+        :param shift_inst: Current shift instance, used for the broken files.
         :param dataset_key: DAS key identifier for the current dataset.
         :raises Exception: If query with ``dasgoclient`` fails.
         :return: The list of LFNs corresponding to the dataset with the identifier *dataset_key*.
@@ -224,47 +231,44 @@ class GetDatasetLFNs(DatasetTask, law.tasks.TransferLocalFile):
 
         broken_files = dataset_inst[shift_inst.name].get_aux("broken_files", [])
 
-        files = [
+        return [
             line.strip()
             for line in out.strip().split("\n")
             if line.strip().endswith(".root") and line.strip() not in broken_files
         ]
 
-        sorted_files = sorted(files)
+    def split_lfns_by_year(self, lfns: list[str]) -> list[str]:
+        """
+        Returns the part of the sorted *lfns* that belongs to the year of the current config, with the MC
+        files split over the years according to fixed factors. Data is not split.
+        """
+        sorted_files = sorted(lfns)
+        if self.dataset_inst.is_data:
+            return sorted_files
 
         year_factor_map = {2022: 1, 2023: 1, 2024: 3, 2025: 3}
-
         total_weight = sum(year_factor_map.values())
         n_files = len(sorted_files)
-
         years = list(year_factor_map)
 
         start = 0
         slices = {}
-
         for year in years:
-            frac = year_factor_map[year] / total_weight
-            size = int(round(frac * n_files))
-            end = start + size
-            slices[year] = (start, end)
-            start = end
+            size = int(round(year_factor_map[year] / total_weight * n_files))
+            slices[year] = (start, start + size)
+            start += size
 
         # last campaign absorbs rounding leftovers
-        last = years[-1]
-        slices[last] = (slices[last][0], n_files)
+        slices[years[-1]] = (slices[years[-1]][0], n_files)
 
         year = self.config_inst.x.year
-
         start, end = slices[year]
+        files = sorted_files[start:end]
 
-        if self.dataset_inst.is_data:
-            dataset = sorted_files
-        else:
-            dataset = sorted_files[start:end]
+        self.dataset_info_inst.n_files = len(files)
+        logger.info(f"dataset {self.dataset} split for year {year}: from {n_files} to {len(files)} files")
 
-        self.dataset_info_inst.n_files = len(dataset)
-
-        return dataset
+        return files
 
     def iter_nano_files(
         self,
