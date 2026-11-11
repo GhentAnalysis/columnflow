@@ -49,7 +49,12 @@ def safe_concatenate(arrays, *args, **kwargs):
     return ak.concatenate(arrays, *args, **kwargs)
 
 
-def remove_obj_overlap(*arrays, objects=("Jet", "Electron", "Muon")):
+def remove_obj_overlap(*arrays, objects=("Jet", "ForwardJet", "Electron", "Muon")):
+    """
+    Removes each collection in *objects* from all but the last of *arrays* that contain it, so that merging the arrays
+    afterwards (``update_ak_array``) takes the collection as a whole from the last array (e.g. a producer that
+    redefines the collection with a different multiplicity) instead of merging it field by field.
+    """
     arrays = list(arrays)
     for obj in objects:
         for i1, c in enumerate(arrays[1:]):
