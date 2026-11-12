@@ -604,8 +604,8 @@ class MergeShiftedHistograms(_MergeShiftedHistograms):
         for shift_name in expand_shift_sources(shift_sources):
             req = self.reqs.MergeHistograms.req(self, shift=shift_name, _prefer_cli={"variables"})
             # change Ghent: skip shifts tagged "mirrored" (accepted by ShiftSourcesMixin, implemented by no task and
-            # built later by a hist hook); their requirement resolves to another shift (nominal), merging it would add
-            # the nominal histogram a second time
+            # built later by the hist hook columnflow.histogramming.hooks.mirror_shifts); their requirement resolves to
+            # another shift (nominal), merging it would add the nominal histogram a second time
             if req.shift != shift_name:
                 if self.config_inst.get_shift(shift_name).has_tag("mirrored"):
                     continue

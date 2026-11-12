@@ -2651,8 +2651,8 @@ class ShiftSourcesMixin(ConfigTask):
 
                 # change Ghent: a direction that no task implements is accepted when it is a config shift tagged
                 # "mirrored" (e.g. the down variation of an up-only shift) and the other direction is known; such
-                # shifts are never filled (requests resolve to nominal and MergeShiftedHistograms skips them), a hist
-                # hook has to build them from the other direction
+                # shifts are never filled (requests resolve to nominal and MergeShiftedHistograms skips them), the hist
+                # hook columnflow.histogramming.hooks.mirror_shifts has to build them from the other direction
                 is_mirrored = lambda name: any(
                     c.has_shift(name) and c.get_shift(name).has_tag("mirrored")
                     for c in config_insts
@@ -2676,7 +2676,8 @@ class ShiftSourcesMixin(ConfigTask):
                         f"mirrored_shift_sources_{cls.task_family}_{hash(tuple(mirrored))}",
                         f"{cls.task_family}: {len(mirrored)} shift source(s) have a 'mirrored' direction that no task "
                         f"fills ({', '.join(mirrored[:3])}{', ...' if len(mirrored) > 3 else ''}); it is only correct "
-                        "when a hist hook builds it from the other direction",
+                        "when a hist hook builds it from the other direction (columnflow.histogramming.hooks."
+                        "mirror_shifts, register it in the 'hist_hooks' auxiliary and pass --hist-hooks mirror_shifts)",
                     )
 
             # complain when no sources were found

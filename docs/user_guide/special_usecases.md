@@ -39,6 +39,17 @@ This is supported by all non-cutflow plot tasks.
 In the example of the `cf.PlotVariables1D`, the histograms being passed to the hook still contain the `category` and, optionally, the `shift` axes.
 This way, hist hooks can easily be used to inject new histograms from data-driven background estimations based on existing histograms.
 
+Generic hooks are provided in `columnflow/histogramming/hooks.py` and only need to be registered.
+For example, `mirror_shifts` builds the shifts tagged `mirrored` (the missing direction of a one-sided uncertainty, which no task fills) as 2 · nominal - (other direction):
+
+```python
+from columnflow.histogramming.hooks import mirror_shifts
+
+analysis_inst.x.hist_hooks["mirror_shifts"] = mirror_shifts
+```
+
+Pass it first, `--hist-hooks mirror_shifts[,...]`, on the plotting and datacard tasks that use such a shift source.
+
 :::{dropdown} Example: QCD estimation
 
 A trivial example in which a process "QCD" should be estimated as half of the "tt" contribution would look like:
