@@ -26,9 +26,13 @@ from columnflow.tasks.ml import MLEvaluation
 from columnflow.hist_util import update_ax_labels, sum_hists
 from columnflow.config_util import expand_shift_sources
 from columnflow.util import maybe_import, dev_sandbox
-from columnflow.types import TYPE_CHECKING
+from columnflow.types import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
+    from collections.abc import Container
+
+    import order as od
+    ak = maybe_import("awkward")
     hist = maybe_import("hist")
 
 
@@ -197,18 +201,126 @@ class CreateHistograms(_CreateHistograms):
             output["hists"] = self.target(f"hist__vars_{self.variables_repr}__{self.branch}.pickle")
         return output
 
+    # change Ghent: the per-chunk steps of run() are methods, so that a hist producer can apply them to other events of
+    # the same chunk (columnflow/histogramming/cmsGhent/shifts.py::shifts_hist, selection-dependent subshifts)
+
+    def merge_chunk_columns(
+        self,
+        events: ak.Array,
+        columns: list[ak.Array],
+        aliases: dict[str, str],
+    ) -> ak.Array:
+        """
+        Merges the *columns* read from the producer, ML and hist producer reader outputs into *events*
+        (``remove_obj_overlap``, then ``update_ak_array``), adds the shift *aliases* (source columns removed) and
+        attaches the coffea behavior, as done per chunk in :py:meth:`run` before the hist producer is invoked.
+        """
+        # imported at call time (as in run), so that analysis patches of these functions are used
+        from columnflow.columnar_util import update_ak_array, add_ak_aliases, attach_coffea_behavior
+        from columnflow.columnar_util_Ghent import remove_obj_overlap
+
+        # add additional columns
+        events, *columns = remove_obj_overlap(events, *columns)
+        events = update_ak_array(events, *columns)
+
+        # add aliases
+        events = add_ak_aliases(
+            events,
+            aliases,
+            remove_src=True,
+            missing_strategy=self.missing_column_alias_strategy,
+        )
+
+        return attach_coffea_behavior(events)
+
+    def get_category_ids(self, events: ak.Array, leaf_category_ids: Container[int]) -> ak.Array:
+        """
+        Returns the category ids of *events* (the :py:attr:`category_id_columns` concatenated) and raises a ValueError
+        when one of them is not in *leaf_category_ids*.
+        """
+        import numpy as np
+        import awkward as ak
+        from columnflow.columnar_util import Route, ak_concatenate_safe
+
+        category_ids = ak_concatenate_safe(
+            [Route(c).apply(events) for c in self.category_id_columns],
+            axis=-1,
+        )
+        unique_category_ids = np.unique(ak.flatten(category_ids))
+        if any(cat_id not in leaf_category_ids for cat_id in unique_category_ids):
+            undefined_category_ids = list(map(str, set(unique_category_ids) - set(leaf_category_ids)))
+            raise ValueError(
+                f"category_ids column contains ids {','.join(undefined_category_ids)} that are either not "
+                "known to the config at all, or not as leaf categories (i.e., they have child categories); "
+                "please ensure that category_ids only contains ids of known leaf categories",
+            )
+
+        return category_ids
+
+    def get_fill_data(
+        self,
+        events: ak.Array,
+        weight: ak.Array,
+        category_ids: ak.Array,
+        variable_insts: list[od.Variable],
+        shift_id: int,
+    ) -> tuple[dict[str, Any], ak.Array]:
+        """
+        Applies the selections of *variable_insts* to *events*, *weight* and *category_ids* and returns the data to fill
+        (category, process, shift *shift_id*, weight and one entry per variable) together with the selected events.
+        """
+        import numpy as np
+        import awkward as ak
+        from columnflow.columnar_util import Route, has_ak_column
+
+        # empty arrays to use when input files have no entries
+        empty_i32 = ak.Array(np.array([], dtype=np.int32))
+        empty_f32 = ak.Array(np.array([], dtype=np.float32))
+
+        # mask events and weights when selection expressions are found
+        masked_events = events
+        masked_weights = weight
+        masked_category_ids = category_ids
+        for variable_inst in variable_insts:
+            sel = variable_inst.selection
+            if sel == "1":
+                continue
+            if not callable(sel):
+                raise ValueError(f"invalid selection '{sel}', for now only callables are supported")
+            mask = sel(masked_events)
+            masked_events = ak.drop_none(masked_events[mask], axis=0)
+            masked_weights = ak.drop_none(masked_weights[mask], axis=0)
+            masked_category_ids = ak.drop_none(masked_category_ids[mask], axis=0)
+
+        # broadcast arrays so that each event can be filled for all its categories
+        fill_data = {
+            "category": masked_category_ids,
+            "process": masked_events.process_id,
+            "shift": shift_id,
+            "weight": masked_weights,
+        }
+        for variable_inst in variable_insts:
+            # prepare the expression
+            expr = variable_inst.expression
+            if isinstance(expr, str):
+                route = Route(expr)
+
+                def expr(events, *args, **kwargs):
+                    if len(events) == 0 and not has_ak_column(events, route):
+                        return empty_i32 if variable_inst.discrete_x else empty_f32
+                    return route.apply(events, null_value=variable_inst.null_value)
+            # apply it
+            fill_data[variable_inst.name] = expr(masked_events)
+
+        return fill_data, masked_events
+
     @law.decorator.notify
     @law.decorator.log
     @law.decorator.localize(input=True, output=False)
     @law.decorator.safe_output
     @on_failure(callback=lambda task: task.teardown_hist_producer_inst())
     def run(self):
-        import numpy as np
-        import awkward as ak
-        from columnflow.columnar_util import (
-            Route, update_ak_array, add_ak_aliases, has_ak_column, attach_coffea_behavior, ak_concatenate_safe,
-        )
-        from columnflow.columnar_util_Ghent import remove_obj_overlap
+        from columnflow.columnar_util import Route
 
         # prepare inputs and outputs
         inputs = self.input()
@@ -260,10 +372,6 @@ class CreateHistograms(_CreateHistograms):
             ))
         }
 
-        # empty arrays to use when input files have no entries
-        empty_i32 = ak.Array(np.array([], dtype=np.int32))
-        empty_f32 = ak.Array(np.array([], dtype=np.float32))
-
         # iterate over chunks of events and diffs
         file_targets = [inputs["events"]["events"]]
         if self.producer_insts:
@@ -283,39 +391,19 @@ class CreateHistograms(_CreateHistograms):
                 if self.check_overlapping_inputs:
                     self.raise_if_overlapping([events] + list(columns))
 
-                # add additional columns
-                events, *columns = remove_obj_overlap(events, *columns)
-                events = update_ak_array(events, *columns)
-
-                # add aliases
-                events = add_ak_aliases(
-                    events,
-                    aliases,
-                    remove_src=True,
-                    missing_strategy=self.missing_column_alias_strategy,
-                )
+                # add additional columns and aliases, attach behavior (change Ghent: in merge_chunk_columns)
+                events = self.merge_chunk_columns(events, columns, aliases)
 
                 # invoke the hist producer, potentially updating columns and creating the event weight
-                events = attach_coffea_behavior(events)
                 events, weight = self.hist_producer_inst(events, task=self)
 
                 if len(events) == 0:
                     self.publish_message(f"no events found in chunk {pos}")
                     continue
 
-                # merge category ids and check that they are defined as leaf categories
-                category_ids = ak_concatenate_safe(
-                    [Route(c).apply(events) for c in self.category_id_columns],
-                    axis=-1,
-                )
-                unique_category_ids = np.unique(ak.flatten(category_ids))
-                if any(cat_id not in leaf_category_map for cat_id in unique_category_ids):
-                    undefined_category_ids = list(map(str, set(unique_category_ids) - set(leaf_category_map)))
-                    raise ValueError(
-                        f"category_ids column contains ids {','.join(undefined_category_ids)} that are either not "
-                        "known to the config at all, or not as leaf categories (i.e., they have child categories); "
-                        "please ensure that category_ids only contains ids of known leaf categories",
-                    )
+                # merge category ids and check that they are defined as leaf categories (change Ghent: in
+                # get_category_ids)
+                category_ids = self.get_category_ids(events, leaf_category_map)
 
                 # define and fill histograms, taking into account multiple axes
                 for var_key, var_names in self.variable_tuples.items():
@@ -332,39 +420,15 @@ class CreateHistograms(_CreateHistograms):
                             task=self,
                         )
 
-                    # mask events and weights when selection expressions are found
-                    masked_events = events
-                    masked_weights = weight
-                    masked_category_ids = category_ids
-                    for variable_inst in variable_insts:
-                        sel = variable_inst.selection
-                        if sel == "1":
-                            continue
-                        if not callable(sel):
-                            raise ValueError(f"invalid selection '{sel}', for now only callables are supported")
-                        mask = sel(masked_events)
-                        masked_events = ak.drop_none(masked_events[mask], axis=0)
-                        masked_weights = ak.drop_none(masked_weights[mask], axis=0)
-                        masked_category_ids = ak.drop_none(masked_category_ids[mask], axis=0)
-
-                    # broadcast arrays so that each event can be filled for all its categories
-                    fill_data = {
-                        "category": masked_category_ids,
-                        "process": masked_events.process_id,
-                        "shift": self.global_shift_inst.id,
-                        "weight": masked_weights,
-                    }
-                    for variable_inst in variable_insts:
-                        # prepare the expression
-                        expr = variable_inst.expression
-                        if isinstance(expr, str):
-                            route = Route(expr)
-                            def expr(events, *args, **kwargs):
-                                if len(events) == 0 and not has_ak_column(events, route):
-                                    return empty_i32 if variable_inst.discrete_x else empty_f32
-                                return route.apply(events, null_value=variable_inst.null_value)
-                        # apply it
-                        fill_data[variable_inst.name] = expr(masked_events)
+                    # mask events and weights by the variable selections and build the fill data (change Ghent: in
+                    # get_fill_data)
+                    fill_data, masked_events = self.get_fill_data(
+                        events=events,
+                        weight=weight,
+                        category_ids=category_ids,
+                        variable_insts=variable_insts,
+                        shift_id=self.global_shift_inst.id,
+                    )
 
                     # let the hist producer fill it
                     self.hist_producer_inst.run_fill_hist(
