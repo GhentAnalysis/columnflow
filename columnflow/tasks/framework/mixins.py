@@ -2618,8 +2618,22 @@ class ShiftSourcesMixin(ConfigTask):
 
         # resolve shift sources
         if (container := cls._get_config_container(params)) and "shift_sources" in params:
+            config_insts = law.util.make_list(container)
+
+            # change Ghent: keys of the "shift_groups" auxiliary data are looked up as they are (expanding them to
+            # <key>_{up,down} first made them unresolvable), unless they are also a shift source; the group entries must
+            # be shift names or patterns (bare source names such as "jec_Total" match no shift)
+            group_keys = set().union(*(set(config_inst.x("shift_groups", {})) for config_inst in config_insts))
+            is_source = lambda s: any(c.has_shift(f"{s}_{od.Shift.UP}") for c in config_insts)
+            names = []
+            for source in params["shift_sources"]:
+                if source in group_keys and not is_source(source):
+                    names.append(source)
+                else:
+                    names.extend(expand_shift_sources([source]))
+
             shifts = cls.find_config_objects(
-                names=expand_shift_sources(params["shift_sources"]),
+                names=names,
                 container=container,
                 object_cls=od.Shift,
                 groups_str="shift_groups",
@@ -2634,8 +2648,36 @@ class ShiftSourcesMixin(ConfigTask):
                 # reduce shifts based on known ones
                 if (known_shifts := params.get("known_shifts")) is None:
                     raise ValueError("known_shifts must be set before resolving shift sources")
-                is_known = lambda s: f"{s}_{od.Shift.UP}" in known_shifts and f"{s}_{od.Shift.DOWN}" in known_shifts
+
+                # change Ghent: a direction that no task implements is accepted when it is a config shift tagged
+                # "mirrored" (e.g. the down variation of an up-only shift) and the other direction is known; such
+                # shifts are never filled (requests resolve to nominal and MergeShiftedHistograms skips them), a hist
+                # hook has to build them from the other direction
+                is_mirrored = lambda name: any(
+                    c.has_shift(name) and c.get_shift(name).has_tag("mirrored")
+                    for c in config_insts
+                )
+
+                def is_known(source: str) -> bool:
+                    shift_names = [f"{source}_{od.Shift.UP}", f"{source}_{od.Shift.DOWN}"]
+                    known = [name in known_shifts for name in shift_names]
+                    return any(known) and all(k or is_mirrored(name) for k, name in zip(known, shift_names))
+
                 sources = [source for source in sources if source == "nominal" or is_known(source)]
+
+                mirrored = sorted(
+                    source for source in sources
+                    if source != "nominal" and not all(
+                        f"{source}_{d}" in known_shifts for d in (od.Shift.UP, od.Shift.DOWN)
+                    )
+                )
+                if mirrored:
+                    logger.warning_once(
+                        f"mirrored_shift_sources_{cls.task_family}_{hash(tuple(mirrored))}",
+                        f"{cls.task_family}: {len(mirrored)} shift source(s) have a 'mirrored' direction that no task "
+                        f"fills ({', '.join(mirrored[:3])}{', ...' if len(mirrored) > 3 else ''}); it is only correct "
+                        "when a hist hook builds it from the other direction",
+                    )
 
             # complain when no sources were found
             if not sources and not cls.allow_empty_shift_sources:

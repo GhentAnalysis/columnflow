@@ -598,24 +598,34 @@ class MergeShiftedHistograms(_MergeShiftedHistograms):
         # each chunk of shift sources is assigned its own branch
         return list(law.util.iter_chunks(self.shift_sources, self.shift_source_chunk_size))
 
+    def _shift_requirements(self, shift_sources) -> dict[str, MergeHistograms]:
+        # nominal and both directions per shift source
+        reqs = {}
+        for shift_name in expand_shift_sources(shift_sources):
+            req = self.reqs.MergeHistograms.req(self, shift=shift_name, _prefer_cli={"variables"})
+            # change Ghent: skip shifts tagged "mirrored" (accepted by ShiftSourcesMixin, implemented by no task and
+            # built later by a hist hook); their requirement resolves to another shift (nominal), merging it would add
+            # the nominal histogram a second time
+            if req.shift != shift_name:
+                if self.config_inst.get_shift(shift_name).has_tag("mirrored"):
+                    continue
+                raise ValueError(
+                    f"{self.task_family}: requested shift '{shift_name}' resolved to '{req.shift}' in the "
+                    f"{req.task_family} requirement; only shifts tagged 'mirrored' may be skipped",
+                )
+            reqs[shift_name] = req
+        return reqs
+
     def workflow_requires(self):
         reqs = super().workflow_requires()
 
-        # add nominal and both directions per shift source
-        for shift_name in expand_shift_sources(self.shift_sources):
-            reqs[shift_name] = self.pilot_workflow_requires(self.reqs.MergeHistograms.req(
-                self,
-                shift=shift_name,
-                _prefer_cli={"variables"},
-            ))
+        for shift_name, req in self._shift_requirements(self.shift_sources).items():
+            reqs[shift_name] = self.pilot_workflow_requires(req)
 
         return reqs
 
     def requires(self):
-        return {
-            shift_name: self.reqs.MergeHistograms.req(self, shift=shift_name, _prefer_cli={"variables"})
-            for shift_name in expand_shift_sources(self.branch_data)
-        }
+        return self._shift_requirements(self.branch_data)
 
     def store_parts(self) -> law.util.InsertableDict:
         parts = super().store_parts()
