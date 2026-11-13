@@ -2665,6 +2665,27 @@ class ShiftSourcesMixin(ConfigTask):
 
                 sources = [source for source in sources if source == "nominal" or is_known(source)]
 
+                # change Ghent: shift collections (tag "is_collection", their histograms hold the subshifts under
+                # their own names) are no shift sources; drop those matched by a group or pattern (e.g. "all", "jec*"),
+                # an explicitly named one is rejected by MergeShiftedHistograms (use shift_collections instead)
+                is_collection = lambda source: any(
+                    c.has_shift(f"{source}_{od.Shift.UP}") and c.get_shift(f"{source}_{od.Shift.UP}").has_tag(
+                        "is_collection",
+                    )
+                    for c in config_insts
+                )
+                dropped = [
+                    source for source in sources
+                    if source not in params["shift_sources"] and source != "nominal" and is_collection(source)
+                ]
+                if dropped:
+                    sources = [source for source in sources if source not in dropped]
+                    logger.warning_once(
+                        f"collection_shift_sources_{cls.task_family}_{hash(tuple(dropped))}",
+                        f"{cls.task_family}: dropped the shift collection(s) {', '.join(dropped)} matched by "
+                        f"{params['shift_sources']}; they are no shift sources, pass them as shift_collections",
+                    )
+
                 mirrored = sorted(
                     source for source in sources
                     if source != "nominal" and not all(
@@ -2747,6 +2768,38 @@ class DatasetShiftSourcesMixin(ShiftSourcesMixin, DatasetTask):
 
     # allow empty sources
     allow_empty_shift_sources = True
+
+
+class ShiftCollectionsMixin(ConfigTask):
+    """
+    change Ghent: shift collections (shifts tagged ``is_collection``, see
+    :py:func:`columnflow.histogramming.cmsGhent.shifts.add_shift_collection`) whose histograms provide the shifts they
+    contain, so that :py:class:`~columnflow.tasks.histograms.MergeShiftedHistograms` requires the collection instead of
+    each of these shifts (needs a hist producer that fills collections, e.g. ``shifts_hist``).
+    """
+
+    shift_collections = law.CSVParameter(
+        default=(),
+        description="comma-separated names of shift collections (without direction) whose histograms provide the "
+        "shifts they contain; all other shifts are required individually; needs a hist producer that fills shift "
+        "collections (e.g. shifts_hist); empty default",
+        brace_expand=True,
+        parse_empty=True,
+    )
+
+    @classmethod
+    def modify_param_values(cls, params: dict[str, Any]) -> dict[str, Any]:
+        params = super().modify_param_values(params)
+
+        # unique and sorted, so that the same collections give the same requirements and outputs
+        if params.get("shift_collections"):
+            params["shift_collections"] = tuple(sorted(set(params["shift_collections"])))
+
+        return params
+
+    @property
+    def shift_collections_repr(self) -> str:
+        return "__".join(self.shift_collections) if self.shift_collections else "none"
 
 
 class ChunkedIOMixin(ConfigTask):

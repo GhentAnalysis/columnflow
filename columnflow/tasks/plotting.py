@@ -19,7 +19,7 @@ import order as od
 from columnflow.tasks.framework.base import Requirements, ShiftTask
 from columnflow.tasks.framework.mixins import (
     CalibratorClassesMixin, SelectorClassMixin, ReducerClassMixin, ProducerClassesMixin, HistProducerClassMixin,
-    DatasetsProcessesMixin, CategoriesMixin, ShiftSourcesMixin, HistHookMixin, MLModelsMixin,
+    DatasetsProcessesMixin, CategoriesMixin, ShiftSourcesMixin, HistHookMixin, MLModelsMixin, ShiftCollectionsMixin,
 )
 from columnflow.tasks.framework.plotting import (
     PlotBase, PlotBase1D, PlotBase2D, PlotBase1DWithErrorBands, ProcessPlotSettingMixin, VariablePlotSettingMixin,
@@ -648,6 +648,8 @@ class PlotVariablesPerProcess2D(
 
 class PlotVariablesBaseMultiShifts(
     ShiftSourcesMixin,
+    # change Ghent: --shift-collections, passed to MergeShiftedHistograms
+    ShiftCollectionsMixin,
     DatasetsProcessesMixin,
     PlotVariablesBase,
 ):
@@ -708,6 +710,10 @@ class PlotVariablesBaseMultiShifts(
             else f"shift_{self.branch_data.shift_source}"
         )
         parts.insert_before("hook", "shift_source", shift_source_repr)
+
+        # change Ghent: plots from shift collections get their own name (only when collections are used)
+        if self.shift_collections:
+            parts.insert_after("shift_source", "shift_collections", f"coll_{self.shift_collections_repr}")
 
         return parts
 
@@ -1142,6 +1148,9 @@ class PlotVariablesBaseShiftsFromModel(
             "dataset": dataset_name,
             "shift_sources": ("nominal", *(self.shift_sources[config_inst].values() if dataset_is_mc else ())),
         }
+        # change Ghent: the shift collections of the inference model (mc only), as in cf.cms.CreateDatacards
+        if dataset_is_mc and (shift_collections := self.combined_config_data[config_inst].shift_collections):
+            kwargs["shift_collections"] = shift_collections
         return self.reqs.MergeShiftedHistograms.req_different_branching(self, **kwargs)
 
     def plot_parts(self) -> law.util.InsertableDict:

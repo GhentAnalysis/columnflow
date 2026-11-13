@@ -135,6 +135,8 @@ class InferenceModelUser(
                 "data_datasets": set(),
                 # per mc dataset name, the set of shift sources and the names of processes to be extracted from them
                 "mc_datasets": {},
+                # change Ghent: shift collections that provide the histograms of the shifts they contain
+                "shift_collections": tuple(inference_model_inst.get_shift_collections(config_inst.name)),
             }
             for config_inst in config_insts
         }
@@ -257,11 +259,16 @@ class SerializeInferenceModelBase(_SerializeInferenceModelBase):
                     )
             # mc datasets
             for dataset_name in sorted(data["mc_datasets"]):
+                # change Ghent: the shift collections of the inference model
+                collection_kwargs = {}
+                if data["shift_collections"]:
+                    collection_kwargs["shift_collections"] = data["shift_collections"]
                 reqs[config_inst.name][dataset_name] = self.requires_histogram(
                     config=config_inst.name,
                     dataset=dataset_name,
                     shift_sources=("nominal",) + tuple(sorted(data["mc_datasets"][dataset_name]["shift_sources"])),
                     variables=tuple(sorted(data["variables"])),
+                    **collection_kwargs,
                     **kwargs,
                 )
 

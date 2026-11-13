@@ -88,6 +88,74 @@ def add_shift_collection(
     return shift_insts
 
 
+def resolve_shift_collections(
+    config_inst: od.Config,
+    shift_names: Iterable[str],
+    collections: Iterable[str],
+) -> tuple[dict[str, list[str]], list[str]]:
+    """
+    Assigns the shifts *shift_names* to the requested shift *collections* that contain them, for tasks that take
+    histograms of several shifts (``MergeShiftedHistograms``) from the collection histograms of :py:func:`shifts_hist`.
+
+    *collections* are collection names without direction (both ``<name>_up`` and ``<name>_down`` are used) or collection
+    shift names. Returns a dictionary mapping each collection shift that contains at least one of the shifts to the
+    sorted list of those shifts, and the sorted list of the remaining shifts (except ``nominal``), which have to be
+    required individually. Shifts tagged ``mirrored`` always count as remaining (no task fills them).
+
+    Raises a ValueError when a collection is not a shift of *config_inst* tagged ``is_collection``, or when a shift is a
+    subshift of more than one of the requested collection shifts (it would be filled twice).
+    """
+    # expand to collection shift names
+    collection_names = []
+    for name in collections:
+        if config_inst.has_shift(name):
+            names = [name]
+        else:
+            names = [f"{name}_{direction}" for direction in [od.Shift.UP, od.Shift.DOWN]]
+        for col_name in names:
+            if not config_inst.has_shift(col_name) or not config_inst.get_shift(col_name).has_tag(COLLECTION_TAG):
+                raise ValueError(
+                    f"shift collection '{name}' requested, but '{col_name}' is no shift tagged '{COLLECTION_TAG}' in "
+                    f"config '{config_inst.name}'",
+                )
+            if col_name not in collection_names:
+                collection_names.append(col_name)
+
+    # map every subshift to its collection, no subshift may be in two requested collections
+    subshift_collections = {}
+    for col_name in collection_names:
+        for subshift in config_inst.get_shift(col_name).x("subshifts", []):
+            subshift_collections.setdefault(subshift, []).append(col_name)
+    duplicates = {
+        subshift: col_names
+        for subshift, col_names in subshift_collections.items()
+        if len(col_names) > 1
+    }
+    if duplicates:
+        dup_str = ", ".join(f"{s} ({', '.join(c)})" for s, c in sorted(duplicates.items()))
+        raise ValueError(
+            f"{len(duplicates)} shift(s) are part of more than one requested shift collection, they would be filled "
+            f"twice: {dup_str}",
+        )
+
+    # assign the shifts; shifts tagged "mirrored" are filled by no task (built by the hist hook mirror_shifts) and stay
+    # individual, where MergeShiftedHistograms skips them
+    is_mirrored = lambda name: config_inst.has_shift(name) and config_inst.get_shift(name).has_tag("mirrored")
+    collection_shifts = {}
+    individual_shifts = []
+    for shift_name in sorted(set(shift_names) - {"nominal"}):
+        if shift_name in subshift_collections and not is_mirrored(shift_name):
+            collection_shifts.setdefault(subshift_collections[shift_name][0], []).append(shift_name)
+        else:
+            individual_shifts.append(shift_name)
+
+    unused = [col_name for col_name in collection_names if col_name not in collection_shifts]
+    if unused:
+        logger.debug(f"shift collection(s) {', '.join(unused)} contain none of the requested shifts")
+
+    return collection_shifts, individual_shifts
+
+
 def event_weight(self: HistProducer, events: ak.Array) -> ak.Array:
     """
     Full event weight as in the ``default`` hist producer: MC ∏ ``cfg.x.event_weights`` × ∏ ``dataset.x.event_weights``,
@@ -184,7 +252,10 @@ def clean_fill_data(data: dict[str, Any], variable_insts: list[od.Variable]) -> 
     return new_data
 
 
-@hist_producer()
+@hist_producer(
+    # MergeShiftedHistograms (shift_collections) may take subshift histograms from the collection histograms
+    fills_shift_collections=True,
+)
 def shifts_hist(self: HistProducer, events: ak.Array, **kwargs) -> ak.Array:
     """
     Event weight as the ``default`` hist producer. On a shift collection (tag ``is_collection``, the subshifts are in

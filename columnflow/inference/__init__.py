@@ -226,10 +226,13 @@ class InferenceModel(Derivable, metaclass=InferenceModelMeta):
 
             - *categories*: List of :py:meth:`category_spec` objects.
             - *parameter_groups*: List of :py:meth:`parameter_group_spec` objects.
+            - *shift_collections*: Mapping of config names to the shift collections (change Ghent, see
+              :py:meth:`add_shift_collections`).
         """
         return DotDict([
             ("categories", []),
             ("parameter_groups", []),
+            ("shift_collections", DotDict()),
         ])
 
     @classmethod
@@ -484,6 +487,36 @@ class InferenceModel(Derivable, metaclass=InferenceModelMeta):
     @property
     def parameter_groups(self) -> DotDict:
         return self.model.parameter_groups
+
+    #
+    # handling of shift collections (change Ghent)
+    #
+
+    def add_shift_collections(
+        self,
+        shift_collections: str | Sequence[str],
+        config_names: str | Sequence[str] | None = None,
+    ) -> None:
+        """
+        Adds shift collections (shifts tagged ``is_collection``, see
+        :py:func:`columnflow.histogramming.cmsGhent.shifts.add_shift_collection`; names without direction) for the
+        configs *config_names* (default: all :py:attr:`config_insts`). The histograms of the shifts the collections
+        contain are taken from the collection histograms (``MergeShiftedHistograms`` with ``shift_collections``) instead
+        of being required one by one. The parameters still name their shift sources as usual.
+        """
+        if config_names is None:
+            config_names = [config_inst.name for config_inst in self.config_insts]
+        for config_name in law.util.make_list(config_names):
+            collections = self.model.shift_collections.setdefault(config_name, [])
+            for name in law.util.make_list(shift_collections):
+                if name not in collections:
+                    collections.append(name)
+
+    def get_shift_collections(self, config_name: str) -> list[str]:
+        """
+        Returns the names of the shift collections added for the config *config_name*.
+        """
+        return list(self.model.shift_collections.get(config_name, []))
 
     #
     # handling of categories

@@ -10,12 +10,13 @@ import functools
 
 import luigi
 import law
+import order as od
 
 from columnflow.tasks.framework.base import Requirements, AnalysisTask, wrapper_factory
 from columnflow.tasks.framework.mixins import (
     CalibratorClassesMixin, CalibratorsMixin, SelectorClassMixin, SelectorMixin, ReducerClassMixin, ReducerMixin,
     ProducerClassesMixin, ProducersMixin, VariablesMixin, DatasetShiftSourcesMixin, HistProducerClassMixin,
-    HistProducerMixin, ChunkedIOMixin, MLModelsMixin,
+    HistProducerMixin, ChunkedIOMixin, MLModelsMixin, ShiftCollectionsMixin,
 )
 from columnflow.tasks.framework.remote import RemoteWorkflow
 from columnflow.tasks.framework.parameters import last_edge_inclusive_inst
@@ -31,7 +32,6 @@ from columnflow.types import TYPE_CHECKING, Any
 if TYPE_CHECKING:
     from collections.abc import Container
 
-    import order as od
     ak = maybe_import("awkward")
     hist = maybe_import("hist")
 
@@ -619,6 +619,7 @@ MergeHistogramsWrapper = wrapper_factory(
 
 class _MergeShiftedHistograms(
     DatasetShiftSourcesMixin,
+    ShiftCollectionsMixin,
     CalibratorClassesMixin,
     SelectorClassMixin,
     ReducerClassMixin,
@@ -662,10 +663,63 @@ class MergeShiftedHistograms(_MergeShiftedHistograms):
         # each chunk of shift sources is assigned its own branch
         return list(law.util.iter_chunks(self.shift_sources, self.shift_source_chunk_size))
 
+    def _resolve_shift_collections(self, shift_sources) -> tuple[dict[str, list[str]], list[str]]:
+        """
+        change Ghent: returns the shifts of *shift_sources* per requested shift collection (:py:attr:`shift_collections`)
+        that provides them, and the shifts to require individually (including ``nominal``), see
+        :py:func:`columnflow.histogramming.cmsGhent.shifts.resolve_shift_collections`.
+        """
+        from columnflow.histogramming import HistProducer
+        from columnflow.histogramming.cmsGhent.shifts import COLLECTION_TAG, resolve_shift_collections
+
+        # a collection as a shift source would merge all its subshifts under other names, possibly a second time
+        collection_sources = [
+            source for source in shift_sources
+            if self.config_inst.has_shift(f"{source}_{od.Shift.UP}") and
+            self.config_inst.get_shift(f"{source}_{od.Shift.UP}").has_tag(COLLECTION_TAG)
+        ]
+        if collection_sources:
+            raise ValueError(
+                f"{self.task_family}: shift collections {', '.join(collection_sources)} are no shift sources; request "
+                "the shift sources they contain and pass the collections as shift_collections",
+            )
+
+        shift_names = expand_shift_sources(shift_sources)
+        if not self.shift_collections:
+            return {}, shift_names
+
+        if not getattr(HistProducer.get_cls(self.hist_producer), "fills_shift_collections", False):
+            raise ValueError(
+                f"{self.task_family}: shift collections {', '.join(self.shift_collections)} requested, but hist "
+                f"producer '{self.hist_producer}' does not fill them (no fills_shift_collections attribute), use e.g. "
+                "shifts_hist",
+            )
+
+        collection_shifts, individual_shifts = resolve_shift_collections(
+            self.config_inst,
+            shift_names,
+            self.shift_collections,
+        )
+        if "nominal" in shift_names:
+            individual_shifts = ["nominal"] + individual_shifts
+
+        return collection_shifts, individual_shifts
+
     def _shift_requirements(self, shift_sources) -> dict[str, MergeHistograms]:
-        # nominal and both directions per shift source
+        # change Ghent: shifts in a requested shift collection are taken from the collection histograms
+        collection_shifts, shift_names = self._resolve_shift_collections(shift_sources)
         reqs = {}
-        for shift_name in expand_shift_sources(shift_sources):
+        for col_name in collection_shifts:
+            req = self.reqs.MergeHistograms.req(self, shift=col_name, _prefer_cli={"variables"})
+            if req.shift != col_name:
+                raise ValueError(
+                    f"{self.task_family}: requested shift collection '{col_name}' resolved to '{req.shift}' in the "
+                    f"{req.task_family} requirement for dataset {self.dataset}; the hist producer has to declare it",
+                )
+            reqs[col_name] = req
+
+        # nominal and both directions per remaining shift source
+        for shift_name in shift_names:
             req = self.reqs.MergeHistograms.req(self, shift=shift_name, _prefer_cli={"variables"})
             # change Ghent: skip shifts tagged "mirrored" (accepted by ShiftSourcesMixin, implemented by no task and
             # built later by the hist hook columnflow.histogramming.hooks.mirror_shifts); their requirement resolves to
@@ -698,6 +752,10 @@ class MergeShiftedHistograms(_MergeShiftedHistograms):
             shifts_repr = self._shift_sources_repr(self.branch_data, self.enforce_nominal_shift_source)
             parts["shift_sources"] = f"shifts__{shifts_repr}"
 
+        # change Ghent: outputs merged from shift collections are kept apart (only when collections are used)
+        if self.shift_collections:
+            parts.insert_after("shift_sources", "shift_collections", f"coll__{self.shift_collections_repr}")
+
         return parts
 
     def output(self):
@@ -717,6 +775,10 @@ class MergeShiftedHistograms(_MergeShiftedHistograms):
     @law.decorator.notify
     @law.decorator.log
     def run(self):
+        import warnings
+
+        import hist
+
         # preare inputs and outputs
         inputs = self.input()
         outputs = self.output()["hists"].targets
@@ -724,6 +786,14 @@ class MergeShiftedHistograms(_MergeShiftedHistograms):
         shifts_msg = ""
         if self.shift_source_chunk_size > 0:
             shifts_msg = f" for {len(self.branch_data)} shift sources {','.join(self.branch_data)}"
+
+        # change Ghent: shifts taken from shift collections
+        collection_shifts, individual_shifts = self._resolve_shift_collections(self.branch_data)
+        if collection_shifts:
+            self.publish_message(
+                f"{sum(map(len, collection_shifts.values()))} shift(s) from shift collections "
+                f"{', '.join(collection_shifts)}, {len(individual_shifts)} shift(s) required individually",
+            )
 
         for variable_name, outp in self.iter_progress(outputs.items(), len(outputs)):
             # verbosely load input histograms
@@ -738,6 +808,23 @@ class MergeShiftedHistograms(_MergeShiftedHistograms):
                             f"shift '{shift_name}'",
                         )
                         raise
+
+                    # change Ghent: keep only the requested shifts of a collection histogram, all of which must be
+                    # filled (the hist producer skips subshifts it cannot fill)
+                    if shift_name in collection_shifts:
+                        wanted = collection_shifts[shift_name]
+                        missing = sorted(set(wanted) - set(h.axes["shift"]))
+                        if missing:
+                            raise ValueError(
+                                f"{self.task_family}: shift collection '{shift_name}' did not fill the requested "
+                                f"shift(s) {', '.join(missing)} for variable '{variable_name}' (filled: "
+                                f"{len(h.axes['shift'])}); require them individually",
+                            )
+                        # list selection keeps a growing category axis in the requested order (checked with hist
+                        # 2.9), hist warns that it is experimental
+                        with warnings.catch_warnings():
+                            warnings.filterwarnings("ignore", message="List indexing selection is experimental")
+                            h = h[{"shift": [hist.loc(s) for s in wanted]}]
 
                     # invoke modification hook, then save
                     h = self.modify_input_hist(shift_name, variable_name, h)
@@ -757,7 +844,8 @@ class MergeShiftedHistograms(_MergeShiftedHistograms):
         Hook to modify an input histogram for a shift after it has been loaded. This can be helpful to reduce memory
         early on.
 
-        :param shift: The shift name the histogram corresponds to.
+        :param shift: The shift name the histogram corresponds to, or the name of a shift collection (change Ghent,
+            :py:attr:`shift_collections`) whose histogram holds the requested shifts it contains.
         :param variable: The variable name the histogram corresponds to.
         :param h: The histogram to modify.
         :return: The modified histogram.
