@@ -390,13 +390,14 @@ def group_shifts(
     return nominal, dict(grouped)
 
 
-def expand_shift_sources(shifts: Sequence[str] | set[str]) -> list[str]:
+def expand_shift_sources(
+    shifts: Sequence[str | od.Shift] | set[str | od.Shift],
+    down_first: bool = False,
+) -> list[str]:
     """
     Given a sequence *shifts* containing either shift names (``<source>_<direction>``) or shift
     sources, the latter ones are expanded with both possible directions and returned in a common
-    list.
-
-    Example:
+    list. Example:
 
     .. code-block:: python
 
@@ -404,7 +405,9 @@ def expand_shift_sources(shifts: Sequence[str] | set[str]) -> list[str]:
         # -> ["jes_up", "jes_down", "jer_up", "nominal"]
     """
     _shifts = []
-    for shift in shifts:
+    for shift in law.util.make_list(shifts):
+        if isinstance(shift, od.Shift):
+            shift = shift.name
         if shift == od.Shift.NOMINAL:
             _shifts.append(shift)
         else:
@@ -414,9 +417,35 @@ def expand_shift_sources(shifts: Sequence[str] | set[str]) -> list[str]:
             except ValueError as e:
                 if not isinstance(shift, str):
                     raise e
-                _shifts.extend([f"{shift}_{od.Shift.UP}", f"{shift}_{od.Shift.DOWN}"])
+                _shifts.extend([f"{shift}_{od.Shift.UP}", f"{shift}_{od.Shift.DOWN}"][::(-1 if down_first else 1)])
 
     return law.util.make_unique(_shifts)
+
+
+def reduce_to_shift_sources(shifts: Sequence[str | od.Shift] | set[str | od.Shift]) -> list[od.Shift]:
+    """
+    Given a sequence *shifts* containing either shift names (``<source>_<direction>``) or shift sources, names of these
+    shifts are reduced to their source names and returned in a list. Example:
+
+    .. code-block:: python
+
+        reduce_to_shift_sources(["jes", "jer_up", "jer_down", "nominal"])
+        # -> ["jes", "jer", "nominal"]
+    """
+    sources = []
+    for shift in shifts:
+        if isinstance(shift, od.Shift):
+            shift = shift.name
+        if shift == od.Shift.NOMINAL:
+            sources.append(shift)
+        else:
+            try:
+                source, _ = od.Shift.split_name(shift)
+                sources.append(source)
+            except ValueError:
+                sources.append(shift)
+
+    return law.util.make_unique(sources)
 
 
 class CategoryIDCache(PersistentCache):
@@ -646,9 +675,9 @@ def create_category_combinations(
         if not isinstance(_categories, CategoryGroup):
             docs_url = get_docs_url("api", "config_util.html", anchor="columnflow.config_util.CategoryGroup")
             logger.warning_once(
-                "deprecated_category_group_lists",
-                f"using a list to define a sequence of categories for create_category_combinations() is depcreated "
-                f"and will be removed in a future version, please use a CategoryGroup instance instead: {docs_url}",
+                "category_group_lists",
+                f"using a list to define a sequence of categories for create_category_combinations() is discouraged; "
+                f"please use a CategoryGroup instance instead: {docs_url}",
             )
             # create a group assuming (!) it describes a full, valid phasespace partition
             _categories = CategoryGroup(

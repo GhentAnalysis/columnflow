@@ -142,6 +142,10 @@ def jet_btag_requires(self: Producer, task: law.Task, reqs: dict) -> None:
     get_btag_eff=lambda self, external_files: external_files.get("btag_sf_eff", {}),
     # Return a dict mapping dataset groups to efficiencies.
     # Missing dataset groups are calculated with the BTagEfficiency task
+    get_btag_sf_shift_variations=lambda self: self.config_inst.x("btag_sf_shift_variations", {}),
+    # Return a dict mapping shift names (e.g. JES/JER shifts) to the systematic of the heavy-flavour ("_comb")
+    # correction that replaces "central" in the nominal heavy-flavour weight when that shift is processed,
+    # e.g. {"jec_Absolute_up": "up_jes_absolute"}. Shifts without an entry use "central".
     mc_only=True,
     weight_name="btag_weight",
     produce_plots=True,
@@ -171,6 +175,9 @@ def fixed_wp_btag_weights(
 
         # variation as in correctionlib TODO: make flexible if naming scheme changes
         syst_variation = systematic if not variation else f"{variation}_{systematic}"
+        # the nominal heavy-flavour weight follows the processed shift (see get_btag_sf_shift_variations)
+        if flavour_group == "heavy" and syst_variation == "central":
+            syst_variation = self.heavy_sf_systematic
 
         # define a mask that selects the correct flavor to assign to, depending on the systematic
         jet_mask = ak.full_like(jets.hadronFlavour, True)
@@ -251,7 +258,7 @@ def fixed_wp_btag_weights(
     for flavour_group in self.flavour_groups:
         events = add_weight(flavour_group, "central")
 
-        # only calculate up and down variations for nominal shift
+        # method variations, always around the central SF (computed under every shift, used on the nominal one)
         for direction in ["up", "down"]:
             for corr in self.btag_config.sources:
                 events = add_weight(
@@ -332,6 +339,22 @@ def fixed_wp_btag_weights_setup(
     else:
         self.btag_sf_incl_corrector = correction_set_btag_wp_corr[f"{self.btag_config.correction_set}_light"]
     self.btag_sf_comb_corrector = correction_set_btag_wp_corr[f"{self.btag_config.correction_set}_comb"]
+
+    # systematic of the heavy-flavour SF used for the nominal heavy-flavour weight of the processed shift
+    shift_inst = getattr(task, "global_shift_inst", None)
+    shift_name = shift_inst.name if shift_inst is not None else "nominal"
+    self.heavy_sf_systematic = self.get_btag_sf_shift_variations().get(shift_name, "central")
+    if self.heavy_sf_systematic != "central":
+        try:
+            for wp in self.wp_config.working_points:
+                for flavour in (4, 5):
+                    self.btag_sf_comb_corrector.evaluate(self.heavy_sf_systematic, wp, flavour, 1.0, 50.0)
+        except Exception as e:
+            raise ValueError(
+                f"b-tag SF systematic '{self.heavy_sf_systematic}' for shift '{shift_name}' cannot be evaluated in "
+                f"correction {self.btag_config.correction_set}_comb",
+            ) from e
+        logger.info(f"shift {shift_name}: heavy-flavour b-tag SFs use systematic '{self.heavy_sf_systematic}'")
 
     # unpack the b-tagging efficiency
     if self.has_external_efficiencies:

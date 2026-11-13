@@ -71,9 +71,7 @@ class CalibrateEvents(_CalibrateEvents):
         reqs = {"lfns": self.reqs.GetDatasetLFNs.req(self)}
 
         # add calibrator dependent requirements
-        reqs["calibrator"] = law.util.make_unique(law.util.flatten(
-            self.calibrator_inst.run_requires(task=self),
-        ))
+        reqs["calibrator"] = law.util.make_unique(law.util.flatten(self.calibrator_inst.run_requires(task=self)))
 
         return reqs
 
@@ -143,12 +141,19 @@ class CalibrateEvents(_CalibrateEvents):
             for (events, *cols), pos in self.iter_chunked_io(
                 law.util.map_struct(law.target.file.get_path, inps),
                 source_type=["coffea_root"] + (len(inps) - 1) * [None],
+                open_options=self.get_open_options(inps, first_is_nano=True),
+                read_options=self.get_read_options(inps, first_is_nano=True),
                 read_columns=len(inps) * [read_columns],
+                filter_config=self.get_filter_configs(inps, first_is_nano=True),
                 chunk_size=self.calibrator_inst.get_min_chunk_size(),
             ):
+                # adjust if necessary
+                if callable(self.adjust_chunks):
+                    events, *cols = self.adjust_chunks([events, *cols])
+
                 # optional check for overlapping inputs
                 if self.check_overlapping_inputs:
-                    self.raise_if_overlapping([events] + list(cols))
+                    self.raise_if_overlapping([events, *cols])
 
                 # insert additional columns
                 events = update_ak_array(events, *cols)

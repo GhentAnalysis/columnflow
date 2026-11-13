@@ -12,6 +12,7 @@ import os
 import sys
 import re
 import math
+import copy
 import time
 import enum
 import uuid
@@ -28,7 +29,7 @@ import order as od
 
 from columnflow.util import (
     UNSET, maybe_import, classproperty, DotDict, DerivableMeta, CachedDerivableMeta, Derivable, pattern_matcher,
-    get_source_code, real_path, freeze, get_docs_url,
+    get_source_code, real_path, freeze,
 )
 from columnflow.types import Sequence, Callable, Any, T, Generator, Hashable, TypeAlias, Union, TYPE_CHECKING
 
@@ -1347,7 +1348,7 @@ def attach_coffea_behavior(
     # update or reduce collection info
     _collections = default_coffea_collections
     if isinstance(collections, dict):
-        _collections = _collections.copy()
+        _collections = copy.deepcopy(_collections)
         _collections.update(collections)
     elif isinstance(collections, (list, tuple)):
         _collections = {
@@ -1425,8 +1426,7 @@ def flat_np_view(ak_array: ak.Array, axis: int | None = None, copy: bool = False
 def ak_copy(ak_array: ak.Array) -> ak.Array:
     """
     Workaround for ``ak.copy`` which currently fails to copy arrays with coffea nano-style behavior
-    attached to them. As soon as this is functional again, this function should be deprecated and
-    removed.
+    attached to them.
     """
     return layout_ak_array(np.array(ak.flatten(ak_array)), ak_array)
 
@@ -1447,52 +1447,6 @@ def ak_concatenate_safe(arrays: Sequence[ak.Array], *args, **kwargs) -> ak.Array
     :return: The concatenated array.
     """
     return ak.concatenate(list(map(ak.to_packed, arrays)), *args, **kwargs)
-
-
-def slice_across_chunks(
-    slice_funcs: Sequence[Callable[[int, int], ak.Array | np.ndarray]],
-    sizes: Sequence[int],
-    entry_start: int | None = None,
-    entry_stop: int | None = None,
-) -> ak.Array | np.ndarray:
-    """
-    Loads multiple array chunks, concatenates them and returns the result. Each chunk is loaded by its own slicing
-    function in *slice_funcs* which receives the start and stop entry of the chunk to load. The total sizes of the
-    chunks are given in *sizes* and used for internal range calculation. By default, the full range of all chunks is
-    loaded, but this can be limited by setting *entry_start* and *entry_stop* to the global start and stop entry to
-    load, respectively.
-
-    :param slice_funcs: The slicing/loading function that provide chunks.
-    :param sizes: The total sizes per chunks for internal range calculation.
-    :param entry_start: The global start entry to load. Defaults to the start of the first chunk.
-    :param entry_stop: The global stop entry to load. Defaults to the end of the last chunk.
-    :return: The concatenated array of all loaded chunks.
-    """
-    if len(slice_funcs) != len(sizes):
-        raise ValueError(f"slice_funcs and sizes must have the same length, but got {len(slice_funcs)} and {len(sizes)}")
-
-    # collect arrays according to chunk ranges
-    arrays = []
-    chunk_ranges = law.util.chunk_slice_ranges(sizes, entry_start, entry_stop)
-    for r, slice_func in zip(chunk_ranges, slice_funcs):
-        if r is not None:
-            start, stop = r
-            arrays.append(slice_func(start, stop))
-
-    if not arrays:
-        raise ValueError(f"no array chunks loaded, ranges were {chunk_ranges}")
-
-    # check if and how to concatenate
-    if len(arrays) == 1:
-        array = arrays[0]
-    elif any(isinstance(arr, ak.Array) for arr in arrays):
-        # at least one array is awkward, so concatenate safely
-        array = ak_concatenate_safe(arrays, axis=0)
-    else:
-        array = np.concatenate(arrays, axis=0)
-    del arrays
-
-    return array
 
 
 class ArraySource(dict):
@@ -1845,25 +1799,27 @@ class ArrayFunction(Derivable):
     # shallow wrapper around an object (a class or instance) and an IOFlag
     IOFlagged = namedtuple("IOFlagged", ["wrapped", "io_flag"])
 
-    # shallow wrapper around any object that returns the object itself in its default call method
-    # given an array function instance (can be easily subclassed to return something else)
+    # shallow wrapper around any object that returns the object itself in its default call method given an array
+    # function instance (can be easily subclassed to return something else)
     class DeferredColumn(object):
+
+        decorate_attr = "__call__"
 
         @classmethod
         def deferred_column(
-            cls: ArrayFunction.DeferredColumn,
+            cls,
             call_func: Callable[[ArrayFunction], Any | set[Any]] | None = None,
-        ) -> ArrayFunction.DeferredColumn | Callable:
+        ) -> type[ArrayFunction.DeferredColumn] | Callable:
             """
-            Subclass factory to be used as a decorator wrapping a *call_func* that will be used as
-            the new ``__call__`` method. Note that the use of ``super()`` inside the decorated
-            method should always be done with arguments (i.e., class and instance).
+            Subclass factory to be used as a decorator wrapping a *call_func* that will be used as the new ``__call__``
+            method (depending on :py:attr:`decorate_attr`). Note that the use of ``super()`` inside the decorated method
+            should always be done with arguments (i.e., class and instance).
             """
             def decorator(
                 call_func: Callable[[ArrayFunction], Any | set[Any]],
-            ) -> ArrayFunction.DeferredColumn:
+            ) -> type[ArrayFunction.DeferredColumn]:
                 cls_dict = {
-                    "__call__": call_func,
+                    cls.decorate_attr: call_func,
                     "__doc__": call_func.__doc__,
                 }
 
@@ -1890,6 +1846,9 @@ class ArrayFunction(Derivable):
                 else set(columns)
             )
 
+        def __repr__(self) -> str:
+            return f"<{self.__class__.__qualname__}.{self.__class__.__name__} at {hex(id(self))}>"
+
         def __call__(self, func: ArrayFunction) -> Any | set[Any]:
             # default implementation
             return self.get()
@@ -1897,6 +1856,34 @@ class ArrayFunction(Derivable):
         def get(self) -> Any | set[Any]:
             # return the first column if there is just one, otherwise all
             return list(self.columns)[0] if len(self.columns) == 1 else self.columns
+
+    class ConditionalColumn(DeferredColumn):
+
+        decorate_attr = "condition"
+
+        def __init__(self, *columns: Any, negated: bool = False) -> None:
+            super().__init__(*columns)
+            self.negated = bool(negated)
+
+        def __repr__(self) -> str:
+            neg_str = " (negated)" if self.negated else ""
+            return f"<{self.__class__.__qualname__}.{self.__class__.__name__}{neg_str} at {hex(id(self))}>"
+
+        def __call__(self, func: ArrayFunction) -> Any | set[Any]:
+            return self.get() if self.condition(func) != self.negated else None
+
+        def __neg__(self) -> ArrayFunction.ConditionalColumn:
+            return self.negate()
+
+        def __invert__(self) -> ArrayFunction.ConditionalColumn:
+            return self.negate()
+
+        def condition(self, func: ArrayFunction) -> bool:
+            # default implementation
+            return True
+
+        def negate(self) -> ArrayFunction.ConditionalColumn:
+            return self.__class__(*self.columns, negated=not self.negated)
 
     @classproperty
     def AUTO(cls) -> IOFlagged:
@@ -2170,7 +2157,7 @@ class ArrayFunction(Derivable):
             cls = cls_or_inst if is_cls else cls_or_inst.__class__
 
             # skip when the dependency is already present
-            if only_update and cls in self.deps:
+            if cls in self.deps:
                 return self.deps[cls]
 
             # create or get the instance
@@ -2410,32 +2397,26 @@ class ArrayFunction(Derivable):
         return results
 
 
-# shorthand
+# shorthands
 deferred_column = ArrayFunction.DeferredColumn.deferred_column
+conditional_column = ArrayFunction.ConditionalColumn.deferred_column
 
 
-@deferred_column
-def IF_DATA(self: ArrayFunction.DeferredColumn, func: ArrayFunction) -> Any | set[Any]:
-    return self.get() if func.dataset_inst.is_data else None
+@conditional_column
+def IF_DATA(self, func: ArrayFunction) -> bool:
+    return func.dataset_inst.is_data
 
 
-@deferred_column
-def IF_MC(self: ArrayFunction.DeferredColumn, func: ArrayFunction) -> Any | set[Any]:
-    return self.get() if func.dataset_inst.is_mc else None
+@conditional_column
+def IF_MC(self, func: ArrayFunction) -> bool:
+    return func.dataset_inst.is_mc
 
 
-def IF_DATASET_HAS_TAG(*args, negate: bool = False, **kwargs) -> ArrayFunction.DeferredColumn:
-    @deferred_column
-    def deferred(
-        self: ArrayFunction.DeferredColumn,
-        func: ArrayFunction,
-    ) -> Any | set[Any]:
-        return self.get() if func.dataset_inst.has_tag(*args, **kwargs) is not negate else None
-
-    return deferred
-
-
-IF_DATASET_NOT_HAS_TAG = partial(IF_DATASET_HAS_TAG, negate=True)
+def IF_DATASET_HAS_TAG(*args, negate: bool = False, **kwargs) -> ArrayFunction.ConditionalColumn:
+    @conditional_column
+    def condition(self, func: ArrayFunction) -> bool:
+        return func.dataset_inst.has_tag(*args, **kwargs) != bool(negate)
+    return condition
 
 
 def tagged_column(
@@ -2843,19 +2824,6 @@ class TaskArrayFunction(ArrayFunction, metaclass=TaskArrayFunctionMeta):
         """
         if attr in self.inst_dict:
             return self.inst_dict[attr]
-
-        # extra warnings for a limited period of time to ensure a smooth transition to the new
-        # task array function interface
-        if attr in {"task", "global_shift_inst", "local_shift_inst"}:
-            docs_url1 = get_docs_url("user_guide", "task_array_functions.html")
-            docs_url2 = get_docs_url("user_guide", "02_03_transition.html")
-            logger.warning_once(
-                f"taf_interface_deprected_{attr}",
-                f"direct access to attribute '{attr}' was removed in favor of a) using the 'task' "
-                "instance passed as an argument to most task array function hooks, or b) using the "
-                "correct task array function hook for the specific use case (e.g. pre_init() or "
-                f"post_init() instead of init()); see {docs_url1} and {docs_url2} for more info",
-            )
 
         raise AttributeError(f"'{self.__class__.__name__}' object has no attribute '{attr}'")
 
@@ -3276,11 +3244,11 @@ class ChunkedParquetReader(object):
 
         # store attributes
         self.path = path
-        self.open_options = open_options.copy() if open_options else {}
+        self.open_options = copy.deepcopy(open_options) if open_options else {}
 
         # open and store meta data with updated open options
         # (when closing the reader, this attribute is set to None)
-        meta_options = open_options.copy()
+        meta_options = copy.deepcopy(open_options)
         meta_options.pop("row_groups", None)
         meta_options.pop("ignore_metadata", None)
         meta_options.pop("columns", None)
@@ -3400,6 +3368,54 @@ class ChunkedParquetReader(object):
         return arr
 
 
+def slice_across_chunks(
+    slice_funcs: Sequence[Callable[[int, int], ak.Array | np.ndarray]],
+    sizes: Sequence[int],
+    entry_start: int | None = None,
+    entry_stop: int | None = None,
+) -> ak.Array | np.ndarray:
+    """
+    Loads multiple array chunks, concatenates them and returns the result. Each chunk is loaded by its own slicing
+    function in *slice_funcs* which receives the start and stop entry of the chunk to load. The total sizes of the
+    chunks are given in *sizes* and used for internal range calculation. By default, the full range of all chunks is
+    loaded, but this can be limited by setting *entry_start* and *entry_stop* to the global start and stop entry to
+    load, respectively.
+
+    :param slice_funcs: The slicing/loading function that provide chunks.
+    :param sizes: The total sizes per chunks for internal range calculation.
+    :param entry_start: The global start entry to load. Defaults to the start of the first chunk.
+    :param entry_stop: The global stop entry to load. Defaults to the end of the last chunk.
+    :return: The concatenated array of all loaded chunks.
+    """
+    if len(slice_funcs) != len(sizes):
+        raise ValueError(
+            f"slice_funcs and sizes must have the same length, but got {len(slice_funcs)} and {len(sizes)}",
+        )
+
+    # collect arrays according to chunk ranges
+    arrays = []
+    chunk_ranges = law.util.chunk_slice_ranges(sizes, entry_start, entry_stop)
+    for r, slice_func in zip(chunk_ranges, slice_funcs):
+        if r is not None:
+            start, stop = r
+            arrays.append(slice_func(start, stop))
+
+    if not arrays:
+        raise ValueError(f"no array chunks loaded, ranges were {chunk_ranges}")
+
+    # check if and how to concatenate
+    if len(arrays) == 1:
+        array = arrays[0]
+    elif any(isinstance(arr, ak.Array) for arr in arrays):
+        # at least one array is awkward, so concatenate safely
+        array = ak_concatenate_safe(arrays, axis=0)
+    else:
+        array = np.concatenate(arrays, axis=0)
+    del arrays
+
+    return array
+
+
 # alias to summarize possible root handler input types for read_*_root methods below
 RootHandlerInput: TypeAlias = Union[
     str,
@@ -3483,6 +3499,12 @@ class ChunkedIOHandler(object):
         ["index", "entry_start", "entry_stop", "max_chunk_size", "n_chunks"],
     )
 
+    # filter config container
+    FilterConfig = namedtuple(
+        "FilterConfig",
+        ["filter_func", "read_columns"],
+    )
+
     # read result container
     ReadResult = namedtuple(
         "ReadResult",
@@ -3502,9 +3524,10 @@ class ChunkedIOHandler(object):
         open_options: dict | Sequence[dict] | None = None,
         read_options: dict | Sequence[dict] | None = None,
         read_columns: set | Sequence[set] | None = None,
+        filter_config: FilterConfig | Sequence[FilterConfig] | None = None,
         iter_message: str = "handling chunk {pos.index}",
         debug: bool = law.config.get_expanded_bool("analysis", "chunked_io_debug", False),
-    ):
+    ) -> None:
         super().__init__()
 
         # multiple inputs?
@@ -3524,14 +3547,11 @@ class ChunkedIOHandler(object):
                 if len(value) != self.n_sources:
                     if len(value) != 1:
                         raise Exception(
-                            f"length of {name} should match length of source ({self.n_sources}), "
-                            f"but got {len(value)}",
+                            f"length of {name} should match length of source ({self.n_sources}), but got {len(value)}",
                         )
                     value *= self.n_sources
             elif is_multi(value):
-                raise Exception(
-                    f"when source is not a sequence, {name} should neither, but got '{value}'",
-                )
+                raise Exception(f"when source is not a sequence, {name} should neither, but got '{value}'")
             return value
 
         # check args
@@ -3539,6 +3559,7 @@ class ChunkedIOHandler(object):
         open_options = _check_arg("open_options", open_options)
         read_options = _check_arg("read_options", read_options)
         read_columns = _check_arg("read_columns", read_columns)
+        filter_config = _check_arg("filter_config", filter_config)
 
         # store input attributes
         self.source_list = list(source) if self.is_multi else [source]
@@ -3546,22 +3567,23 @@ class ChunkedIOHandler(object):
         self.open_options_list = list(open_options) if self.is_multi else [open_options]
         self.read_options_list = list(read_options) if self.is_multi else [read_options]
         self.read_columns_list = list(read_columns) if self.is_multi else [read_columns]
+        self.filter_config_list = list(filter_config) if self.is_multi else [filter_config]
         self.chunk_size = chunk_size
         self.pool_size = max(pool_size, 1)
         self.iter_message = iter_message
 
         # attributes that are set in open(), close() or __iter__()
         self.source_objects = []
-        self.n_entries = None
+        self.chunk_positions: list[list[ChunkedIOHandler.ChunkPosition]] = []
+        self.n_entries_total = None
+        self.n_entries_filtered = None
         self.task_queue = TaskQueue()
         self.pool_cls = multiprocessing.pool.ThreadPool
         self.pool = None
 
         # debug settings
         if debug:
-            logger.info(
-                f"{self.__class__.__name__} set to debug mode, using in-thread pool with size 1",
-            )
+            logger.info(f"{self.__class__.__name__} set to debug mode, using in-thread pool with size 1")
             self.pool_size = 1
             self.pool_cls = NoThreadPool
 
@@ -3577,19 +3599,39 @@ class ChunkedIOHandler(object):
         n_entries: int,
         chunk_size: int,
         chunk_index: int,
+        filter_mask: np.ndarray | None = None,
     ) -> ChunkPosition:
         """
         Creates and returns a :py:attr:`ChunkPosition` object based on the total number of entries
         *n_entries*, the maximum *chunk_size*, and the index of the chunk *chunk_index*.
         """
-        # determine the start of stop of this chunk
-        if n_entries == 0:
-            entry_start = 0
-            entry_stop = 0
-            n_chunks = 0
-        else:
+        # defaults
+        entry_start = 0
+        entry_stop = 0
+        n_chunks = 0
+
+        if n_entries > 0:
+            # compute start and stop indices
             entry_start = chunk_index * chunk_size
             entry_stop = min((chunk_index + 1) * chunk_size, n_entries)
+
+            # apply to indices of filter mask if given
+            if filter_mask is not None:
+                # prepare indices
+                if filter_mask.dtype == bool:
+                    if len(filter_mask) != n_entries:
+                        raise Exception(
+                            f"length of filter_mask ({len(filter_mask)}) does not match n_entries ({n_entries})",
+                        )
+                    filter_indices = np.where(filter_mask)[0]
+                else:
+                    filter_indices = filter_mask
+                # evaluate indices
+                entry_start = filter_indices[entry_start]
+                entry_stop = filter_indices[entry_stop] if entry_stop < len(filter_indices) else n_entries
+                n_entries = len(filter_indices)
+
+            # final number of chunks
             n_chunks = int(math.ceil(n_entries / chunk_size))
 
         return cls.ChunkPosition(chunk_index, entry_start, entry_stop, chunk_size, n_chunks)
@@ -3672,15 +3714,18 @@ class ChunkedIOHandler(object):
         *,
         open_options: dict | None = None,
         read_columns: set[str | Route] | None = None,
-    ) -> tuple[uproot.TTree | list[uproot.TTree], int]:
+        filter_config: FilterConfig | None = None,
+    ) -> tuple[uproot.TTree | list[uproot.TTree], int, np.ndarray | None]:
         """
-        Opens one or multiple uproot trees from root files at *source* and returns a 2-tuple *(tree(s), entries)*.
+        Opens one or multiple uproot trees from root files at *source* and returns a 3-tuple
+        *(tree(s), total entries, filter mask or None)*.
+
         *source* can be the path of the file, an already opened, readable uproot file (assuming the tree is called
         "Events"), an uproot tree, a 2-tuple whose second item defines the name of the tree to be loaded, or a list of
         these. When a new file is opened, it receives *open_options*. Passing *read_columns* has no effect.
         """
         # default open options
-        open_options = open_options.copy() if open_options else {}
+        open_options = copy.deepcopy(open_options) if open_options else {}
         open_options["object_cache"] = None
         open_options["array_cache"] = None
         open_options.setdefault("decompression_executor", None)
@@ -3709,7 +3754,20 @@ class ChunkedIOHandler(object):
         trees = list(map(detect_tree, law.util.make_list(source)))
         n_entries = sum(tree.num_entries for tree in trees)
 
-        return (trees if is_multi else trees[0], n_entries)
+        # compute and attach filter masks
+        filter_mask = None
+        if filter_config:
+            routes = law.util.make_unique(map(Route, law.util.make_list(filter_config.read_columns)))
+            columns = [route.nano_column for route in routes]
+            masks = []
+            for tree in trees:
+                arrays = tree.arrays(columns)
+                mask = np.asarray(filter_config.filter_func(arrays), dtype=bool)
+                tree._cf_filter_mask = mask
+                masks.append(mask)
+            filter_mask = np.concatenate(masks, axis=0)
+
+        return (trees if is_multi else trees[0], n_entries, filter_mask)
 
     @classmethod
     def close_uproot_root(
@@ -3720,6 +3778,12 @@ class ChunkedIOHandler(object):
         Closes the file that contains the TTree *source_object*.
         """
         for tree in law.util.make_list(source_object):
+            # drop temporary, cf related attributes
+            for attr in dir(tree):
+                if attr.startswith("_cf_"):
+                    delattr(tree, attr)
+
+            # close the underlying file
             f = getattr(tree, "file", None)
             if f is not None:
                 f.close()
@@ -3732,39 +3796,48 @@ class ChunkedIOHandler(object):
         *,
         read_options: dict | None = None,
         read_columns: set[str | Route] | None = None,
+        filter_config: FilterConfig | None = None,
     ) -> ak.Array:
         """
         Given one or multiple uproot TTrees *source_object*, returns an awkward array chunk referred to by *chunk_pos*.
-        *read_options* are passed to ``uproot.TTree.arrays``. *read_columns* are converted to strings and, if not
-        already present, added as field ``filter_name`` to *read_options*.
+        *read_options* are passed to ``uproot.TTree.arrays``. *read_columns* are converted to strings and added to the
+        field ``filter_name`` in *read_options*.
         """
         # default read options
-        read_options = read_options.copy() if read_options else {}
+        read_options = copy.deepcopy(read_options) if read_options else {}
         read_options["array_cache"] = None
         read_options.pop("how", None)
 
-        # inject read_columns
-        if read_columns and "filter_name" not in read_options:
-            routes = list(map(Route, read_columns))
-            filter_name = [r.string_nano_column for r in routes]
+        # inject filter names
+        filter_name = set(read_options.pop("filter_name", None) or ())
+        read_columns = set(read_columns or ())
+        if filter_config:
+            read_columns.update(law.util.make_set(filter_config.read_columns))
+        if read_columns:
+            routes = set(map(Route, read_columns))
+            filter_name.update(r.string_nano_column for r in routes)
             # add names prefixed with an 'n' to the list of columns to read
             # (needed to construct the nested list structure of jagged columns)
-            maybe_jagged = {r[0] for r in routes if len(r) > 1}
-            filter_name.extend(f"n{f}" for f in maybe_jagged)
-            # add to read options
-            read_options["filter_name"] = filter_name
+            filter_name.update(f"n{r[0]}" for r in routes if len(r) > 1)
+        # add back to read options
+        if filter_name:
+            read_options["filter_name"] = list(filter_name)
 
-        # helper to read from a single tree
+        # helper to read from a single tree, optionally filtering the result
         def load(tree, entry_start, entry_stop):
-            return tree.arrays(entry_start=entry_start, entry_stop=entry_stop, **read_options)
+            chunk = tree.arrays(entry_start=entry_start, entry_stop=entry_stop, **read_options)
+            if filter_config:
+                if (mask := getattr(tree, "_cf_filter_mask", None)) is None:
+                    mask = filter_config.filter_func(chunk)
+                    tree._cf_filter_mask = mask
+                chunk = ak.to_packed(chunk[mask[entry_start:entry_stop]])
+            return chunk
 
-        # distinguish multi and single source cases
-        if isinstance(source_object, list):
-            tree_sizes = [tree.num_entries for tree in source_object]
-            slice_funcs = [partial(load, tree) for tree in source_object]
-            chunk = slice_across_chunks(slice_funcs, tree_sizes, chunk_pos.entry_start, chunk_pos.entry_stop)
-        else:
-            chunk = load(source_object, chunk_pos.entry_start, chunk_pos.entry_stop)
+        # load the chunk, optionally across multiple trees
+        trees = law.util.make_list(source_object)
+        tree_sizes = [tree.num_entries for tree in trees]
+        slice_funcs = [partial(load, tree) for tree in trees]
+        chunk = slice_across_chunks(slice_funcs, tree_sizes, chunk_pos.entry_start, chunk_pos.entry_stop)
 
         return chunk
 
@@ -3775,11 +3848,17 @@ class ChunkedIOHandler(object):
         *,
         open_options: dict | None = None,
         read_columns: set[str | Route] | None = None,
-    ) -> tuple[tuple[uproot.ReadOnlyDirectory | list[uproot.ReadOnlyDirectory], str], int]:
+        filter_config: FilterConfig | None = None,
+    ) -> tuple[tuple[uproot.ReadOnlyDirectory | list[uproot.ReadOnlyDirectory], str], int, np.ndarray | None]:
         """
         Same as :py:meth:`open_uproot_root`.
         """
-        return cls.open_uproot_root(source, open_options=open_options, read_columns=read_columns)
+        return cls.open_uproot_root(
+            source=source,
+            open_options=open_options,
+            read_columns=read_columns,
+            filter_config=filter_config,
+        )
 
     @classmethod
     def close_coffea_root(
@@ -3799,6 +3878,7 @@ class ChunkedIOHandler(object):
         *,
         read_options: dict | None = None,
         read_columns: set[str | Route] | None = None,
+        filter_config: FilterConfig | None = None,
     ) -> ak.Array:
         """
         Same as :py:meth:`read_uproot_root`, but attaches coffea's nano schema to the returned array.
@@ -3808,6 +3888,7 @@ class ChunkedIOHandler(object):
             chunk_pos=chunk_pos,
             read_options=read_options,
             read_columns=read_columns,
+            filter_config=filter_config,
         )
 
         # attach nano schema
@@ -3821,19 +3902,27 @@ class ChunkedIOHandler(object):
         source: str,
         open_options: dict | None = None,
         read_columns: set[str | Route] | None = None,
-    ) -> tuple[ChunkedParquetReader, int]:
+        filter_config: FilterConfig | None = None,
+    ) -> tuple[ChunkedParquetReader, int, np.ndarray | None]:
         """
         Opens a parquet file saved at *source*, loads the content as chunks of an awkward array wrapped by a
-        :py:class:`ChunkedParquetReader`, and returns a 2-tuple *(reader, length)*.
+        :py:class:`ChunkedParquetReader`, and returns a 3-tuple *(reader, total entries, filter mask or None)*.
 
         *open_options* and *chunk_size* are forwarded accordingly. *read_columns* are converted to strings and, if not
-        already present, added as field ``columns`` to *open_options*.
+        already present, added as field ``columns`` to *open_options*. Passing *filter_config* has no effect.
         """
         if not isinstance(source, str):
             raise Exception(f"'{source}' cannot be opened as awkward_parquet")
 
+        # show warning when filter config is given
+        if filter_config:
+            logger.warning_once(
+                f"{cls.__name__}_open_awkward_parquet_got_filter_config",
+                f"{cls.__name__}: filter_config is not supported for 'awkward_parquet', got '{filter_config}'",
+            )
+
         # default open options
-        open_options = open_options.copy() if open_options else {}
+        open_options = copy.deepcopy(open_options) if open_options else {}
 
         # inject read_columns
         if read_columns and "columns" not in open_options:
@@ -3843,7 +3932,7 @@ class ChunkedIOHandler(object):
         # load the array wrapper
         reader = ChunkedParquetReader(source, open_options)
 
-        return (reader, len(reader))
+        return (reader, len(reader), None)
 
     @classmethod
     def close_awkward_parquet(
@@ -3862,11 +3951,19 @@ class ChunkedIOHandler(object):
         chunk_pos: ChunkedIOHandler.ChunkPosition,
         read_options: dict | None = None,
         read_columns: set[str | Route] | None = None,
+        filter_config: FilterConfig | None = None,
     ) -> ak.Array:
         """
         Given a :py:class:`ChunkedParquetReader` *source_object*, returns the chunk referred to by *chunk_pos* as a
         full copy loaded into memory. Passing neither *read_options* nor *read_columns* has an effect.
         """
+        # show warning when filter config is given
+        if filter_config:
+            logger.warning_once(
+                f"{cls.__name__}_open_awkward_parquet_got_filter_config",
+                f"{cls.__name__}: filter_config is not supported for 'awkward_parquet', got '{filter_config}'",
+            )
+
         # get the materialized ak array for that chunk
         return source_object.materialize(
             chunk_index=chunk_pos.index,
@@ -3936,22 +4033,27 @@ class ChunkedIOHandler(object):
         )
 
     @property
+    def n_entries(self) -> int | None:
+        # backwards compatibility
+        return self.n_entries_filtered
+
+    @property
     def n_chunks(self) -> int:
         """
         Returns the number of chunks this instance will iterate over based on the number of entries
-        :py:attr:`n_entries` and the configured :py:attr:`chunk_size`. In case :py:attr:`n_entries`
+        :py:attr:`n_entries_filtered` and the configured :py:attr:`chunk_size`. In case :py:attr:`n_entries_filtered`
         was not initialzed yet (via :py:meth:`open`), an *AttributeError* is raised.
         """
-        if self.n_entries is None:
+        if self.n_entries_filtered is None:
             raise AttributeError("cannot determine number of chunks before open()")
-        return int(math.ceil(self.n_entries / self.chunk_size))
+        return int(math.ceil(self.n_entries_filtered / self.chunk_size))
 
     @property
     def closed(self) -> bool:
         """
         Returns whether the instance is closed for reading.
         """
-        return len(self.source_objects) != self.n_sources
+        return not self.n_sources or len(self.source_objects) != self.n_sources
 
     def open(self) -> None:
         """
@@ -3964,30 +4066,56 @@ class ChunkedIOHandler(object):
 
         # reset some attributes
         del self.source_objects[:]
-        self.n_entries = None
+        del self.chunk_positions[:]
+        self.n_entries_total = None
+        self.n_entries_filtered = None
 
         # open all sources and make sure they have the same number of entries
-        for i, (source, source_handler, open_options, read_columns) in enumerate(zip(
+        for source_index, (source, source_handler, open_options, read_columns, filter_config) in enumerate(zip(
             self.source_list,
             self.source_handlers,
             self.open_options_list,
             self.read_columns_list,
+            self.filter_config_list,
         )):
             # open the source
-            obj, n = source_handler.open(
+            obj, n_total, filter_mask = source_handler.open(
                 source,
                 open_options=open_options,
                 read_columns=(sorted(read_columns) if read_columns else read_columns),
+                filter_config=filter_config,
             )
+            if filter_mask is None:
+                n_filtered = n_total
+            else:
+                filter_mask = np.asarray(filter_mask, dtype=bool)
+                n_filtered = int(filter_mask.sum())
+
             # check entries
-            if i == 0:
-                self.n_entries = n
-            elif n != self.n_entries:
+            if source_index == 0:
+                self.n_entries_total = n_total
+                self.n_entries_filtered = n_filtered
+            elif n_filtered != self.n_entries_filtered:
+                filter_str = "" if self.n_entries_filtered == self.n_entries_total else "(filtered) "
                 raise ValueError(
-                    f"number of entries of source {i} '{source}' does not match first source",
+                    f"number of {filter_str}entries of source {source_index} '{source}' ({n_filtered:_}) does not "
+                    f"match that of source 0 '{self.source_list[0]}' ({self.n_entries_filtered:_})",
                 )
+
             # save the source object
             self.source_objects.append(obj)
+
+            # compute chunk positions for that source
+            filter_indices = None if filter_mask is None else np.where(filter_mask)[0]
+            self.chunk_positions.append([
+                self.create_chunk_position(
+                    n_entries=self.n_entries_total,
+                    chunk_size=self.chunk_size,
+                    chunk_index=chunk_index,
+                    filter_mask=filter_indices,
+                )
+                for chunk_index in range(max(self.n_chunks, 1))
+            ])
 
             logger_perf.debug(f"opening {source} of type {source_handler.type} for reading")
 
@@ -4004,8 +4132,11 @@ class ChunkedIOHandler(object):
         for (obj, source_handler) in zip(self.source_objects, self.source_handlers):
             source_handler.close(obj)
 
-        # delete the file cache
+        # clear some attributes
         del self.source_objects[:]
+        del self.chunk_positions[:]
+        self.n_entries_total = None
+        self.n_entries_filtered = None
 
     def queue(self, *args, **kwargs) -> None:
         """
@@ -4022,6 +4153,14 @@ class ChunkedIOHandler(object):
         if self.closed:
             raise Exception(f"cannot iterate through closed {self.__class__.__name__}")
 
+        # check that all chunk position lists have the same length
+        for source_index, chunk_positions in enumerate(self.chunk_positions):
+            if len(chunk_positions) != self.n_chunks:
+                raise Exception(
+                    f"found {len(chunk_positions)} chunk position(s) for source {source_index}, but expected "
+                    f"{self.n_chunks}",
+                )
+
         # create a list of read functions
         read_funcs = [
             partial(
@@ -4029,43 +4168,49 @@ class ChunkedIOHandler(object):
                 obj,
                 read_options=read_options,
                 read_columns=(sorted(read_columns) if read_columns else read_columns),
+                filter_config=filter_config,
             )
-            for obj, source_handler, read_options, read_columns in zip(
+            for obj, source_handler, read_options, read_columns, filter_config in zip(
                 self.source_objects,
                 self.source_handlers,
                 self.read_options_list,
                 self.read_columns_list,
+                self.filter_config_list,
             )
         ]
 
-        # lightweight callabe that wraps all read funcs and comines their return values
-        def read(chunk_pos):
+        # lightweight callabe that wraps all read funcs and combines their return values
+        def read(chunk_index: int) -> ChunkedIOHandler.ReadResult:
             chunks = []
             durations = []
             t1 = time.perf_counter()
-            for read_func in read_funcs:
-                chunks.append(read_func(chunk_pos))
+            chunk_size = None
+            for source_index, read_func in enumerate(read_funcs):
+                chunk = read_func(self.chunk_positions[source_index][chunk_index])
+                if source_index == 0:
+                    chunk_size = len(chunk)
+                elif len(chunk) != chunk_size:
+                    raise ValueError(
+                        f"number of entries in chunk {chunk_index} of source {source_index} ({len(chunk):_}) does not "
+                        f"match that of source 0 ({chunk_size:_})",
+                    )
+                chunks.append(chunk)
                 durations.append(time.perf_counter() - t1)
 
             duration = law.util.human_duration(seconds=sum(durations))
             durations = [f"{s:.1f}" for s in durations]
             logger_perf.debug(
-                f"reading of chunk {chunk_pos.index} from {len(durations)} file(s) took {duration} "
+                f"reading of chunk {chunk_index} from {len(durations)} file(s) took {duration} "
                 f"({'+'.join(durations)}s)",
             )
 
+            # return a read result with the chunk position of the first source
+            chunk_pos = self.chunk_positions[0][chunk_index]
             return self.ReadResult((chunks if self.is_multi else chunks[0]), chunk_pos)
 
-        # create a list of all chunk positions
-        chunk_positions = [
-            self.create_chunk_position(self.n_entries, self.chunk_size, chunk_index)
-            for chunk_index in range(max(self.n_chunks, 1))
-            # here! mdc
-        ]
-
         # fill the list of tasks the pool has to work through
-        for chunk_pos in chunk_positions:
-            self.task_queue.add(read, (chunk_pos,), priority=-1)
+        for chunk_index in range(self.n_chunks):
+            self.task_queue.add(read, (chunk_index,), priority=-1)
 
         # strategy: setup the pool and manually keep it filled up to pool_size and do not insert all
         # chunks right away as this could swamp the memory if processing is slower than IO

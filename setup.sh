@@ -600,7 +600,7 @@ cf_setup_software_stack() {
     # persistent PATH and PYTHONPATH parts that should be
     # priotized over any additions made in sandboxes
     export CF_PERSISTENT_PATH="${CF_BASE}/bin:${CF_BASE}/modules/law/bin"
-    export CF_PERSISTENT_PYTHONPATH="${CF_BASE}:${CF_BASE}/bin:${CF_BASE}/modules/law:${CF_BASE}/modules/law/src:${CF_BASE}/modules/order"
+    export CF_PERSISTENT_PYTHONPATH="${CF_BASE}:${CF_BASE}/bin:${CF_BASE}/modules/law/src:${CF_BASE}/modules/order"
 
     # flavor specific paths
     if [ ! -z "${CF_FLAVOR}" ]; then
@@ -671,12 +671,15 @@ EOF
             echo "initialized conda with $( cf_color magenta "micromamba" ) interface and $( cf_color magenta "python ${CF_PYTHON_VERSION}" )"
 
             # install packages
+            # some versions pinned, see https://github.com/columnflow/columnflow/issues/816
             if ${conda_missing}; then
                 echo
                 cf_color cyan "setting up conda / micromamba environment"
                 micromamba install \
                     gcc \
                     libgcc \
+                    gxx \
+                    libstdcxx-ng \
                     bash \
                     zsh \
                     "python=${CF_PYTHON_VERSION}" \
@@ -900,6 +903,7 @@ cf_check_tmp_dir() {
 
     return "0"
 }
+[ ! -z "${BASH_VERSION}" ] && export -f cf_check_tmp_dir
 
 cf_setup_git_hooks() {
     # Initializes lfs and custom githooks in the local checkout for both the columnflow
@@ -1046,7 +1050,7 @@ cf_init_submodule() {
 cf_cast_bool() {
     # lower case
     local value="$( cf_lower_case "$1" )"
-    if [ "${value}" = "1" ] || [ "${value}" = "yes" ] || [ "${value}" = "true" ]; then
+    if [ "${value}" = "1" ] || [ "${value}" = "yes" ] || [ "${value}" = "y" ] || [ "${value}" = "true" ]; then
         echo "true"
     else
         echo "false"
@@ -1137,11 +1141,13 @@ cf_lower_case() {
     # cross-shell lower case helper
     echo "$1" | tr "[:upper:]" "[:lower:]"
 }
+[ ! -z "${BASH_VERSION}" ] && export -f cf_lower_case
 
 cf_upper_case() {
     # cross-shell upper case helper
     echo "$1" | tr "[:lower:]" "[:upper:]"
 }
+[ ! -z "${BASH_VERSION}" ] && export -f cf_upper_case
 
 main() {
     # Invokes the main action of this script, catches possible error codes and prints a message.
