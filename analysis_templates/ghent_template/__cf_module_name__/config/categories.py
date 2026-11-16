@@ -18,7 +18,7 @@ def add_categories_selection(config: od.Config) -> None:
 
     config.x.regions = ("incl")
     config.x.lepton_channels = ("2e", "1e1mu", "2mu")
-    config.x.lepton_channel_labels = {"2e": "$ee$", "1e1mu": "$e\mu$", "2mu": "$\mu\mu$"}
+    config.x.lepton_channel_labels = {"2e": r"$ee$", "1e1mu": r"$e\mu$", "2mu": r"$\mu\mu$"}
 
     config.add_category(
         name="incl",

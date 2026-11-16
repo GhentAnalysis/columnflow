@@ -160,7 +160,7 @@ class GetDatasetLFNs(DatasetTask, law.tasks.TransferLocalFile):
         :return: The list of LFNs corresponding to the dataset with the identifier *dataset_key*.
         """
         code, out, _ = law.util.interruptable_popen(
-            f"dasgoclient --query='file dataset={dataset_key}' --limit=0",
+            f"/cvmfs/cms.cern.ch/common/dasgoclient --query='file dataset={dataset_key}' --limit=0",
             shell=True,
             stdout=subprocess.PIPE,
             executable="/bin/bash",
@@ -176,7 +176,8 @@ class GetDatasetLFNs(DatasetTask, law.tasks.TransferLocalFile):
             )
 
             code, out, _ = law.util.interruptable_popen(
-                f"dasgoclient --query='file dataset={dataset_key} instance=prod/phys03' --limit=0",
+                f"/cvmfs/cms.cern.ch/common/dasgoclient --query='file dataset={dataset_key} instance=prod/phys03' "
+                "--limit=0",
                 shell=True,
                 stdout=subprocess.PIPE,
                 executable="/bin/bash",
@@ -186,7 +187,7 @@ class GetDatasetLFNs(DatasetTask, law.tasks.TransferLocalFile):
             if code != 0:
                 raise Exception(f"dasgoclient query failed:\n{out}")
 
-        broken_files = dataset_inst[shift_inst.name].get_aux("broken_files", [])
+        broken_files = set(dataset_inst[shift_inst.name].get_aux("broken_files", []))
 
         return [
             line.strip()
@@ -476,8 +477,10 @@ class ExternalFile:
             self.single = True
         elif isinstance(self.subpaths, (list, tuple)):
             self.subpaths = DotDict(zip(enumerate(self.subpaths)))
+            self.single = not bool(self.subpaths)
         else:
             self.subpaths = DotDict.wrap(copy.deepcopy(self.subpaths))
+            self.single = not bool(self.subpaths)
         # remove None's
         for key in list(self.subpaths.keys()):
             if self.subpaths[key] is None:
@@ -486,10 +489,11 @@ class ExternalFile:
     def __str__(self) -> str:
         sub = ""
         if self.subpaths:
-            if self.single:
-                sub = f"/{self.subpaths[self.single_key]}"
-            else:
-                sub = " / " + ",".join(f"{n}={p}" for n, p in self.subpaths.items())
+            sub = (
+                f"/{self.subpaths[self.single_key]}"
+                if self.single
+                else " / " + ",".join(f"{n}={p}" for n, p in self.subpaths.items())
+            )
         return f"{self.location}{sub} ({self.version})"
 
     def __getattr__(self, attr: str) -> str:

@@ -12,3 +12,4 @@
     :maxdepth: 1
 
     default
+    hooks

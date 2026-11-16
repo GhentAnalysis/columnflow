@@ -107,9 +107,7 @@ class SelectEvents(_SelectEvents):
         }
 
         # add selector dependent requirements
-        reqs["selector"] = law.util.make_unique(law.util.flatten(
-            self.selector_inst.run_requires(task=self),
-        ))
+        reqs["selector"] = law.util.make_unique(law.util.flatten(self.selector_inst.run_requires(task=self)))
 
         return reqs
 
@@ -210,9 +208,16 @@ class SelectEvents(_SelectEvents):
             for (events, *cols), pos in self.iter_chunked_io(
                 law.util.map_struct(law.target.file.get_path, inps),
                 source_type=["coffea_root"] + ["awkward_parquet"] * n_calib + [None] * n_ext,
+                open_options=self.get_open_options(inps, first_is_nano=True),
+                read_options=self.get_read_options(inps, first_is_nano=True),
                 read_columns=[read_columns] * (1 + n_calib + n_ext),
+                filter_config=self.get_filter_configs(inps, first_is_nano=True),
                 chunk_size=self.selector_inst.get_min_chunk_size(),
             ):
+                # adjust if necessary
+                if callable(self.adjust_chunks):
+                    events, *cols = self.adjust_chunks([events, *cols])
+
                 # optional check for overlapping inputs within additional columns
                 if self.check_overlapping_inputs:
                     self.raise_if_overlapping(list(cols))
@@ -517,14 +522,10 @@ class MergeSelectionMasks(_MergeSelectionMasks):
         else:
             inputs = [inp["masks"] for inp in inputs]
 
-        law.pyarrow.merge_parquet_task(
-            self, inputs, output["masks"], writer_opts=self.get_parquet_writer_opts(),
-        )
+        law.pyarrow.merge_parquet_task(self, inputs, output["masks"], writer_opts=self.get_parquet_writer_opts())
 
     def zip_results_and_columns(self, inputs, tmp_dir):
-        from columnflow.columnar_util import (
-            Route, RouteFilter, sorted_ak_to_parquet, mandatory_coffea_columns,
-        )
+        from columnflow.columnar_util import Route, RouteFilter, sorted_ak_to_parquet, mandatory_coffea_columns
 
         # setup the normalization weights producer
         if self.dataset_inst.is_mc:

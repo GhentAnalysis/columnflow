@@ -6,14 +6,17 @@ Task to produce and merge histograms.
 
 from __future__ import annotations
 
+import functools
+
 import luigi
 import law
+import order as od
 
 from columnflow.tasks.framework.base import Requirements, AnalysisTask, wrapper_factory
 from columnflow.tasks.framework.mixins import (
     CalibratorClassesMixin, CalibratorsMixin, SelectorClassMixin, SelectorMixin, ReducerClassMixin, ReducerMixin,
     ProducerClassesMixin, ProducersMixin, VariablesMixin, DatasetShiftSourcesMixin, HistProducerClassMixin,
-    HistProducerMixin, ChunkedIOMixin, MLModelsMixin,
+    HistProducerMixin, ChunkedIOMixin, MLModelsMixin, ShiftCollectionsMixin,
 )
 from columnflow.tasks.framework.remote import RemoteWorkflow
 from columnflow.tasks.framework.parameters import last_edge_inclusive_inst
@@ -24,10 +27,17 @@ from columnflow.tasks.ml import MLEvaluation
 from columnflow.hist_util import update_ax_labels, sum_hists
 from columnflow.config_util import expand_shift_sources
 from columnflow.util import maybe_import, dev_sandbox
-from columnflow.types import TYPE_CHECKING
+from columnflow.types import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
+    from collections.abc import Container
+
+    ak = maybe_import("awkward")
     hist = maybe_import("hist")
+
+
+default_store_per_variable = law.config.get_expanded_bool("analysis", "default_histogram_store_per_variable")
+default_only_missing = law.config.get_expanded_bool("analysis", "default_histogram_only_missing")
 
 
 class VariablesMixinWorkflow(
@@ -56,6 +66,15 @@ class _CreateHistograms(
 class CreateHistograms(_CreateHistograms):
 
     last_edge_inclusive = last_edge_inclusive_inst
+    store_per_variable = luigi.BoolParameter(
+        default=default_store_per_variable,
+        description=f"when True, store each variable in a separate output file; default: {default_store_per_variable}",
+    )
+    only_missing = luigi.BoolParameter(
+        default=default_only_missing,
+        description="when True, and --store-per-variable is True as well, only create missing variable histograms; "
+        f"default: {default_only_missing}",
+    )
 
     sandbox = dev_sandbox(law.config.get("analysis", "default_columnar_sandbox"))
 
@@ -161,9 +180,7 @@ class CreateHistograms(_CreateHistograms):
             ]
 
         # add hist_producer dependent requirements
-        reqs["hist_producer"] = law.util.make_unique(law.util.flatten(
-            self.hist_producer_inst.run_requires(task=self),
-        ))
+        reqs["hist_producer"] = law.util.make_unique(law.util.flatten(self.hist_producer_inst.run_requires(task=self)))
 
         # require merged events
         reqs["events"] = self.reqs.ProvideReducedEvents.req(self)
@@ -174,7 +191,128 @@ class CreateHistograms(_CreateHistograms):
 
     @workflow_condition.output
     def output(self):
-        return {"hists": self.target(f"hist__vars_{self.variables_repr}__{self.branch}.pickle")}
+        output = {}
+        if self.store_per_variable:
+            output["hists"] = law.SiblingFileCollection({
+                var_name: self.target(f"hist__var_{var_name}__{self.branch}.pickle")
+                for var_name in self.variable_tuples
+            })
+        else:
+            output["hists"] = self.target(f"hist__vars_{self.variables_repr}__{self.branch}.pickle")
+        return output
+
+    # change Ghent: the per-chunk steps of run() are methods, so that a hist producer can apply them to other events of
+    # the same chunk (columnflow/histogramming/cmsGhent/shifts.py::shifts_hist, selection-dependent subshifts)
+
+    def merge_chunk_columns(
+        self,
+        events: ak.Array,
+        columns: list[ak.Array],
+        aliases: dict[str, str],
+    ) -> ak.Array:
+        """
+        Merges the *columns* read from the producer, ML and hist producer reader outputs into *events*
+        (``remove_obj_overlap``, then ``update_ak_array``), adds the shift *aliases* (source columns removed) and
+        attaches the coffea behavior, as done per chunk in :py:meth:`run` before the hist producer is invoked.
+        """
+        # imported at call time (as in run), so that analysis patches of these functions are used
+        from columnflow.columnar_util import update_ak_array, add_ak_aliases, attach_coffea_behavior
+        from columnflow.columnar_util_Ghent import remove_obj_overlap
+
+        # add additional columns
+        events, *columns = remove_obj_overlap(events, *columns)
+        events = update_ak_array(events, *columns)
+
+        # add aliases
+        events = add_ak_aliases(
+            events,
+            aliases,
+            remove_src=True,
+            missing_strategy=self.missing_column_alias_strategy,
+        )
+
+        return attach_coffea_behavior(events)
+
+    def get_category_ids(self, events: ak.Array, leaf_category_ids: Container[int]) -> ak.Array:
+        """
+        Returns the category ids of *events* (the :py:attr:`category_id_columns` concatenated) and raises a ValueError
+        when one of them is not in *leaf_category_ids*.
+        """
+        import numpy as np
+        import awkward as ak
+        from columnflow.columnar_util import Route, ak_concatenate_safe
+
+        category_ids = ak_concatenate_safe(
+            [Route(c).apply(events) for c in self.category_id_columns],
+            axis=-1,
+        )
+        unique_category_ids = np.unique(ak.flatten(category_ids))
+        if any(cat_id not in leaf_category_ids for cat_id in unique_category_ids):
+            undefined_category_ids = list(map(str, set(unique_category_ids) - set(leaf_category_ids)))
+            raise ValueError(
+                f"category_ids column contains ids {','.join(undefined_category_ids)} that are either not "
+                "known to the config at all, or not as leaf categories (i.e., they have child categories); "
+                "please ensure that category_ids only contains ids of known leaf categories",
+            )
+
+        return category_ids
+
+    def get_fill_data(
+        self,
+        events: ak.Array,
+        weight: ak.Array,
+        category_ids: ak.Array,
+        variable_insts: list[od.Variable],
+        shift_id: int,
+    ) -> tuple[dict[str, Any], ak.Array]:
+        """
+        Applies the selections of *variable_insts* to *events*, *weight* and *category_ids* and returns the data to fill
+        (category, process, shift *shift_id*, weight and one entry per variable) together with the selected events.
+        """
+        import numpy as np
+        import awkward as ak
+        from columnflow.columnar_util import Route, has_ak_column
+
+        # empty arrays to use when input files have no entries
+        empty_i32 = ak.Array(np.array([], dtype=np.int32))
+        empty_f32 = ak.Array(np.array([], dtype=np.float32))
+
+        # mask events and weights when selection expressions are found
+        masked_events = events
+        masked_weights = weight
+        masked_category_ids = category_ids
+        for variable_inst in variable_insts:
+            sel = variable_inst.selection
+            if sel == "1":
+                continue
+            if not callable(sel):
+                raise ValueError(f"invalid selection '{sel}', for now only callables are supported")
+            mask = sel(masked_events)
+            masked_events = ak.drop_none(masked_events[mask], axis=0)
+            masked_weights = ak.drop_none(masked_weights[mask], axis=0)
+            masked_category_ids = ak.drop_none(masked_category_ids[mask], axis=0)
+
+        # broadcast arrays so that each event can be filled for all its categories
+        fill_data = {
+            "category": masked_category_ids,
+            "process": masked_events.process_id,
+            "shift": shift_id,
+            "weight": masked_weights,
+        }
+        for variable_inst in variable_insts:
+            # prepare the expression
+            expr = variable_inst.expression
+            if isinstance(expr, str):
+                route = Route(expr)
+
+                def expr(events, *args, **kwargs):
+                    if len(events) == 0 and not has_ak_column(events, route):
+                        return empty_i32 if variable_inst.discrete_x else empty_f32
+                    return route.apply(events, null_value=variable_inst.null_value)
+            # apply it
+            fill_data[variable_inst.name] = expr(masked_events)
+
+        return fill_data, masked_events
 
     @law.decorator.notify
     @law.decorator.log
@@ -182,15 +320,11 @@ class CreateHistograms(_CreateHistograms):
     @law.decorator.safe_output
     @on_failure(callback=lambda task: task.teardown_hist_producer_inst())
     def run(self):
-        import numpy as np
-        import awkward as ak
-        from columnflow.columnar_util import (
-            Route, update_ak_array, add_ak_aliases, has_ak_column, attach_coffea_behavior, ak_concatenate_safe,
-        )
-        from columnflow.columnar_util_Ghent import remove_obj_overlap
+        from columnflow.columnar_util import Route
 
-        # prepare inputs
+        # prepare inputs and outputs
         inputs = self.input()
+        outputs = self.output()["hists"]
 
         # get IDs and names of all leaf categories
         leaf_category_map = {
@@ -232,15 +366,11 @@ class CreateHistograms(_CreateHistograms):
                 {variable_inst.expression}
                 if isinstance(variable_inst.expression, str)
                 else set()
-            ) | set(
+            ) | law.util.make_set(
                 # read requested input columns if defined
                 variable_inst.x("inputs", []),
             ))
         }
-
-        # empty arrays to use when input files have no entries
-        empty_i32 = ak.Array(np.array([], dtype=np.int32))
-        empty_f32 = ak.Array(np.array([], dtype=np.float32))
 
         # iterate over chunks of events and diffs
         file_targets = [inputs["events"]["events"]]
@@ -261,102 +391,72 @@ class CreateHistograms(_CreateHistograms):
                 if self.check_overlapping_inputs:
                     self.raise_if_overlapping([events] + list(columns))
 
-                # add additional columns
-                events, *columns = remove_obj_overlap(events, *columns)
-                events = update_ak_array(events, *columns)
-
-                # add aliases
-                events = add_ak_aliases(
-                    events,
-                    aliases,
-                    remove_src=True,
-                    missing_strategy=self.missing_column_alias_strategy,
-                )
+                # add additional columns and aliases, attach behavior (change Ghent: in merge_chunk_columns)
+                events = self.merge_chunk_columns(events, columns, aliases)
 
                 # invoke the hist producer, potentially updating columns and creating the event weight
-                events = attach_coffea_behavior(events)
                 events, weight = self.hist_producer_inst(events, task=self)
 
                 if len(events) == 0:
                     self.publish_message(f"no events found in chunk {pos}")
                     continue
 
-                # merge category ids and check that they are defined as leaf categories
-                category_ids = ak_concatenate_safe(
-                    [Route(c).apply(events) for c in self.category_id_columns],
-                    axis=-1,
-                )
-                unique_category_ids = np.unique(ak.flatten(category_ids))
-                if any(cat_id not in leaf_category_map for cat_id in unique_category_ids):
-                    undefined_category_ids = list(map(str, set(unique_category_ids) - set(leaf_category_map)))
-                    raise ValueError(
-                        f"category_ids column contains ids {','.join(undefined_category_ids)} that are either not "
-                        "known to the config at all, or not as leaf categories (i.e., they have child categories); "
-                        "please ensure that category_ids only contains ids of known leaf categories",
-                    )
+                # merge category ids and check that they are defined as leaf categories (change Ghent: in
+                # get_category_ids)
+                category_ids = self.get_category_ids(events, leaf_category_map)
 
                 # define and fill histograms, taking into account multiple axes
                 for var_key, var_names in self.variable_tuples.items():
+                    if self.store_per_variable and self.only_missing and outputs[var_key].exists():
+                        continue
+
                     # get variable instances
                     variable_insts = [self.config_inst.get_variable(var_name) for var_name in var_names]
 
                     if var_key not in histograms:
                         # create the histogram in the first chunk
-                        histograms[var_key] = self.hist_producer_inst.run_create_hist(variable_insts, task=self)
+                        histograms[var_key] = self.hist_producer_inst.run_create_hist(
+                            variables=variable_insts,
+                            task=self,
+                        )
 
-                    # mask events and weights when selection expressions are found
-                    masked_events = events
-                    masked_weights = weight
-                    masked_category_ids = category_ids
-                    for variable_inst in variable_insts:
-                        sel = variable_inst.selection
-                        if sel == "1":
-                            continue
-                        if not callable(sel):
-                            raise ValueError(f"invalid selection '{sel}', for now only callables are supported")
-                        mask = sel(masked_events)
-                        masked_events = masked_events[mask]
-                        masked_weights = masked_weights[mask]
-                        masked_category_ids = masked_category_ids[mask]
-
-                    # broadcast arrays so that each event can be filled for all its categories
-                    fill_data = {
-                        "category": masked_category_ids,
-                        "process": masked_events.process_id,
-                        "shift": self.global_shift_inst.id,
-                        "weight": masked_weights,
-                    }
-                    for variable_inst in variable_insts:
-                        # prepare the expression
-                        expr = variable_inst.expression
-                        if isinstance(expr, str):
-                            route = Route(expr)
-                            def expr(events, *args, **kwargs):
-                                if len(events) == 0 and not has_ak_column(events, route):
-                                    return empty_i32 if variable_inst.discrete_x else empty_f32
-                                return route.apply(events, null_value=variable_inst.null_value)
-                        # apply it
-                        fill_data[variable_inst.name] = expr(masked_events)
+                    # mask events and weights by the variable selections and build the fill data (change Ghent: in
+                    # get_fill_data)
+                    fill_data, masked_events = self.get_fill_data(
+                        events=events,
+                        weight=weight,
+                        category_ids=category_ids,
+                        variable_insts=variable_insts,
+                        shift_id=self.global_shift_inst.id,
+                    )
 
                     # let the hist producer fill it
-                    self.hist_producer_inst.run_fill_hist(histograms[var_key], fill_data, task=self)
+                    self.hist_producer_inst.run_fill_hist(
+                        h=histograms[var_key],
+                        data=fill_data,
+                        variables=variable_insts,
+                        events=masked_events,
+                        task=self,
+                    )
 
         # post-process the histograms
-        for var_key in self.variable_tuples.keys():
-            histograms[var_key] = self.hist_producer_inst.run_post_process_hist(histograms[var_key], task=self)
+        for var_key in histograms:
+            histograms[var_key] = self.hist_producer_inst.run_post_process_hist(h=histograms[var_key], task=self)
 
             # check the format after post-processing if no merged preprocessing will take place
-            if (
-                not self.hist_producer_inst.skip_compatibility_check and
-                not callable(self.hist_producer_inst.post_process_merged_hist_func)
-            ):
+            if self.hist_producer_inst.post_process_compatibility_check:
                 self.check_histogram_compatibility(histograms[var_key])
 
         # teardown the hist producer
         self.teardown_hist_producer_inst()
 
         # merge output files
-        self.output()["hists"].dump(histograms, formatter="pickle")
+        with self.publish_step(f"dumping {len(histograms)} histogram(s) ..."):
+            if self.store_per_variable:
+                for var_key, h in histograms.items():
+                    outputs[var_key].dump(h, formatter="pickle")
+            else:
+                outputs.dump(histograms, formatter="pickle")
 
 
 # overwrite class defaults
@@ -390,9 +490,8 @@ class _MergeHistograms(
 class MergeHistograms(_MergeHistograms):
 
     only_missing = luigi.BoolParameter(
-        default=False,
-        description="when True, identify missing variables first and only require histograms of "
-        "missing ones; default: False",
+        default=default_only_missing,
+        description=f"when True, only create missing variable histograms; default: {default_only_missing}",
     )
     remove_previous = luigi.BoolParameter(
         default=False,
@@ -408,6 +507,8 @@ class MergeHistograms(_MergeHistograms):
         CreateHistograms=CreateHistograms,
     )
 
+    invokes_hist_producer = True
+
     @classmethod
     def req_params(cls, inst: AnalysisTask, **kwargs) -> dict:
         _prefer_cli = law.util.make_set(kwargs.get("_prefer_cli", [])) | {"variables"}
@@ -418,43 +519,25 @@ class MergeHistograms(_MergeHistograms):
         # create a dummy branch map so that this task could be submitted as a job
         return {0: None}
 
-    def _get_variables(self):
-        if self.is_workflow():
-            return self.as_branch()._get_variables()
-
-        variables = self.variables
-
-        # optional dynamic behavior: determine not yet created variables and require only those
-        if self.only_missing:
-            missing = self.output()["hists"].count(existing=False, keys=True)[1]
-            variables = sorted(missing, key=variables.index)
-
-        return variables
-
     def workflow_requires(self):
         reqs = super().workflow_requires()
 
-        if not self.pilot:
-            variables = self._get_variables()
-            if variables:
-                reqs["hists"] = self.reqs.CreateHistograms.req_different_branching(
-                    self,
-                    branch=-1,
-                    variables=tuple(variables),
-                )
+        reqs["hists"] = self.pilot_workflow_requires(self.reqs.CreateHistograms.req_different_branching(
+            self,
+            branch=-1,
+            variables=tuple(self.variables),
+            _exclude={"only_missing"},
+        ))
 
         return reqs
 
     def requires(self):
-        variables = self._get_variables()
-        if not variables:
-            return []
-
         return self.reqs.CreateHistograms.req_different_branching(
             self,
             branch=-1,
-            variables=tuple(variables),
+            variables=tuple(self.variables),
             workflow="local",
+            _exclude={"only_missing"},
         )
 
     def output(self):
@@ -470,17 +553,36 @@ class MergeHistograms(_MergeHistograms):
     def run(self):
         # preare inputs and outputs
         inputs = self.input()["collection"]
-        outputs = self.output()
+        output_hists = self.output()["hists"]
+
+        # cached eager output existence check
+        @functools.cache
+        def output_exists(variable_name):
+            return output_hists[variable_name].exists()
+
+        # run the hist_producer setup
+        self._array_function_post_init()
 
         # load input histograms
         hists = [
-            inp["hists"].load(formatter="pickle")
+            (
+                {
+                    var_name: _inp.load(formatter="pickle")
+                    for var_name, _inp in inp["hists"].targets.items()
+                    if not self.only_missing or not output_exists(var_name)
+                }
+                if isinstance(inp["hists"], law.FileCollection)
+                else inp["hists"].load(formatter="pickle")
+            )
             for inp in self.iter_progress(inputs.targets.values(), len(inputs), reach=(0, 50))
         ]
 
         # create a separate file per output variable
         variable_names = list(hists[0].keys())
         for variable_name in self.iter_progress(variable_names, len(variable_names), reach=(50, 100)):
+            if self.only_missing and output_exists(variable_name):
+                continue
+
             self.publish_message(f"merging histograms for '{variable_name}'")
             variable_hists = [h[variable_name] for h in hists]
 
@@ -491,17 +593,17 @@ class MergeHistograms(_MergeHistograms):
             merged = sum_hists(variable_hists)
 
             # post-process the merged histogram
-            merged = self.hist_producer_inst.run_post_process_merged_hist(merged, task=self)
+            merged = self.hist_producer_inst.run_post_process_merged_hist(h=merged, task=self)
 
             # ensure the format is compatible
-            if not self.hist_producer_inst.skip_compatibility_check:
+            if self.hist_producer_inst.post_process_merged_compatibility_check:
                 CreateHistograms.check_histogram_compatibility(merged)
 
             # do not overwrite permissions when the file was already existing
-            perm = 0 if outputs["hists"][variable_name].exists() else None
+            perm = 0 if output_exists(variable_name) else None
 
             # write the output
-            outputs["hists"][variable_name].dump(merged, perm=perm, formatter="pickle")
+            output_hists[variable_name].dump(merged, perm=perm, formatter="pickle")
 
         # optionally remove inputs
         if self.remove_previous:
@@ -517,6 +619,7 @@ MergeHistogramsWrapper = wrapper_factory(
 
 class _MergeShiftedHistograms(
     DatasetShiftSourcesMixin,
+    ShiftCollectionsMixin,
     CalibratorClassesMixin,
     SelectorClassMixin,
     ReducerClassMixin,
@@ -560,21 +663,87 @@ class MergeShiftedHistograms(_MergeShiftedHistograms):
         # each chunk of shift sources is assigned its own branch
         return list(law.util.iter_chunks(self.shift_sources, self.shift_source_chunk_size))
 
+    def _resolve_shift_collections(self, shift_sources) -> tuple[dict[str, list[str]], list[str]]:
+        """
+        change Ghent: returns the shifts of *shift_sources* per requested shift collection (:py:attr:`shift_collections`)
+        that provides them, and the shifts to require individually (including ``nominal``), see
+        :py:func:`columnflow.histogramming.cmsGhent.shifts.resolve_shift_collections`.
+        """
+        from columnflow.histogramming import HistProducer
+        from columnflow.histogramming.cmsGhent.shifts import COLLECTION_TAG, resolve_shift_collections
+
+        # a collection as a shift source would merge all its subshifts under other names, possibly a second time
+        collection_sources = [
+            source for source in shift_sources
+            if self.config_inst.has_shift(f"{source}_{od.Shift.UP}") and
+            self.config_inst.get_shift(f"{source}_{od.Shift.UP}").has_tag(COLLECTION_TAG)
+        ]
+        if collection_sources:
+            raise ValueError(
+                f"{self.task_family}: shift collections {', '.join(collection_sources)} are no shift sources; request "
+                "the shift sources they contain and pass the collections as shift_collections",
+            )
+
+        shift_names = expand_shift_sources(shift_sources)
+        if not self.shift_collections:
+            return {}, shift_names
+
+        if not getattr(HistProducer.get_cls(self.hist_producer), "fills_shift_collections", False):
+            raise ValueError(
+                f"{self.task_family}: shift collections {', '.join(self.shift_collections)} requested, but hist "
+                f"producer '{self.hist_producer}' does not fill them (no fills_shift_collections attribute), use e.g. "
+                "shifts_hist",
+            )
+
+        collection_shifts, individual_shifts = resolve_shift_collections(
+            self.config_inst,
+            shift_names,
+            self.shift_collections,
+        )
+        if "nominal" in shift_names:
+            individual_shifts = ["nominal"] + individual_shifts
+
+        return collection_shifts, individual_shifts
+
+    def _shift_requirements(self, shift_sources) -> dict[str, MergeHistograms]:
+        # change Ghent: shifts in a requested shift collection are taken from the collection histograms
+        collection_shifts, shift_names = self._resolve_shift_collections(shift_sources)
+        reqs = {}
+        for col_name in collection_shifts:
+            req = self.reqs.MergeHistograms.req(self, shift=col_name, _prefer_cli={"variables"})
+            if req.shift != col_name:
+                raise ValueError(
+                    f"{self.task_family}: requested shift collection '{col_name}' resolved to '{req.shift}' in the "
+                    f"{req.task_family} requirement for dataset {self.dataset}; the hist producer has to declare it",
+                )
+            reqs[col_name] = req
+
+        # nominal and both directions per remaining shift source
+        for shift_name in shift_names:
+            req = self.reqs.MergeHistograms.req(self, shift=shift_name, _prefer_cli={"variables"})
+            # change Ghent: skip shifts tagged "mirrored" (accepted by ShiftSourcesMixin, implemented by no task and
+            # built later by the hist hook columnflow.histogramming.hooks.mirror_shifts); their requirement resolves to
+            # another shift (nominal), merging it would add the nominal histogram a second time
+            if req.shift != shift_name:
+                if self.config_inst.get_shift(shift_name).has_tag("mirrored"):
+                    continue
+                raise ValueError(
+                    f"{self.task_family}: requested shift '{shift_name}' resolved to '{req.shift}' in the "
+                    f"{req.task_family} requirement; only shifts tagged 'mirrored' may be skipped",
+                )
+            reqs[shift_name] = req
+        return reqs
+
     def workflow_requires(self):
         reqs = super().workflow_requires()
 
-        if not self.pilot:
-            # add nominal and both directions per shift source
-            for shift in expand_shift_sources(self.shift_sources):
-                reqs[shift] = self.reqs.MergeHistograms.req(self, shift=shift, _prefer_cli={"variables"})
+        for shift_name, req in self._shift_requirements(self.shift_sources).items():
+            reqs[shift_name] = self.pilot_workflow_requires(req)
 
         return reqs
 
     def requires(self):
-        return {
-            shift: self.reqs.MergeHistograms.req(self, shift=shift, _prefer_cli={"variables"})
-            for shift in expand_shift_sources(self.branch_data)
-        }
+        return self._shift_requirements(self.branch_data)
 
     def store_parts(self) -> law.util.InsertableDict:
         parts = super().store_parts()
@@ -582,6 +751,10 @@ class MergeShiftedHistograms(_MergeShiftedHistograms):
         if self.is_branch() and self.shift_source_chunk_size > 0:
             shifts_repr = self._shift_sources_repr(self.branch_data, self.enforce_nominal_shift_source)
             parts["shift_sources"] = f"shifts__{shifts_repr}"
+
+        # change Ghent: outputs merged from shift collections are kept apart (only when collections are used)
+        if self.shift_collections:
+            parts.insert_after("shift_sources", "shift_collections", f"coll__{self.shift_collections_repr}")
 
         return parts
 
@@ -602,6 +775,10 @@ class MergeShiftedHistograms(_MergeShiftedHistograms):
     @law.decorator.notify
     @law.decorator.log
     def run(self):
+        import warnings
+
+        import hist
+
         # preare inputs and outputs
         inputs = self.input()
         outputs = self.output()["hists"].targets
@@ -609,6 +786,14 @@ class MergeShiftedHistograms(_MergeShiftedHistograms):
         shifts_msg = ""
         if self.shift_source_chunk_size > 0:
             shifts_msg = f" for {len(self.branch_data)} shift sources {','.join(self.branch_data)}"
+
+        # change Ghent: shifts taken from shift collections
+        collection_shifts, individual_shifts = self._resolve_shift_collections(self.branch_data)
+        if collection_shifts:
+            self.publish_message(
+                f"{sum(map(len, collection_shifts.values()))} shift(s) from shift collections "
+                f"{', '.join(collection_shifts)}, {len(individual_shifts)} shift(s) required individually",
+            )
 
         for variable_name, outp in self.iter_progress(outputs.items(), len(outputs)):
             # verbosely load input histograms
@@ -623,6 +808,23 @@ class MergeShiftedHistograms(_MergeShiftedHistograms):
                             f"shift '{shift_name}'",
                         )
                         raise
+
+                    # change Ghent: keep only the requested shifts of a collection histogram, all of which must be
+                    # filled (the hist producer skips subshifts it cannot fill)
+                    if shift_name in collection_shifts:
+                        wanted = collection_shifts[shift_name]
+                        missing = sorted(set(wanted) - set(h.axes["shift"]))
+                        if missing:
+                            raise ValueError(
+                                f"{self.task_family}: shift collection '{shift_name}' did not fill the requested "
+                                f"shift(s) {', '.join(missing)} for variable '{variable_name}' (filled: "
+                                f"{len(h.axes['shift'])}); require them individually",
+                            )
+                        # list selection keeps a growing category axis in the requested order (checked with hist
+                        # 2.9), hist warns that it is experimental
+                        with warnings.catch_warnings():
+                            warnings.filterwarnings("ignore", message="List indexing selection is experimental")
+                            h = h[{"shift": [hist.loc(s) for s in wanted]}]
 
                     # invoke modification hook, then save
                     h = self.modify_input_hist(shift_name, variable_name, h)
@@ -642,7 +844,8 @@ class MergeShiftedHistograms(_MergeShiftedHistograms):
         Hook to modify an input histogram for a shift after it has been loaded. This can be helpful to reduce memory
         early on.
 
-        :param shift: The shift name the histogram corresponds to.
+        :param shift: The shift name the histogram corresponds to, or the name of a shift collection (change Ghent,
+            :py:attr:`shift_collections`) whose histogram holds the requested shifts it contains.
         :param variable: The variable name the histogram corresponds to.
         :param h: The histogram to modify.
         :return: The modified histogram.

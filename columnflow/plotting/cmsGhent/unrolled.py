@@ -207,7 +207,12 @@ def plot_unrolled(
 
     # set up style config
     default_style_config = prepare_style_config(
-        config_inst, category_inst, x_variable_inst, density, shape_norm, yscale,
+        config_inst=config_inst,
+        variable_inst=x_variable_inst,
+        category_inst=category_inst,
+        density=density,
+        shape_norm=shape_norm,
+        yscale=yscale,
     )
     style_config = law.util.merge_dicts(default_style_config, style_config, deep=True)
     skip_ratio = kwargs.get("skip_ratio", False)
@@ -467,9 +472,10 @@ def plot_unrolled(
         cms_label_kwargs = get_cms_label(axes[0], cms_label)
         cms_label_kwargs.update(style_config.get("cms_label_cfg", {}))
 
-        # one label on left
+        # one label on left; get_cms_label sets exp="" for labels that contain "CMS" themselves (e.g. "pw")
+        left_label_kwargs = {"exp": cms_label_kwargs["exp"]} if "exp" in cms_label_kwargs else {}
         mplhep.cms.label(ax=axes[0], llabel=cms_label_kwargs["llabel"],
-                         data=cms_label_kwargs["data"], rlabel="")
+                         data=cms_label_kwargs["data"], rlabel="", **left_label_kwargs)
 
         # one label on right
         mplhep.cms.label(ax=axes[-1], llabel="", label="", exp="",

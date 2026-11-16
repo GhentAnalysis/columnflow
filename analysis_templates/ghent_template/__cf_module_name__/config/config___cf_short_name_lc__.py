@@ -166,7 +166,7 @@ def add_config(
             {"deltaEtaSC"},
         )
     )
-    
+
     # default objects, such as calibrator, selector, reducer, producer, ml model, inference model, etc
     cfg.x.default_calibrator = "skip_jecunc"  # skip jet energy correction up and down variation to save time in running
     cfg.x.default_selector = "default"

@@ -60,7 +60,7 @@ class METPhiConfigRun2:
 def met_phi_run2(self: Calibrator, events: ak.Array, **kwargs) -> ak.Array:
     """
     Performs the MET phi (type II) correction using :external+correctionlib:doc:`index`. Events whose uncorrected MET pt
-    is below the beam energy (extracted from ``config_inst.campaign.ecm * 0.5``) are skipped. Requires an external file
+    is below the beam energy (extracted from ``0.5 * config_inst.campaign.ecm * 1000``) are skipped. Requires an external file
     in the config under ``met_phi_corr``:
 
     .. code-block:: python
@@ -104,7 +104,7 @@ def met_phi_run2(self: Calibrator, events: ak.Array, **kwargs) -> ak.Array:
     corr_phi = np.array(met.phi, dtype=np.float32)
 
     # select only events where MET pt is below the expected beam energy
-    mask = met.pt < (0.5 * self.config_inst.campaign.ecm)
+    mask = met.pt < (0.5 * self.config_inst.campaign.ecm * 1000)
 
     # arguments for evaluation
     args = (
@@ -194,7 +194,7 @@ class METPhiConfig:
 def met_phi(self: Calibrator, events: ak.Array, **kwargs) -> ak.Array:
     """
     Performs the MET phi (type II) correction using :external+correctionlib:doc:`index`. Events whose uncorrected MET pt
-    is below the beam energy (extracted from ``config_inst.campaign.ecm * 0.5``) are skipped. Requires an external file
+    is below the beam energy (extracted from ``0.5 * config_inst.campaign.ecm * 1000``) are skipped. Requires an external file
     in the config under ``met_phi_corr``:
 
     .. code-block:: python

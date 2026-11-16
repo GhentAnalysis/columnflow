@@ -76,11 +76,22 @@ def fill_hist(
         flat_values = flat_np_view(data[ax.name])
         right_egde_mask = flat_values == ax.edges[-1]
         if np.any(right_egde_mask):
-            flat_values = ak.where(right_egde_mask, flat_values - ax.widths[-1] * 1e-5, flat_values)
+            corr_values = ak.where(right_egde_mask, flat_values - ax.widths[-1] * 1e-5, flat_values)
+            # in edge cases, corr_values might still be exactly at the edge value so check and optionally shift again
+            right_egde_mask = corr_values == ax.edges[-1]
+            if np.any(right_egde_mask):
+                corr_values = ak.where(corr_values == ax.edges[-1], flat_values - ax.widths[-1] * 0.5, corr_values)
+                # final check
+                right_egde_mask = corr_values == ax.edges[-1]
+                if np.any(right_egde_mask):
+                    raise Exception(
+                        f"failed to ultimately correct values that hit the last bin edge for axis '{ax.name}' in "
+                        f"histogram '{h.name}'",
+                    )
             data[ax.name] = (
-                flat_values
+                corr_values
                 if data[ax.name].ndim == 1
-                else layout_ak_array(flat_values, data[ax.name])
+                else layout_ak_array(corr_values, data[ax.name])
             )
 
     # check if conversion to records is needed
@@ -123,6 +134,13 @@ def fill_hist(
             del arrays, unpacked_arrays, unpacked_dict
 
         else:
+            # strings cannot be handled yet in the cartesian product
+            for ax_name, value in data.items():
+                if isinstance(value, str):
+                    raise TypeError(
+                        "cannot perform cartesian product during histogram filling with string data for axis "
+                        f"'{ax_name}': '{value}'",
+                    )
             arrays = ak.flatten(ak.cartesian(data))
             data = {field: arrays[field] for field in arrays.fields}
             del arrays
@@ -424,6 +442,44 @@ def sum_hists(hists: Sequence[hist.Hist]) -> hist.Hist:
     return h_sum
 
 
+def sum_hists_shift_aware(hists: Sequence[hist.Hist], shift_axis_name: str = "shift") -> hist.Hist:
+    """
+    Same as :py:func:`sum_hists`, but takes care of handling missing shift bins in subsets of histograms correctly.
+    In particular, in case histograms A miss shifts present in histograms B, the missing shifts are filled first with
+    values of the nominal bin.
+
+    :param hists: The histograms to sum.
+    :param shift_axis_name: The name of the axis that contains the shift bins. Defaults to "shift".
+    :return: The summed histogram.
+    """
+    import hist
+
+    # get unique list of all shifts
+    all_shift_names = set()
+    for h in hists:
+        if shift_axis_name not in h.axes.name:
+            raise ValueError(f"histogram {h} does not have a '{shift_axis_name}' axis")
+        all_shift_names.update(h.axes[shift_axis_name])
+
+    # extend histograms with nominal values for missing shifts
+    for i, h in enumerate(hists):
+        shift_names = set(h.axes[shift_axis_name])
+        missing_shifts = all_shift_names - shift_names
+        if missing_shifts:
+            if "nominal" not in shift_names:
+                raise ValueError(f"histogram {h} does not have a 'nominal' bin in its '{shift_axis_name}' axis")
+            h_nom = h[{shift_axis_name: hist.loc("nominal")}]
+            h = ensure_bin_exists(h, shift_axis_name, missing_shifts)
+            for missing_shift in missing_shifts:
+                insert_axis_values(h, shift_axis_name, missing_shift, h_nom)
+            hists[i] = h
+
+    # now sum as usual
+    h_sum = sum_hists(hists)
+
+    return h_sum
+
+
 def select_category_bins(
     h: hist.Hist,
     categories: od.Category | str | Sequence[od.Category | str],
@@ -491,7 +547,7 @@ def select_category_bins(
 def ensure_bin_exists(
     h: hist.Hist,
     axis_name: str,
-    value: Any,
+    value: Any | Sequence[Any],
     add_growth: bool = True,
 ) -> hist.Hist:
     """
@@ -510,11 +566,10 @@ def ensure_bin_exists(
     h = h.copy()
 
     # find the axis and its index
-    for axis_index, axis in enumerate(h.axes):
-        if axis.name == axis_name:
-            break
-    else:
+    if axis_name not in h.axes.name:
         raise ValueError(f"no axis named '{axis_name}' found in histogram: {h}")
+    axis_index = h.axes.name.index(axis_name)
+    axis = h.axes[axis_name]
 
     # for now, only adjustments to categorical axes are allowed
     categorical_types = (hist.axis.IntCategory, hist.axis.StrCategory)
@@ -544,25 +599,27 @@ def ensure_bin_exists(
         data = h.view(flow=True)[create_slice(slice(0, -1))]
         h = hist.Hist(*new_axes, storage=h.storage_type(), data=data)
 
-    # nothing to do in case the value already exists
-    if value in axis:
-        return h
+    # extend for all values if a sequence is given
+    for _value in law.util.make_list(value):
+        # nothing to do in case the value already exists
+        if _value in axis:
+            continue
 
-    # strategy: fill dummy values, then zero them in view afterwards
-    # get bin centers of first bin in other axes
-    dummy_values = {
-        ax.name: (list(ax)[0] if isinstance(ax, categorical_types) else ax.centers[0])
-        for ax in h.axes if ax != axis
-    }
-    h.fill(**(dummy_values | {axis_name: value}))
-    # now zero array
-    view = h.view()
-    zero_pos = create_slice(-1)
-    if isinstance(h.storage_type(), (hist.storage.Weight, hist.storage.WeightedMean)):
-        view.value[zero_pos] = 0
-        view.variance[zero_pos] = 0
-    else:
-        view[zero_pos] = 0
+        # strategy: fill dummy values, then zero them in view afterwards
+        # get bin centers of first bin in other axes
+        dummy_values = {
+            ax.name: (list(ax)[0] if isinstance(ax, categorical_types) else ax.centers[0])
+            for ax in h.axes if ax != axis
+        }
+        h.fill(**(dummy_values | {axis_name: _value}))
+        # now zero array
+        view = h.view()
+        zero_pos = create_slice(-1)
+        if isinstance(h.storage_type(), (hist.storage.Weight, hist.storage.WeightedMean)):
+            view.value[zero_pos] = 0
+            view.variance[zero_pos] = 0
+        else:
+            view[zero_pos] = 0
 
     return h
 
@@ -620,3 +677,67 @@ def merge_axis_bins(
         }]
 
     return h
+
+
+def insert_axis_values(
+    h: hist.Hist,
+    axis_name: str,
+    axis_value: Any,
+    values: np.ndarray | hist.Hist,
+    variances: np.ndarray | None = None,
+    flow: bool | None = None,
+) -> None:
+    """
+    Inserts (in-place) values and optionally variances into a histogram *h* for a given *axis_name* and *axis_value*.
+
+    :param h: The histogram to insert values into.
+    :param axis_name: The name of the axis to insert values for.
+    :param axis_value: The value of the axis to insert values for.
+    :param values: The values to insert. Can be an array or a histogram.
+    :param variances: The variances to insert. If *None* and *values* is a histogram, its variances are used.
+        Otherwise, no variances are inserted.
+    :param flow: Whether to use flow bins when inserting values. If *True*, the length of inserted values should fit
+        accordingly. When *None*, the default is *True* in case *values* is a histogram and *False* otherwise.
+    """
+    import hist
+
+    # if values is a histogram, extract actual values and variances
+    hist_has_variances = "variance" in h.view().dtype.names
+    if isinstance(values, hist.Hist):
+        if flow is None:
+            flow = True
+        if variances is None and hist_has_variances:
+            variances = values.view(flow=flow).variance
+        values = values.view(flow=flow).value
+    elif flow is None:
+        flow = False
+
+    # check if variances are provided and can be inserted
+    if variances is not None and not hist_has_variances:
+        raise ValueError("histogram does not store variances (weights), but variances were provided for insertion")
+
+    # get the axis and it's index
+    axis_names = [ax.name for ax in h.axes]
+    if axis_name not in axis_names:
+        raise ValueError(f"axis '{axis_name}' not found in histogram axes {axis_names}")
+    axis = h.axes[axis_name]
+    axis_index = axis_names.index(axis_name)
+
+    # get the value and its index
+    axis_values = list(axis)
+    if axis_value not in axis_values:
+        raise ValueError(f"axis value '{axis_value}' not found in axis '{axis_name}'")
+    value_index = axis_values.index(axis_value)
+
+    # create slice object using axis_index and value_index
+    insert_at = tuple(
+        axis_index * [slice(None, None)] +  # axes before target axis
+        [value_index] +  # last (= newest) position on amended axis
+        (len(axis_names) - axis_index - 1) * [slice(None, None)],  # remaining axes
+    )
+
+    # insert values
+    view = h.view(flow=flow)
+    view.value[insert_at] = values
+    if variances is not None:
+        view.variance[insert_at] = variances

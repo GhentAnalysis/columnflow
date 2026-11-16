@@ -87,18 +87,9 @@ def get_br_from_inclusive_datasets(
             if str(process_inst.id) in dstats["sum_mc_weight_per_process"]:
                 process_datasets[process_inst].add(self.config_inst.get_dataset(dataset_name))
 
-    # step 2: per dataset, collect all "lowest level" processes that are contained in them
-    dataset_processes = collections.defaultdict(set)
-    for dataset_name in dataset_selection_stats:
-        dataset_inst = self.config_inst.get_dataset(dataset_name)
-        dataset_process_inst = dataset_inst.processes.get_first()
-        for process_inst in process_insts:
-            if process_inst == dataset_process_inst or dataset_process_inst.has_process(process_inst, deep=True):
-                dataset_processes[dataset_inst].add(process_inst)
-
-    # step 3: per process, structure the assigned datasets and corresponding processes in DAGs, from more inclusive down
+    # step 2: per process, structure the assigned datasets and corresponding processes in DAGs, from more inclusive down
     #         to more exclusive phase spaces; usually each DAG can contain multiple paths to compute the BR of a single
-    #         process; this is resolved in step 4
+    #         process; this is selected and resolved in step 3
     @dataclasses.dataclass
     class Node:
         process_inst: od.Process
@@ -129,7 +120,15 @@ def get_br_from_inclusive_datasets(
 
     process_dags = {}
     for process_inst, dataset_insts in process_datasets.items():
-        # first, per dataset, remember all sub (more exclusive) datasets
+        # if there is only a single dataset, we can just use it as the root of the DAG
+        if len(dataset_insts) == 1:
+            process_dags[process_inst] = Node(
+                process_inst=self.inclusive_process,
+                dataset_inst=next(iter(dataset_insts)),
+                next={Node(process_inst=process_inst)},
+            )
+            continue
+        # per dataset, remember all sub (more exclusive) datasets
         # (the O(n^2) is not necessarily optimal, but we are dealing with very small numbers here, thus acceptable)
         sub_datasets = {}
         for d_incl, d_excl in itertools.permutations(dataset_insts, 2):
@@ -157,7 +156,7 @@ def get_br_from_inclusive_datasets(
             node.next.add(nodes[process_inst])
         process_dags[process_inst] = dag
 
-    # step 4: per process, compute the branching ratio for each possible path in the DAG, while keeping track of the
+    # step 3: per process, compute the branching ratio for each possible path in the DAG, while keeping track of the
     #         statistical precision of each combination, evaluated based on the raw number of events; then pick the
     #         most precise path; again, there should usually be just a single path, but multiple ones are possible when
     #         datasets have complex overlap
@@ -235,13 +234,13 @@ def get_br_from_inclusive_datasets(
                 f"large error on the branching ratio of {rel_unc * 100:.2f}% for process '{process_inst.name}' "
                 f"({process_inst.id}), calculated along\n  {path_repr(best_br_path, best_dag_path)}",
             )
-        # in case there were multiple values, check their compatibility with the best one and warn if they diverge
+        # in case there were multiple values, check their compatibility with the best one and log if they diverge
         for i, (br, br_path, dag_path) in enumerate(brs[1:], 2):
             abs_diff = abs(best_br.n - br.n)
             rel_diff = abs_diff / best_br.n
             pull = abs(best_br.n - br.n) / (best_br.u(direction="up")**2 + br.u(direction="up")**2)**0.5
             if rel_diff > 0.1 and pull > 3:
-                logger.warning(
+                logger.debug(
                     f"detected diverging branching ratios between the best and the one on position {i} for process "
                     f"'{process_inst.name}' (abs_diff={abs_diff:.4f}, rel_diff={rel_diff:.4f}, pull={pull:.2f} ):"
                     f"\nbest path: {best_br.str(format=3)} from {path_repr(best_br_path, best_dag_path)}"
@@ -253,12 +252,18 @@ def get_br_from_inclusive_datasets(
         header = ["process name", "process id", "branching ratio", "uncertainty (%)"]
         rows = [
             [
-                process_inst.name, process_inst.id, process_brs_debug[process_inst][0],
+                process_inst.name,
+                process_inst.id,
+                process_brs_debug[process_inst][0],
                 f"{process_brs_debug[process_inst][1] * 100:.4f}",
             ]
             for process_inst in sorted(process_brs_debug)
         ]
-        logger.info(f"extracted branching ratios from process occurrence in datasets:\n{tabulate(rows, header)}")
+        br_sum = sum(br for (br, _) in process_brs_debug.values())
+        logger.info(
+            f"extracted branching ratios from process occurrence in datasets:\n{tabulate(rows, header)}"
+            f"\n-> sum of branching ratios: {br_sum}",
+        )
 
     return process_brs
 
@@ -307,11 +312,13 @@ def normalization_weights(self: Producer, events: ak.Array, **kwargs) -> ak.Arra
     config is used.
 
     When py:attr`allow_stitching` is set to True, the sum of event weights is computed for all datasets with a leaf
-    process contained in the leaf processes of the py:attr:`dataset_inst`. For stitching, the process_id needs to be
-    reconstructed for each leaf process on a per event basis. Moreover, when stitching is enabled, an additional
-    normalization weight is computed for the inclusive dataset only and stored in a column named
-    `<weight_name>_inclusive_only`. This weight resembles the normalization weight for the inclusive dataset, as if it
-    were unstitched and should therefore only be applied, when using the inclusive dataset as a standalone dataset.
+    process contained within the main process of the py:attr:`dataset_inst`. For stitching, the "process_id" needs to be
+    reconstructed for each leaf process on a per-event basis.
+
+    Moreover, when stitching is enabled, an additional normalization weight is computed for the inclusive dataset only
+    and stored in a column named `<weight_name>_inclusive`. This weight resembles the normalization weight for the
+    inclusive dataset, as if it were unstitched and should therefore only be applied, when using the inclusive dataset
+    as a standalone dataset.
     """
     # read the process id column
     process_id = np.asarray(events.process_id)
@@ -337,7 +344,7 @@ def normalization_weights(self: Producer, events: ak.Array, **kwargs) -> ak.Arra
     events = set_ak_column(events, self.weight_name, norm_weight, value_type=np.float32)
 
     # when stitching, also compute the inclusive-only weight
-    if self.allow_stitching and self.dataset_inst == self.inclusive_dataset:
+    if self.allow_stitching and self.weight_name_incl:
         incl_norm_weight = events.mc_weight * self.inclusive_weight
         events = set_ak_column(events, self.weight_name_incl, incl_norm_weight, value_type=np.float32)
 
@@ -360,12 +367,15 @@ def normalization_weights_init(self: Producer, **kwargs) -> None:
         self.inclusive_dataset, self.required_datasets = self.get_stitching_datasets()
 
         # potentially also store the weight needed for only using the inclusive dataset
-        if self.dataset_inst == self.inclusive_dataset:
+        self.weight_name_incl = None
+        if self.dataset_inst == self.inclusive_dataset and len(self.required_datasets) > 1:
             self.weight_name_incl = f"{self.weight_name}_inclusive"
             self.produces.add(self.weight_name_incl)
     else:
         self.inclusive_dataset = self.dataset_inst
         self.required_datasets = [self.dataset_inst]
+
+    self.inclusive_process = self.inclusive_dataset.processes.get_first()
 
 
 @normalization_weights.requires
@@ -481,12 +491,27 @@ def normalization_weights_setup(
         self.update_dataset_selection_stats,
     )
 
+    # consistency check 1: none of the processes should be a sub-process of another one, i.e., they should all be
+    # "lowest level" processes; if not, the (sub) process id assignment was not done correctly
+    all_process_ids = list(map(int, merged_selection_stats_sum_weights["sum_mc_weight_per_process"]))
+    all_process_insts = list(map(self.config_inst.get_process, all_process_ids))
+    for proc_inst_1, proc_inst_2 in itertools.combinations(all_process_insts, 2):
+        contains_1_2 = proc_inst_1.has_process(proc_inst_2, deep=True)
+        contains_2_1 = proc_inst_2.has_process(proc_inst_1, deep=True)
+        if contains_1_2 or contains_2_1:
+            raise Exception(
+                f"found two processes '{proc_inst_1.name}' ({proc_inst_1.id}) and '{proc_inst_2.name}' "
+                f"({proc_inst_2.id}) in the merged selection stats that are sub-processes of each other; this is "
+                "most likely a misconfiguration of the manual sub process id assignment upstream; make sure that "
+                f"the sub-processes of '{(proc_inst_1 if contains_1_2 else proc_inst_2).name}' are assigned instead",
+            )
+
     # get all process ids and instances seen and assigned during selection of this dataset
     # (i.e., all possible processes that might be encountered during event processing)
     process_ids = set(map(int, dataset_selection_stats_br[self.dataset_inst.name]["sum_mc_weight_per_process"]))
     process_insts = set(map(self.config_inst.get_process, process_ids))
 
-    # consistency check: when the main process of the current dataset is part of these "lowest level" processes,
+    # consistency check 2: when the main process of the current dataset is part of these "lowest level" processes,
     # there should only be this single process, otherwise the manual (sub) process assignment does not match the
     # general dataset -> main process info
     if self.dataset_inst.processes.get_first() in process_insts and len(process_insts) > 1:

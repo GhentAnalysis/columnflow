@@ -24,8 +24,8 @@ import law
 import order as od
 
 from columnflow.columnar_util import mandatory_coffea_columns, Route, ColumnCollection
-from columnflow.util import get_docs_url, is_regex, prettify, DotDict, freeze
-from columnflow.types import Sequence, Callable, Any, T
+from columnflow.util import prettify, DotDict, freeze
+from columnflow.types import Sequence, Callable, Any, T, Literal
 
 
 logger = law.logger.get_logger(__name__)
@@ -88,6 +88,9 @@ class TaskShifts:
 
     def __hash__(self) -> int:
         return hash((frozenset(self.local), frozenset(self.upstream)))
+
+    def __contains__(self, shift: str) -> bool:
+        return shift in self.local or shift in self.upstream
 
 
 class BaseTask(law.Task):
@@ -216,10 +219,10 @@ class AnalysisTask(BaseTask, law.SandboxTask):
             return {}
 
         # apply brace expansion to keys
-        items = sum((
-            [(_key, value) for _key in law.util.brace_expand(key)]
-            for key, value in items
-        ), [])
+        items = law.util.flatten(
+            ([(_key, value) for _key in law.util.brace_expand(key)] for key, value in items),
+            flatten_tuple=False,
+        )
 
         # breakup keys at double underscores and create a nested dictionary
         items_dict = {}
@@ -240,7 +243,7 @@ class AnalysisTask(BaseTask, law.SandboxTask):
                     # assign value to the last nesting level, do not overwrite
                     if part not in d:
                         d[part] = value
-                    elif isinstance(d[part], dict):
+                    elif isinstance(d[part], dict) and "*" not in d[part]:
                         d[part]["*"] = value
 
         return items_dict
@@ -320,6 +323,9 @@ class AnalysisTask(BaseTask, law.SandboxTask):
         """
         # get different attributes by which the default version might be looked up
         keys = cls.get_config_lookup_keys(params)
+        for key in keys:
+            if "_" in key:
+                raise ValueError(f"config lookup key '{key}' contains underscore which is not allowed")
 
         # forward to lookup implementation
         version = cls._get_default_version(inst, params, keys)
@@ -382,10 +388,6 @@ class AnalysisTask(BaseTask, law.SandboxTask):
         prefix = "task"
         keys[prefix] = f"{prefix}_{cls.task_family}"
 
-        # for backwards compatibility, add the task family again without the prefix
-        # (TODO: this should be removed in the future)
-        keys[f"{prefix}_compat"] = cls.task_family
-
         return keys
 
     @classmethod
@@ -414,27 +416,10 @@ class AnalysisTask(BaseTask, law.SandboxTask):
             # (the original sequence is living once on the previous stack until now)
             _keys = keys_func()
 
-            # check if the pattern matches any key
-            regex = is_regex(pattern)
+            # check if the pattern matches any key, removing identical prefixes
+            prefix, _pattern = pattern.split("_", 1) if "_" in pattern else ("", pattern)
             for i, key in enumerate(_keys):
-                if law.util.multi_match(key, pattern, regex=regex):
-                    # for a limited time, show a deprecation warning when the old task family key was matched
-                    # (old = no "task_" prefix)
-                    # TODO: remove once deprecated
-                    if "task_compat" in keys and key == keys["task_compat"]:
-                        docs_url = get_docs_url(
-                            "user_guide",
-                            "best_practices.html",
-                            anchor="selecting-output-locations",
-                        )
-                        logger.warning_once(
-                            "dfs_lookup_old_task_key",
-                            f"during the lookup of a pinned location, version or resource value of a '{cls.__name__}' "
-                            f"task, an entry matched based on the task family '{key}' that misses the new 'task_' "
-                            "prefix; please update the pinned entries in your law.cfg file by adding the 'task_' "
-                            f"prefix to entries that contain the task family, e.g. 'task_{key}: VALUE'; support for "
-                            f"missing prefixes will be removed in a future version; see {docs_url} for more info",
-                        )
+                if (not prefix or key.startswith(f"{prefix}_")) and law.util.multi_match(key.split("_", 1)[1], _pattern):
                     # remove the matched key from remaining lookup keys
                     _keys.pop(i)
                     # when obj is not a dict, we found the value
@@ -465,9 +450,9 @@ class AnalysisTask(BaseTask, law.SandboxTask):
         object_cls: od.UniqueObjectMeta,
         groups_str: str | None = None,
         accept_patterns: bool = True,
-        deep: bool = False,
+        deep: bool | None = None,
         strict: bool = False,
-        multi_strategy: str = "first",
+        multi_strategy: Literal["first", "same", "union", "intersection", "all"] = "first",
     ) -> list[str] | dict[od.UniqueObject, list[str]]:
         """
         Returns all names of objects of type *object_cls* known to a *container* (e.g. :py:class:`od.Analysis` or
@@ -519,9 +504,11 @@ class AnalysisTask(BaseTask, law.SandboxTask):
             if multi_strategy == "first":
                 return all_object_names[container[0]]
             if multi_strategy == "union":
-                return list(set.union(*map(set, all_object_names.values())))
+                return law.util.make_unique(law.util.flatten(all_object_names.values()))
             if multi_strategy == "intersection":
-                return list(set.intersection(*map(set, all_object_names.values())))
+                all_names = law.util.make_unique(law.util.flatten(all_object_names.values()))
+                intersection = set.intersection(*map(set, all_object_names.values()))
+                return sorted(intersection, key=all_names.index)
             # "same", so check that values are identical
             first = all_object_names[container[0]]
             if not all(all_object_names[c] == first for c in container[1:]):
@@ -532,6 +519,8 @@ class AnalysisTask(BaseTask, law.SandboxTask):
             return first
 
         # prepare value caching
+        has_deep_lookup = object_cls in container._deep_child_classes
+        deep = True if deep is None and has_deep_lookup else deep
         singular = object_cls.cls_name_singular
         plural = object_cls.cls_name_plural
         _cache: dict[str, set[str]] = {}
@@ -547,8 +536,8 @@ class AnalysisTask(BaseTask, law.SandboxTask):
         def has_obj(name: str) -> bool:
             if "has_obj_func" not in _cache:
                 kwargs = {}
-                if object_cls in container._deep_child_classes:
-                    kwargs["deep"] = deep
+                if has_deep_lookup:
+                    kwargs["deep"] = bool(deep)
                 _cache["has_obj_func"] = functools.partial(getattr(container, f"has_{singular}"), **kwargs)
             return _cache["has_obj_func"](name)
 
@@ -588,7 +577,7 @@ class AnalysisTask(BaseTask, law.SandboxTask):
         task_params: dict[str, Any],
         container: str | od.AuxDataMixin | Sequence[od.AuxDataMixin],
         default_str: str | None = None,
-        multi_strategy: str = "first",
+        multi_strategy: Literal["first", "same", "union", "intersection", "all"] = "first",
         debug: bool = False,
     ) -> Any | list[Any] | dict[od.AuxDataMixin, Any]:
         """
@@ -692,7 +681,7 @@ class AnalysisTask(BaseTask, law.SandboxTask):
                     _param = _container.x(default_str, None)
                     # allow default to be a function, taking task parameters as input
                     if isinstance(_param, Callable):
-                        _param = _param(cls, _container, task_params)
+                        _param = _param(task_cls=cls, container=_container, task_params=task_params)
                     # handle empty values and return type
                     if not return_single_value:
                         _param = () if _param is None else law.util.make_tuple(_param)
@@ -1084,6 +1073,9 @@ class AnalysisTask(BaseTask, law.SandboxTask):
             location = OutputLocation[location]
         if location == OutputLocation.config:
             lookup_keys = self.get_config_lookup_keys(self)
+            for key in lookup_keys:
+                if "_" in key:
+                    raise ValueError(f"config lookup key '{key}' contains underscore which is not allowed")
             outputs_dict = self._get_cfg_outputs_dict()
             location = copy.deepcopy(self._dfs_key_lookup(lookup_keys, outputs_dict))
             if not location:
@@ -1143,20 +1135,6 @@ class AnalysisTask(BaseTask, law.SandboxTask):
 
         raise Exception(f"cannot determine output location based on '{location}'")
 
-    def pilot_workflow_requires(self, task: law.Task) -> Any:
-        """
-        Helper for situtations where *this* task is a workflow with ``--pilot`` activated to decide if an upstream task
-        itself should be required, or its own upstream dependencies.
-
-        :param task: The task to be required.
-        :return: Either the task itself or the result of its :py:meth:`~.workflow_requires` method.
-        """
-        return (
-            task.workflow_requires()
-            if self.pilot and isinstance(task, law.BaseWorkflow) and task.is_workflow()
-            else task
-        )
-
     def get_parquet_writer_opts(self, repeating_values: bool = False) -> dict[str, Any]:
         """
         Returns an option dictionary that can be passed as *writer_opts* to :py:meth:`~law.pyarrow.merge_parquet_task`,
@@ -1206,6 +1184,7 @@ class ConfigTask(AnalysisTask):
     exclude_params_remote_workflow = {"known_shifts"}
     exclude_params_index = {"known_shifts"}
     exclude_params_repr = {"known_shifts"}
+    exclude_params_hash = {"known_shifts"}
 
     # the field in the store parts behind which the new part is inserted
     # added here for subclasses that typically refer to the store part added by _this_ class
@@ -1441,7 +1420,7 @@ class ConfigTask(AnalysisTask):
     @classmethod
     def _multi_sequence_repr(
         cls,
-        values: Sequence[str] | Sequence[Sequence[str]],
+        values: Sequence[str] | set[str] | Sequence[Sequence[str] | set[str]],
         sort: bool = False,
     ) -> str:
         """
@@ -1463,15 +1442,21 @@ class ConfigTask(AnalysisTask):
         maybe_sort = (lambda vals: sorted(vals)) if sort else (lambda vals: vals)
 
         # helper to perform the single representation, assuming already sorted values
-        def single_repr(values: Sequence[str]) -> str:
+        def single_repr(values: Sequence[str] | set[str]) -> str:
             if not values:
                 return None
+            if isinstance(values, set):
+                values = sorted(values)
             if len(values) == 1:
                 return values[0]
             return f"{len(values)}_{law.util.create_hash(values)}"
 
+        # cast sets
+        if isinstance(values, set):
+            values = sorted(values)
+
         # single case
-        if not isinstance(values[0], (list, tuple)):
+        if not isinstance(values[0], (list, tuple, set)):
             return single_repr(maybe_sort(values))
         # multi case with a single sequence
         if len(values) == 1:
