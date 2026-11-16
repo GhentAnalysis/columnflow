@@ -31,6 +31,17 @@ if TYPE_CHECKING:
     plt = maybe_import("matplotlib.pyplot")
 
 
+def bin_centers(axis: hist.axis.AxesMixin) -> np.ndarray:
+    """
+    Bin centers of *axis* as x positions of bars and markers. Integer axes (discrete_x variables) are drawn by the stack
+    (hist / mplhep) starting at 0, so their centers are shifted by the first edge to line up with it.
+    """
+    import hist
+
+    centers = np.asarray(axis.centers)
+    return centers - axis.edges[0] if isinstance(axis, hist.axis.Integer) else centers
+
+
 def draw_stat_error_bands(
     ax: plt.Axes,
     h: hist.Hist,
@@ -53,7 +64,7 @@ def draw_stat_error_bands(
 
     # create bar plot args
     bar_kwargs = {
-        "x": h.axes[0].centers,
+        "x": bin_centers(h.axes[0]),
         "bottom": baseline * (1 - rel_stat_error),
         "height": baseline * 2 * rel_stat_error,
         "width": h.axes[0].edges[1:] - h.axes[0].edges[:-1],
@@ -163,7 +174,7 @@ def draw_syst_error_bands(
 
     # create bar plot args
     bar_kwargs = {
-        "x": h.axes[0].centers,
+        "x": bin_centers(h.axes[0]),
         "bottom": baseline * (1 - rel_syst_error_down),
         "height": baseline * (rel_syst_error_up + rel_syst_error_down),
         "width": h.axes[0].edges[1:] - h.axes[0].edges[:-1],
@@ -235,7 +246,7 @@ def draw_custom_error_band(
 
     # create bar plot args
     bar_kwargs = {
-        "x": h.axes[0].centers,
+        "x": bin_centers(h.axes[0]),
         "bottom": baseline * (1 - errors_down),
         "height": baseline * (errors_up + errors_down),
         "width": h.axes[0].edges[1:] - h.axes[0].edges[:-1],
@@ -390,7 +401,7 @@ def draw_errorbars(
         raise ValueError(f"error_type must be one of {known_error_types}, not {error_type}")
 
     # get coordinates, shifting integer axes so that markers are centered on the integer values
-    x = np.array(h.axes[0].centers) - (h.axes[0].edges[0] if type(h.axes[0]) is hist.axes.Integer else 0)
+    x = bin_centers(h.axes[0])
     y = h.values() / norm
 
     # filter non-finite values
